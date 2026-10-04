@@ -1,0 +1,3 @@
+# PAT-mode test policy: anyone presenting an X-PAT-* header may read and update, never destroy.
+anonymous: read-only
+pat: update

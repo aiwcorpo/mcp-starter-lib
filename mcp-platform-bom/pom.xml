@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  mcp-platform-bom (TEMPLATE) — the single source of truth for versions across all MCP servers.
+  Servers import THIS bom; they never pin Spring Boot / Spring AI / platform versions themselves.
+
+  What it manages:
+    - the platform starter version (so servers just say the artifactId, no version)
+    - the Spring AI BOM (imported) so the MCP starter version is consistent everywhere
+    - (optionally) any other org-approved library versions you want centralized
+
+  NOTE: Spring Boot's own version is pinned via each server's <parent> = spring-boot-starter-parent.
+  Keep that parent version aligned with what this platform release was tested against
+  (the parent version of mcp-platform-starter).
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>pl.aiwcorpo.mcp</groupId>
+        <artifactId>mcp-platform</artifactId>
+        <version>2.0.0</version>
+    </parent>
+    <artifactId>mcp-platform-bom</artifactId>
+    <packaging>pom</packaging>
+    <name>Aiwcorpo MCP Platform :: BOM</name>
+
+    <properties>
+        <!-- Highest stable Spring AI line; targets Spring Boot 4.1.x. -->
+        <spring-ai.version>2.0.0</spring-ai.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- Platform starter: servers reference it WITHOUT a version. -->
+            <dependency>
+                <groupId>pl.aiwcorpo.mcp</groupId>
+                <artifactId>mcp-platform-starter</artifactId>
+                <version>2.0.0</version>
+            </dependency>
+
+            <!-- Spring AI BOM (pulls the MCP server starter version consistently). -->
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+</project>

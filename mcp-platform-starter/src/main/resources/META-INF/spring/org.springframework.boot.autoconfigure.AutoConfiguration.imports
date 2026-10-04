@@ -1,0 +1,7 @@
+# TEMPLATE — Spring Boot auto-configuration registration.
+# Each class listed here is applied automatically when a server puts mcp-platform-starter on the
+# classpath. This is what makes "add one dependency -> get security/TLS/observability/error" work.
+pl.aiwcorpo.mcp.platform.security.PlatformSecurityAutoConfiguration
+pl.aiwcorpo.mcp.platform.observability.PlatformObservabilityAutoConfiguration
+pl.aiwcorpo.mcp.platform.error.PlatformErrorAutoConfiguration
+pl.aiwcorpo.mcp.platform.guard.PlatformGuardAutoConfiguration

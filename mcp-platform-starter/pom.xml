@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  mcp-platform-starter (TEMPLATE) — Spring Boot AUTO-CONFIGURATION library.
+  This is the ONE dependency every MCP server adds. By adding it, a server automatically gets:
+    - Per-request PAT forwarding: X-PAT-<system> headers -> CredentialContext (bring-your-own-token)
+    - Baseline HTTP hardening headers (HSTS, nosniff, frame-deny) — no Spring Security / OAuth
+    - Correlation id filter + structured AUDIT logger for tool invocations
+    - Safe MCP error mapping (no leaking internals)
+    - Tool guard: caller identity, risk flags (@ToolRisk), privilege check, human confirmation of
+      destructive calls, hot-reloaded policy file
+    - The Spring AI MCP server starter (streamable-http) transitively — so servers don't add it themselves
+  Servers still provide: their domain, use-cases, integrations, @Tool beans and the ToolCallbackProvider.
+
+  It is a LIBRARY (jar), NOT an application — no spring-boot-maven-plugin repackage here.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- Use spring-boot parent to build the library against a known Spring Boot line. -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version> <!-- servers must use the same Spring Boot parent version -->
+        <relativePath/>
+    </parent>
+
+    <groupId>pl.aiwcorpo.mcp</groupId>
+    <artifactId>mcp-platform-starter</artifactId>
+    <version>2.0.0</version>
+    <name>Aiwcorpo MCP Platform :: Starter (auto-configuration)</name>
+
+    <properties>
+        <java.version>25</java.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- Web + actuator: the HTTP baseline for every server. No Spring Security / OAuth:
+             auth to backends is delegated to per-request PATs (bring-your-own-token). -->
+        <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency>
+        <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-actuator</artifactId></dependency>
+        <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-registry-prometheus</artifactId></dependency>
+
+        <!-- The MCP transport itself — brought in transitively so servers don't add it. -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-mcp-server-webmvc</artifactId>
+        </dependency>
+
+        <!-- Used directly by the tool guard (policy file, argument fingerprint). Both already arrive
+             transitively through the web starter; declared because the code imports them. Versions are
+             managed by the Spring Boot BOM. -->
+        <!-- JWT access-token validation for the guard's OIDC identity (resource-server side only).
+             Just the JOSE module: no spring-security-web/config, so no security filter chain and no
+             Spring Boot security auto-configuration is pulled in. Version managed by the Boot BOM. -->
+        <dependency><groupId>org.springframework.security</groupId><artifactId>spring-security-oauth2-jose</artifactId></dependency>
+
+        <dependency><groupId>org.yaml</groupId><artifactId>snakeyaml</artifactId></dependency>
+        <dependency><groupId>tools.jackson.core</groupId><artifactId>jackson-databind</artifactId></dependency>
+
+        <!-- Makes @ConfigurationProperties metadata available to IDEs (optional). -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-configuration-processor</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
