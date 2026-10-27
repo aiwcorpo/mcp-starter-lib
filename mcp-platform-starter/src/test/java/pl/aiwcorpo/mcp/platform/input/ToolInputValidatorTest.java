@@ -84,4 +84,36 @@ class ToolInputValidatorTest {
         assertThatThrownBy(() -> open.validate("{\"n\":\"x\"}")).isInstanceOf(InvalidToolArgumentException.class);
         ToolInputValidator.compile(tool("{}"), ToolInputPolicy.DEV).validate("{\"a\":1}");
     }
+
+    @Test
+    void aTrailingLineBreakOrBlankDoesNotSatisfyAnAnchoredPattern() {
+        for (String value : new String[] {"ABC-1\\n", "ABC-1\\r\\n", "ABC-1 ", "ABC-1\\r", "\\nABC-1", "ABC-1\\u2028"}) {
+            assertThat(messageOf("{\"issueKey\":\"" + value + "\"}")).as(value)
+                    .contains("issueKey does not match the required format");
+        }
+        strict().validate("{\"issueKey\":\"ABC-1\"}");
+    }
+
+    @Test
+    void dollarIsRewrittenOnlyWhereItMeansEndOfInput() {
+        assertThat(ToolInputValidator.anchorEnd("^[A-Z]+$")).isEqualTo("^[A-Z]+\\z");
+        assertThat(ToolInputValidator.anchorEnd("^a\\\\$")).isEqualTo("^a\\\\\\z");
+        assertThat(ToolInputValidator.anchorEnd("^[$]+\\$x$")).isEqualTo("^[$]+\\$x\\z");
+        assertThat(ToolInputValidator.anchorEnd("^a$|^b$")).isEqualTo("^a\\z|^b\\z");
+    }
+
+    @Test
+    void controlCharactersAreRefusedInTextAndLineBreaksOnlyWhereThereIsNoFormat() {
+        ToolInputValidator free = ToolInputValidator.compile(tool(
+                "{\"type\":\"object\",\"properties\":{\"body\":{\"type\":\"string\"},\"key\":{\"type\":\"string\","
+                        + "\"pattern\":\"^[\\\\s\\\\S]+$\"}},\"additionalProperties\":false}"), ToolInputPolicy.STRICT);
+
+        free.validate("{\"body\":\"line one\\nline two\\ttabbed\"}");
+        free.validate("{\"key\":\"a\\nb\"}");
+        assertThatThrownBy(() -> free.validate("{\"body\":\"red \\u001b[31m\"}"))
+                .hasMessageContaining("body contains control characters");
+        assertThatThrownBy(() -> free.validate("{\"body\":\"nul\\u0000\"}")).isInstanceOf(InvalidToolArgumentException.class);
+        assertThatThrownBy(() -> free.validate("{\"body\":\"c1\\u0085\"}")).isInstanceOf(InvalidToolArgumentException.class);
+        assertThatThrownBy(() -> strict().validate("{\"issueKey\":\"AB\\u0007\"}")).isInstanceOf(InvalidToolArgumentException.class);
+    }
 }

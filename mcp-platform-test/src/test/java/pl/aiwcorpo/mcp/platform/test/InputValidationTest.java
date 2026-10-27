@@ -174,6 +174,18 @@ class InputValidationTest {
     }
 
     @Test
+    @DisplayName("a line break or blank after an anchored pattern does not pass (Java $ vs ECMA $)")
+    void trailingLineBreaksDoNotSatisfyTheAnchoredPattern() {
+        for (String value : List.of("ABC-1\n", "ABC-1\r\n", "ABC-1 ")) {
+            assertThat(error(call("lookup_issue", args("issueKey", value))).path("message").asString())
+                    .as(value).contains("issueKey does not match the required format");
+        }
+        List<String> audit = everything.list.stream().filter(e -> e.getLoggerName().equals("pl.aiwcorpo.mcp.audit"))
+                .map(ILoggingEvent::getFormattedMessage).filter(l -> l.contains("invalid_argument")).toList();
+        assertThat(audit).hasSizeGreaterThanOrEqualTo(3);
+    }
+
+    @Test
     @DisplayName("the violation is audited (C8) and neither the value nor the unknown name is in any log line")
     void theViolationIsAuditedAndNothingLeaks() {
         error(call("lookup_issue", args("issueKey", "lower-" + MARKER, MARKER + "-name", MARKER)));

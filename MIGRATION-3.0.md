@@ -1,6 +1,6 @@
 # Migracja z 2.x na 3.0
 
-Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-5**.
+Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-6**.
 
 ## Zmiana modelu
 
@@ -86,6 +86,44 @@ Od 3.0.0-alpha-2 starter ustawia domyślnie `spring.ai.mcp.server.protocol=STREA
   profilu `dev`, z mTLS i kluczem gateway'a.
 - Log `event=tool_failed` pomija komunikaty także przy wyjątkach konwerterów HTTP i Jacksona (ciało 200, którego
   nie da się sparsować).
+
+## Zmiany w 3.0.0-alpha-6
+
+API bez usunięć (podbicie BOM wystarcza do kompilacji). Zmiany zachowania i start, które mogą zatrzymać serwer:
+
+1. **Walidacja argumentów przez starter.** Starter wyłącza `validateToolInputs` w MCP SDK i sprawdza argumenty
+   względem `inputSchema` w `AuditingToolCallback`; naruszenie to C10 `invalid_argument` (bez wartości argumentu)
+   i zdarzenie C8. Poza profilem `dev` narzędzie bez `inputSchema` albo ze schematem bez `type: object` i
+   `additionalProperties: false` zatrzymuje start (decyzja: fail-closed, nie ostrzeżenie). Schematy generowane
+   przez Spring AI z `@Tool` są zamknięte; ręcznie pisane schematy muszą być zamknięte (schematy servicedesk już są).
+2. **Jeden customizer MCP.** Starter dostarcza `McpSyncServerCustomizer` (`@Primary`), który składa customizery
+   serwera i na końcu wymusza `immediateExecution(true)` i `validateToolInputs(false)`. Własny customizer
+   serwera z `@Primary` zatrzymuje start.
+3. **`@ArgumentLimits` i `SchemaLimitedToolCallbacks.of(...)`** w pakiecie `pl.aiwcorpo.mcp.platform.input`.
+4. `TestGateway.asGateway(user, credential, BackendCredential.Type)`.
+5. BOM zarządza wersją `mcp-cedar-entities` (nie dodawać do serwera dla wzorców, patrz niżej).
+
+### Co serwer usuwa z własnych obejść
+
+| Serwer / template | Usunąć | Zamiast tego |
+| --- | --- | --- |
+| wszystkie | własny `@Primary McpSyncServerCustomizer` z `validateToolInputs(false)` i `immediateExecution(true)` (gitlab: `toolInputsCheckedByTheTools`) | nic; kto potrzebuje własnych ustawień MCP, dopisuje bean `McpSyncServerCustomizer` bez `@Primary` |
+| template, gitlab | własna adnotacja `ArgumentLimits` i `SchemaLimitedToolCallbacks` / `withArgumentLimits` w `McpToolsConfiguration` | `pl.aiwcorpo.mcp.platform.input.ArgumentLimits` i `SchemaLimitedToolCallbacks.of(...)` |
+| confluence | `@StringArgument`, `ConstrainedToolCallbacks` | `@ArgumentLimits(minLength, maxLength, pattern)` i `SchemaLimitedToolCallbacks.of(...)` (zwraca `ToolCallbackProvider`; confluence dziś zwraca `ToolCallback[]`) |
+| gitlab | `StrictArgumentsToolCallback` (odrzucanie nieznanych argumentów) | `additionalProperties: false` dopisuje `SchemaLimitedToolCallbacks`, odrzuca je starter jako `invalid_argument` |
+| servicedesk | ręcznie pisane schematy (mapa `inputSchemas` w `McpToolsConfiguration`) | `@Tool` + `@ArgumentLimits`; jeśli schemat zostaje ręczny, musi mieć `type: object` i `additionalProperties: false` (ma) |
+| jira, opensearch | (brak własnych obejść schematu) | opcjonalnie `SchemaLimitedToolCallbacks.of(...)` zamiast `MethodToolCallbackProvider`, żeby limity trafiły do `inputSchema` |
+| wszystkie | kopie wzorców identyfikatorów z `ResourceIds` w stałych `pattern` | `@ArgumentLimits(contractPattern = "JiraIssueKey")` itd. (nazwa definicji z `common.schema.json`) |
+| wszystkie | `TestGateway`: ręczne ustawianie `X-MCP-Credential-Type` w testach `service-account`/`user-oauth` | `GATEWAY.asGateway(user, credential, BackendCredential.Type.SERVICE_ACCOUNT)` |
+
+Różnice względem wersji własnych: `@ArgumentLimits` nie ma wartości domyślnej `maxLength = 0` jak w template
+(brak limitu to `-1`, a tekst bez `maxLength` zatrzymuje start); gitlab dodaje `minimum`/`maximum` dla liczb
+całkowitych (są w starterze). Walidacja w kodzie narzędzia zostaje jako druga linia, ale komunikatu o
+naruszeniu schematu nie trzeba już tworzyć: ten sam kod `invalid_argument` daje starter. Testy, które sprawdzały
+tekst `input validation failed` z SDK, trzeba zmienić na C10 `invalid_argument`.
+
+Testy serwera: do sprawdzenia, że zły argument daje C10 i C8, wystarczy wywołanie przez `TestGateway` (wzór:
+`InputValidationTest` w `mcp-platform-test`).
 
 ## Wdrożenie
 

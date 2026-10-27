@@ -21,6 +21,41 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
 
+3.0.0-alpha-6: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-6`,
+tag `v3.0.0-alpha-6`. API bez usunięć; zgłoszenia pięciu serwerów ws-04 i template'u. Instrukcja dla serwerów
+(co usunąć z obejść): `MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-6".
+
+| Punkt | Rozwiązanie | Testy |
+| --- | --- | --- |
+| 1. SDK waliduje przed audytem | `PlatformMcpServerCustomizer` ustawia `validateToolInputs(false)`; `AuditingToolCallback` waliduje argumenty względem `inputSchema` narzędzia (`ToolInputValidator`, networknt 2020-12: typy, `required`, `additionalProperties`, `pattern`, długości, zakresy, `enum`) po sprawdzeniu powiązania z gateway'em i przed interceptorami. Odpowiedź C10 `invalid_argument` z komunikatem ze schematu (argument zadeklarowany + reguła; bez wartości i bez niezadeklarowanych nazw), zdarzenie C8 `outcome=error`. Fail-closed: poza `dev` brak schematu albo schemat bez `type: object` + `additionalProperties: false` zatrzymuje start (`ToolInputPolicy`); w `dev` ostrzeżenie `tool_schema_open` i egzekwowanie schematu | `ToolInputValidatorTest`, `ToolInputPolicyWiringTest`, `InputValidationTest` (Tomcat, narzędzie `lookup_issue`, zły wzorzec/długość/typ/zakres/nieznany argument/brak wymaganego: C10, brak tekstu SDK, zdarzenie C8, wartość i nazwa nieznanego argumentu nie występują w odpowiedzi ani w logach platformy i Springa) |
+| 2. Jeden customizer | starter dostarcza `@Primary McpSyncServerCustomizer`: najpierw inne beany `McpSyncServerCustomizer` serwera (`@Order`), na końcu `immediateExecution(true)` i `validateToolInputs(false)`; customizer serwera nie cofnie ustawień (recenzja bezpieczeństwa: serwer wołający `validateToolInputs(true)` nadal dostaje C10 od startera). Obcy `@Primary` zatrzymuje start (`ForeignPrimaryCustomizerCheck`, na definicjach beanów) | `ServerCustomizerTest`, `InputValidationTest` (z customizerem serwera wołającym `validateToolInputs(true)` i `immediateExecution(false)`) |
+| 3. Limity w schemacie | `pl.aiwcorpo.mcp.platform.input.ArgumentLimits` (`minLength`, `maxLength`, `pattern`, `contractPattern`, `minimum`, `maximum`) i `SchemaLimitedToolCallbacks.of(...)`: wzorzec template'u, `additionalProperties: false`, `MethodToolCallback`, więc `@ToolRisk` działa; tekst bez `maxLength`, limity nie tego typu, nieznany `contractPattern` zatrzymują start. `contractPattern` czyta wzorzec z `common.schema.json` jara kontraktów | `SchemaLimitedToolCallbacksTest`, `InputValidationTest.theSchemaCarriesTheLimits` |
+| 4. Typ poświadczenia w teście | `TestGateway.asGateway(user, credential, BackendCredential.Type)`; wersja dwuargumentowa = `USER_SECRET` | `GatewayTransportTest.theCredentialTypeSetByTheTestGatewayReachesTheTool` (4 typy) |
+| 5. `mcp-cedar-entities` w BOM | zarządzana wersja w BOM (`${mcp-contracts.version}`), bez dodawania zależności do startera i serwerów. Decyzja: serwery nie dodają modułu dla wzorców identyfikatorów, bo wciąga natywne `cedar-java` (uber jar z bibliotekami macOS/Linux x86_64/aarch64); wzorce dostają przez `contractPattern`. Moduł wejdzie do startera przy `@ResourceRef`/PolicyEngine (beta) | build BOM |
+
+`./mvnw clean install`: 233 testów (starter 176, mcp-platform-test 57), 0 błędów.
+
+Zmiana zachowania (nie łamie API): serwer, którego narzędzie ma schemat otwarty (poza `dev`), albo który ma
+własny `@Primary McpSyncServerCustomizer`, nie wstanie. Schematy z `@Tool` (Spring AI) są zamknięte,
+więc `MethodToolCallbackProvider` nadal przechodzi.
+
+Recenzja bezpieczeństwa alpha-6 (MEDIUM, poprawione): (a) customizer serwera nie cofa ustawień platformy
+(ustawienia startera są stosowane po customizerach serwera; test z `validateToolInputs(true)`); (b) `$` w
+`pattern` w Javie pasuje przed końcowym znakiem nowej linii (`"ABC-1\n"` przechodziło `^[A-Z]+-[0-9]+$`): przy
+kompilacji schematu każdy nieucieczkowany `$` poza klasą znaków jest zamieniany na `\z` (znaczenie ECMA 262 bez
+flagi multiline); komunikat błędu pokazuje wzorzec oryginalny. Dodatkowo znaki sterujące (C0 poza `\t \n \r`, DEL,
+C1) w dowolnym tekście argumentu to `invalid_argument`, a `\t \n \r` także w argumencie z `pattern`, chyba że
+wzorzec je jawnie dopuszcza (`\n`, `\r`, `\t`, `\s`, `\x`, `\u`, `\p{Cntrl}`). Testy: `ToolInputValidatorTest`
+(`aTrailingLineBreakOrBlankDoesNotSatisfyAnAnchoredPattern`, `dollarIsRewrittenOnlyWhereItMeansEndOfInput`,
+`controlCharactersAreRefused...`), `InputValidationTest.trailingLineBreaksDoNotSatisfyTheAnchoredPattern`
+("ABC-1\n", "ABC-1\r\n", "ABC-1 ": C10 i zdarzenie C8).
+
+Znane ograniczenia alpha-6: zagnieżdżone obiekty w `inputSchema` nie są sprawdzane na `additionalProperties`;
+`pattern` jest wykonywany regexem JDK (po zamianie `$` na `\z`; inne różnice względem ECMA 262, np. `\s`,
+`.` i właściwości Unicode, pozostają); log `tool_failed` zapisuje komunikat `invalid_argument` (bez wartości) na poziomie ERROR przy każdym
+błędzie modelu; logowanie DEBUG transportu SDK (`io.modelcontextprotocol.spec.McpSchema`) drukuje całe
+komunikaty, w tym argumenty, i nie jest pod kontrolą startera (nie włączać na produkcji).
+
 3.0.0-alpha-5: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-5`,
 tag `v3.0.0-alpha-5`. API bez zmian. Z recenzji template'u:
 - log `tool_failed`: komunikaty pomijane, gdy w łańcuchu jest wyjątek z `org.springframework.web.client`,
@@ -120,9 +155,8 @@ opisane w README i `MIGRATION-3.0.md`.
 
 ## Odstępstwa i znane ograniczenia
 
-- Walidacja wejścia narzędzi w MCP SDK 2.0.0 (`ToolInputValidator`) odpowiada przed wywołaniem narzędzia tekstem
-  `Tool (...) input validation failed: ...` z `isError: true`, który nie jest obiektem C10 (bez wycieku: treść
-  pochodzi z argumentów klienta i schematu). Do poprawy w beta (własna walidacja z `invalid_argument`).
+- Walidacja wejścia w MCP SDK 2.0.x była przed audytem (tekst spoza C10, bez C8): od alpha-6 wyłączona, walidację
+  robi starter (patrz alpha-6).
 - Odrzucenia uwierzytelnienia są w logu aplikacji, nie w audycie C8 (brak typu zdarzenia, CC zgłoszone).
 - Wariant serwisowy tylko dla czterech żądań z C2 (dosłownie): `notifications/initialized` i `GET`/`DELETE` sesji
   wymagają wariantu użytkownika (CC zgłoszone; ws-05 i tak wysyła wariant użytkownika).
@@ -143,3 +177,5 @@ narzędzi z identyfikatorami) w 3.0.0, dokończenie `MIGRATION-3.0.md`. Usunięc
 
 - C2: wariant serwisowy a `notifications/*` i żądania transportu (GET/DELETE sesji).
 - C8: zdarzenie audytu dla odrzuconego uwierzytelnienia na serwerze.
+- C6/C10: zamknięty `inputSchema` i treść `invalid_argument` przy naruszeniu schematu (CC-???, alpha-6).
+- C6: nazwy `$defs` w `common.schema.json` jako stabilne API dla serwerów (`contractPattern`) (CC-???, alpha-6).

@@ -6,7 +6,7 @@ robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadc
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
 Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 2.0.2.
-Wersja: **3.0.0-alpha-5** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+Wersja: **3.0.0-alpha-6** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
 
@@ -181,11 +181,12 @@ odpowiada wtedy `Unknown tool`):
 ```java
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.annotation.Tool;
-import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
 import pl.aiwcorpo.mcp.platform.guard.ToolRisk;
+import pl.aiwcorpo.mcp.platform.input.ArgumentLimits;
+import pl.aiwcorpo.mcp.platform.input.SchemaLimitedToolCallbacks;
 import pl.aiwcorpo.mcp.platform.security.CredentialContext;
 
 @SpringBootApplication
@@ -193,20 +194,77 @@ public class JiraServer {
 
     @Bean
     ToolCallbackProvider jiraTools() {
-        return MethodToolCallbackProvider.builder().toolObjects(new JiraTools()).build();
+        return SchemaLimitedToolCallbacks.of(new JiraTools());
     }
 
     public static class JiraTools {
 
         @Tool(name = "get_issue", description = "Returns an issue by key.")
         @ToolRisk(RiskLevel.READ_ONLY)
-        public String getIssue(String issueKey) {
+        public String getIssue(@ArgumentLimits(maxLength = 16, contractPattern = "JiraIssueKey") String issueKey) {
             // A real adapter calls Jira with: .headers(CredentialContext.require("jira")::applyTo)
             return issueKey + " read with a " + CredentialContext.require("jira").scheme().wireName() + " credential";
         }
     }
 }
 ```
+
+## Argumenty narzędzi: schemat, limity, walidacja
+
+Spring AI generuje z `@Tool` tylko typy i opisy; nie wpisuje do `inputSchema` `maxLength`, `pattern` ani
+zakresów. Starter ma na to jedno API (zastępuje własne wersje w template i serwerach):
+
+- `@ArgumentLimits` na parametrze: `maxLength` (obowiązkowe dla tekstu), `minLength`, `pattern`,
+  `contractPattern`, `minimum`, `maximum` (liczby całkowite). `contractPattern = "JiraIssueKey"` bierze wzorzec
+  (i `maxLength`, gdy nie podano) z definicji `$defs` w `common.schema.json` jara kontraktów, więc serwer nie
+  przepisuje wzorców identyfikatorów (`JiraProjectKey`, `JiraIssueKey`, `ConfluenceSpaceKey`, `ConfluencePageId`,
+  `GitLabProjectPath`, `OpenSearchIndexName`, `ServiceDeskTicketId`, ...). `pattern` zawsze z `^` i `$`.
+- `SchemaLimitedToolCallbacks.of(toolObject...)` zamiast `MethodToolCallbackProvider`: buduje te same
+  `MethodToolCallback`, dopisuje limity i `additionalProperties: false`. Tekst bez `maxLength`, limity na
+  parametrze nieodpowiedniego typu albo nieznany `contractPattern` zatrzymują start.
+
+**Walidacja jest w starterze.** MCP SDK 2.0.x waliduje argumenty przed opakowaniem audytu i odpowiada własnym
+tekstem (`Tool (x) input validation failed`), bez C10 i bez zdarzenia C8. Starter wyłącza walidację SDK
+(`validateToolInputs(false)`) i sam sprawdza argumenty względem `inputSchema` narzędzia w `AuditingToolCallback`
+(biblioteka `json-schema-validator`, JSON Schema 2020-12: typy, `required`, `additionalProperties`, `pattern`,
+`minLength`/`maxLength`, `minimum`/`maximum`, `enum`). Kolejność w `AuditingToolCallback`: powiązanie z
+wywołaniem gateway'a (brak -> `unauthenticated`, schemat nie jest sondowany bez uwierzytelnienia), walidacja,
+interceptory, narzędzie. Naruszenie to `invalid_argument` (C10) z komunikatem w rodzaju
+`Invalid arguments: issueKey does not match the required format ^...$; limit is above the maximum 100.` i
+zdarzenie C8 (`outcome=error`, `errorCode=invalid_argument`). Komunikat powstaje ze schematu: nie zawiera wartości
+argumentu ani nazw argumentów spoza schematu (`unknown arguments are not allowed`). `pattern` jest wykonywany tak, jak
+znaczy w ECMA 262: `$` oznacza koniec wejścia (`"ABC-1\n"` nie pasuje do `^[A-Z]+-[0-9]+$`). Znaki sterujące
+(C0, DEL, C1) w tekście argumentu to `invalid_argument`; `\t`, `\n`, `\r` są dozwolone w tekście bez `pattern`.
+Narzędzie nadal powinno sprawdzać to, na czym polega, tymi samymi stałymi.
+
+**Fail-closed.** Narzędzie bez `inputSchema` albo ze schematem bez `type: object` i `additionalProperties: false`
+zatrzymuje start (`ToolInputPolicy.STRICT`). W profilu `dev` (jedyny aktywny) jest ostrzeżenie
+`event=tool_schema_open` i egzekwowane jest to, co schemat mówi. Zagnieżdżone obiekty w schemacie nie są
+sprawdzane na `additionalProperties`; to odpowiedzialność autora narzędzia. Wzorce z `pattern` pisze serwer, więc
+unikaj wyrażeń o wykładniczym czasie dopasowania.
+
+Gateway usuwa `confirmation_code` z argumentów przed wywołaniem serwera (C11), więc schemat serwera go nie
+deklaruje.
+
+## Customizer serwera MCP
+
+Spring AI przyjmuje jeden `McpSyncServerCustomizer`, a gdy istnieje, pomija własne `immediateExecution(true)`
+(narzędzie na wątku żądania, gdzie żyją `CallerContext` i `CredentialContext`). Starter dostarcza więc ten jeden
+customizer (`PlatformMcpServerCustomizer`, `@Primary`), który:
+
+1. wywołuje customizery serwera (każdy inny bean `McpSyncServerCustomizer`, w kolejności `@Order`),
+2. na końcu wymusza ustawienia platformy: `immediateExecution(true)` i `validateToolInputs(false)`; customizer
+   serwera nie może ich cofnąć.
+
+Serwer dopisuje swoje ustawienia zwykłym beanem `McpSyncServerCustomizer` **bez `@Primary`**. Customizer z
+`@Primary` zatrzymuje start (`ForeignPrimaryCustomizerCheck`, na definicjach beanów, z komunikatem co zrobić).
+
+## Identyfikatory zasobów a `mcp-cedar-entities`
+
+BOM zarządza wersją `mcp-cedar-entities` (ta sama co `mcp-contracts`), żeby gateway, starter i serwer używały
+jednej. Serwery **nie** powinny go dodawać tylko po wzorce identyfikatorów: wciąga natywne `cedar-java` (uber jar
+z bibliotekami dla macOS i Linuksa). Wzorce dostają przez `@ArgumentLimits(contractPattern = ...)`. Moduł będzie
+potrzebny dopiero przy `@ResourceRef` i silniku polityk (beta), po stronie startera.
 
 ## Testy serwera bez gateway'a
 
@@ -317,7 +375,9 @@ class JiraToolsTest {
   użytkownika (`username`, `groups`, `virtualServer`, `mfaAgeSeconds`, ...);
 - drugi argument to **poświadczenie do systemu docelowego (C3)**, nie token do serwera: trafia dosłownie do
   `X-MCP-Credential` w formacie `<scheme> <value>` (scheme: `Bearer`, `Basic`, `Token`, `ApiKey`), a
-  `X-MCP-Credential-Type` dostaje `user-secret`. W narzędziu widać je jako `CredentialContext.require(system)`.
+  `X-MCP-Credential-Type` dostaje `user-secret` (inny typ: trzeci argument,
+  `asGateway(user, credential, BackendCredential.Type.SERVICE_ACCOUNT)`; dostępne `USER_SECRET`, `USER_OAUTH`,
+  `TOKEN_EXCHANGE`, `SERVICE_ACCOUNT`). W narzędziu widać je jako `CredentialContext.require(system)`.
   `null` = brak poświadczenia (narzędzie dostanie `credential_required`).
 
 Pojedyncze tokeny do testów odrzuceń: `GATEWAY.user().tool("get_issue").mint().headers()`,
@@ -337,7 +397,7 @@ Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera t
 ```xml
 <dependency>
   <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-  <version>3.0.0-alpha-5</version><type>pom</type><scope>import</scope>
+  <version>3.0.0-alpha-6</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
 

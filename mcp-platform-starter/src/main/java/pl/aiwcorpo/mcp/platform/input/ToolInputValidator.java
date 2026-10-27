@@ -15,6 +15,7 @@ import pl.aiwcorpo.mcp.platform.error.InvalidToolArgumentException;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * Checks the arguments of one tool call against that tool's {@code inputSchema} (JSON Schema 2020-12: types,
@@ -91,8 +92,10 @@ public final class ToolInputValidator {
 
     private static ToolInputValidator compiled(String name, JsonNode root) {
         Schema schema;
+        JsonNode enforced = root.deepCopy();
+        anchorPatterns(enforced);
         try {
-            schema = REGISTRY.getSchema(root);
+            schema = REGISTRY.getSchema(enforced);
             schema.initializeValidators();
         } catch (RuntimeException ex) {
             throw new IllegalStateException("Tool '" + name + "': inputSchema cannot be compiled ("
@@ -100,6 +103,48 @@ public final class ToolInputValidator {
         }
         Set<String> declared = new LinkedHashSet<>(root.path("properties").propertyNames());
         return new ToolInputValidator(schema, declared, root.path("properties"));
+    }
+
+    /**
+     * Java's {@code $} also matches before a final line terminator, so {@code ^[A-Z]+-[0-9]+$} would accept
+     * {@code "ABC-1\n"}; in ECMA 262 (what the schema means) it does not. Every unescaped {@code $} outside a
+     * character class becomes {@code \z} (end of input), which is what {@code $} means without the multiline flag.
+     */
+    private static void anchorPatterns(JsonNode node) {
+        if (node instanceof ObjectNode object) {
+            for (String name : List.copyOf(object.propertyNames())) {
+                JsonNode child = object.get(name);
+                if ("pattern".equals(name) && child.isString()) {
+                    object.put(name, anchorEnd(child.asString()));
+                } else {
+                    anchorPatterns(child);
+                }
+            }
+        } else if (node.isArray()) {
+            node.forEach(ToolInputValidator::anchorPatterns);
+        }
+    }
+
+    static String anchorEnd(String pattern) {
+        StringBuilder out = new StringBuilder(pattern.length() + 4);
+        boolean inClass = false;
+        for (int i = 0; i < pattern.length(); i++) {
+            char c = pattern.charAt(i);
+            if (c == '\\' && i + 1 < pattern.length()) {
+                out.append(c).append(pattern.charAt(++i));
+                continue;
+            }
+            if (c == '[') {
+                inClass = true;
+            } else if (c == ']') {
+                inClass = false;
+            } else if (c == '$' && !inClass) {
+                out.append("\\z");
+                continue;
+            }
+            out.append(c);
+        }
+        return out.toString();
     }
 
     /**
@@ -117,7 +162,11 @@ public final class ToolInputValidator {
             throw new InvalidToolArgumentException("The arguments are not a valid JSON object.");
         }
         List<Error> errors = schema.validate(arguments);
-        if (errors.isEmpty()) {
+        List<String> controls = new ArrayList<>();
+        if (arguments.isObject()) {
+            arguments.propertyNames().forEach(name -> controlCharacters(arguments.get(name), name, controls));
+        }
+        if (errors.isEmpty() && controls.isEmpty()) {
             return;
         }
         List<String> problems = new ArrayList<>();
@@ -130,7 +179,40 @@ public final class ToolInputValidator {
                 break;
             }
         }
+        for (String control : controls) {
+            if (problems.size() < MAX_REPORTED && !problems.contains(control)) {
+                problems.add(control);
+            }
+        }
         throw new InvalidToolArgumentException("Invalid arguments: " + String.join("; ", problems) + ".");
+    }
+
+    /**
+     * Control characters (C0, DEL, C1) are not text: they forge log lines and terminal output. Newline, carriage
+     * return and tab stay allowed in free text, but not in an argument that has a {@code pattern} unless the
+     * pattern names them itself ({@code \\n}, {@code \\s}, ...): a pattern is a format, and a line break in a
+     * formatted value is never part of it.
+     */
+    private void controlCharacters(JsonNode value, String top, List<String> found) {
+        if (value.isString()) {
+            JsonNode rule = properties.path(top);
+            boolean formatted = rule.has("pattern") && !allowsWhitespaceControls(rule.get("pattern").asString());
+            String text = value.asString();
+            for (int i = 0; i < text.length(); i++) {
+                char c = text.charAt(i);
+                boolean whitespace = c == '\n' || c == '\r' || c == '\t';
+                if ((Character.isISOControl(c) && !whitespace) || (whitespace && formatted)) {
+                    found.add((declared.contains(top) ? top : "an argument") + " contains control characters");
+                    return;
+                }
+            }
+        } else if ((value.isObject() || value.isArray())) {
+            value.forEach(child -> controlCharacters(child, top, found));
+        }
+    }
+
+    private static boolean allowsWhitespaceControls(String pattern) {
+        return pattern.matches("(?s).*(\\\\[nrtsxuc]|\\\\p\\{Cntrl\\}|[\\x00-\\x1f]).*");
     }
 
     private String describe(Error error) {
