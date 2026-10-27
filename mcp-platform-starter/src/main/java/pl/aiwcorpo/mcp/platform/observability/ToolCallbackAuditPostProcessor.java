@@ -8,6 +8,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import pl.aiwcorpo.mcp.platform.error.McpErrorMapper;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
+import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
 
 /**
  * Wraps every {@link ToolCallbackProvider} bean (and every stand-alone {@link ToolCallback} bean) in
@@ -23,11 +24,22 @@ public class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
     private final ObjectProvider<McpErrorMapper> errorMapper;
     private final ObjectProvider<ToolRiskRegistry> registry;
     private final ObjectProvider<ToolCallInterceptor> interceptors;
+    private final ObjectProvider<ToolInputPolicy> inputPolicy;
 
     public ToolCallbackAuditPostProcessor(ObjectProvider<AuditLogger> auditLogger,
                                           ObjectProvider<McpErrorMapper> errorMapper,
                                           ObjectProvider<ToolRiskRegistry> registry,
                                           ObjectProvider<ToolCallInterceptor> interceptors) {
+        this(auditLogger, errorMapper, registry, interceptors, null);
+    }
+
+    /** {@code inputPolicy} may be {@code null} or empty: then {@link ToolInputPolicy#STRICT} applies. */
+    public ToolCallbackAuditPostProcessor(ObjectProvider<AuditLogger> auditLogger,
+                                          ObjectProvider<McpErrorMapper> errorMapper,
+                                          ObjectProvider<ToolRiskRegistry> registry,
+                                          ObjectProvider<ToolCallInterceptor> interceptors,
+                                          ObjectProvider<ToolInputPolicy> inputPolicy) {
+        this.inputPolicy = inputPolicy;
         this.auditLogger = auditLogger;
         this.errorMapper = errorMapper;
         this.registry = registry;
@@ -50,8 +62,10 @@ public class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
             return callback;
         }
         List<ToolCallInterceptor> chain = interceptors.orderedStream().toList();
+        ToolInputPolicy policy = inputPolicy == null ? ToolInputPolicy.STRICT
+                : inputPolicy.getIfAvailable(() -> ToolInputPolicy.STRICT);
         return new AuditingToolCallback(callback, auditLogger.getObject(), errorMapper.getObject(),
-                registry.getObject(), chain);
+                registry.getObject(), chain, policy);
     }
 
     /** Marker + decorator; the marker keeps a second post-processing pass from double-wrapping. */

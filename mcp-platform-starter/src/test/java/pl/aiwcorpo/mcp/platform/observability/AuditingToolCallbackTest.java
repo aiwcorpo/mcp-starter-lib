@@ -38,7 +38,7 @@ class AuditingToolCallbackTest {
     private record Tool(String name, Supplier<String> behaviour) implements ToolCallback, RiskClassifiedTool {
         @Override
         public ToolDefinition getToolDefinition() {
-            return DefaultToolDefinition.builder().name(name).description("test").inputSchema("{}").build();
+            return DefaultToolDefinition.builder().name(name).description("test").inputSchema("{\"type\":\"object\",\"properties\":{\"issueKey\":{\"type\":\"string\"}},\"additionalProperties\":false}").build();
         }
 
         @Override

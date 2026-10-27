@@ -14,6 +14,8 @@ import pl.aiwcorpo.mcp.platform.error.McpErrorMapper;
 import pl.aiwcorpo.mcp.platform.error.SanitizedToolException;
 import pl.aiwcorpo.mcp.platform.error.ToolErrorCode;
 import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
+import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
+import pl.aiwcorpo.mcp.platform.input.ToolInputValidator;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 import pl.aiwcorpo.mcp.platform.security.BackendCredential;
 import pl.aiwcorpo.mcp.platform.security.CredentialContext;
@@ -26,6 +28,9 @@ import pl.aiwcorpo.mcp.platform.security.CredentialContext;
  *       ({@code tool} claim). {@code InternalJwtFilter} already compared it with {@code params.name}; this
  *       repeats the check where the tool actually runs, so a transport path the filter did not classify, or
  *       a tool invoked without a request, is refused ({@code unauthenticated}) instead of running.</li>
+ *   <li><b>Arguments.</b> Validated against the tool's {@code inputSchema} ({@link ToolInputValidator}); a
+ *       violation is {@code invalid_argument} (C10) without the offending value. The MCP SDK's own validation
+ *       is off because it answers before this class, with a text that is not C10 and no audit event.</li>
  *   <li><b>Interceptors</b> ({@link ToolCallInterceptor}), then the tool.</li>
  *   <li><b>Errors.</b> Whatever escapes is mapped by {@link McpErrorMapper}; only a
  *       {@link SanitizedToolException} carrying a C10 error object leaves this class. Spring AI puts an
@@ -46,14 +51,23 @@ public class AuditingToolCallback implements ToolCallback {
     private final McpErrorMapper errorMapper;
     private final List<ToolCallInterceptor> interceptors;
     private final RiskLevel risk;
+    private final ToolInputValidator inputValidator;
 
+    /** With {@link ToolInputPolicy#STRICT}: the tool must publish a closed {@code inputSchema}. */
     public AuditingToolCallback(ToolCallback delegate, AuditLogger auditLogger, McpErrorMapper errorMapper,
                                 ToolRiskRegistry registry, List<ToolCallInterceptor> interceptors) {
+        this(delegate, auditLogger, errorMapper, registry, interceptors, ToolInputPolicy.STRICT);
+    }
+
+    public AuditingToolCallback(ToolCallback delegate, AuditLogger auditLogger, McpErrorMapper errorMapper,
+                                ToolRiskRegistry registry, List<ToolCallInterceptor> interceptors,
+                                ToolInputPolicy inputPolicy) {
         this.delegate = delegate;
         this.auditLogger = auditLogger;
         this.errorMapper = errorMapper;
         this.interceptors = List.copyOf(interceptors);
         this.risk = registry.register(delegate);
+        this.inputValidator = ToolInputValidator.compile(delegate.getToolDefinition(), inputPolicy);
     }
 
     /** The undecorated tool. */
@@ -94,6 +108,7 @@ public class AuditingToolCallback implements ToolCallback {
         }
         CallerContext caller = bound.get();
         try {
+            inputValidator.validate(toolInput);
             String result = chain(0, new ToolCallInterceptor.Invocation(name, risk, toolInput, caller), tool)
                     .proceed(toolInput);
             audit(caller, name, toolInput, null, start);

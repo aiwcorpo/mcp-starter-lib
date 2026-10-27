@@ -40,7 +40,7 @@ class RegisteredToolsCheckTest {
     private record Flagged(String name) implements ToolCallback, RiskClassifiedTool {
         @Override
         public ToolDefinition getToolDefinition() {
-            return DefaultToolDefinition.builder().name(name).description("d").inputSchema("{}").build();
+            return DefaultToolDefinition.builder().name(name).description("d").inputSchema("{\"type\":\"object\",\"properties\":{\"issueKey\":{\"type\":\"string\"}},\"additionalProperties\":false}").build();
         }
 
         @Override

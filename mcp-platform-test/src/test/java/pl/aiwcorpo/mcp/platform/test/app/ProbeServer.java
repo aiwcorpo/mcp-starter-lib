@@ -2,6 +2,7 @@ package pl.aiwcorpo.mcp.platform.test.app;
 
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -10,6 +11,8 @@ import org.springframework.web.client.RestClient;
 import pl.aiwcorpo.mcp.platform.auth.CallerContext;
 import pl.aiwcorpo.mcp.platform.error.InvalidToolArgumentException;
 import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
+import pl.aiwcorpo.mcp.platform.input.ArgumentLimits;
+import pl.aiwcorpo.mcp.platform.input.SchemaLimitedToolCallbacks;
 import pl.aiwcorpo.mcp.platform.guard.ToolRisk;
 import pl.aiwcorpo.mcp.platform.security.BackendCredential;
 import pl.aiwcorpo.mcp.platform.security.CredentialContext;
@@ -26,6 +29,25 @@ public class ProbeServer {
     @Bean
     ToolCallbackProvider tools(ProbeTools probe) {
         return MethodToolCallbackProvider.builder().toolObjects(probe).build();
+    }
+
+    @Bean
+    ToolCallbackProvider limitedTools() {
+        return SchemaLimitedToolCallbacks.of(new LimitedTools());
+    }
+
+    /** A tool with limits in its schema, registered the way servers register theirs. */
+    public static class LimitedTools {
+
+        @Tool(name = "lookup_issue", description = "Looks an issue up by key.")
+        @ToolRisk(RiskLevel.READ_ONLY)
+        public String lookupIssue(
+                @ToolParam(description = "Issue key, e.g. ABC-1")
+                @ArgumentLimits(maxLength = 16, pattern = "^[A-Z]+-[0-9]+$") String issueKey,
+                @ToolParam(description = "Page size", required = false)
+                @ArgumentLimits(minimum = 1, maximum = 100) Integer limit) {
+            return "found " + issueKey;
+        }
     }
 
     public static class ProbeTools {

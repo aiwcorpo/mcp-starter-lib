@@ -15,6 +15,9 @@ import io.modelcontextprotocol.server.McpServer;
  * a server can add to the MCP server but cannot switch off what the platform relies on:
  * <ul>
  *   <li>{@code immediateExecution(true)}: tools run on the request thread;</li>
+ *   <li>{@code validateToolInputs(false)}: the SDK would answer a schema violation with its own text, before
+ *       the audit wrapper, with no C8 event and no C10 error. {@code AuditingToolCallback} validates the
+ *       arguments against the tool's {@code inputSchema} itself.</li>
  * </ul>
  */
 public class PlatformMcpServerCustomizer implements McpSyncServerCustomizer {
@@ -29,6 +32,6 @@ public class PlatformMcpServerCustomizer implements McpSyncServerCustomizer {
     public void customize(McpServer.SyncSpecification<?> server) {
         serverCustomizers.orderedStream().filter(customizer -> customizer != this)
                 .forEach(customizer -> customizer.customize(server));
-        server.immediateExecution(true);
+        server.immediateExecution(true).validateToolInputs(false);
     }
 }

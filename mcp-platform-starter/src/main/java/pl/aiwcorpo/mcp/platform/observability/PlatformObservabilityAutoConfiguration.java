@@ -1,6 +1,7 @@
 package pl.aiwcorpo.mcp.platform.observability;
 
 import io.modelcontextprotocol.server.McpSyncServer;
+import java.util.List;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -8,11 +9,14 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
+import org.springframework.core.env.Environment;
+import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
 import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 import pl.aiwcorpo.mcp.platform.error.McpErrorMapper;
 import pl.aiwcorpo.mcp.platform.guard.RegisteredToolsCheck;
 import pl.aiwcorpo.mcp.platform.guard.ToolHintsPostProcessor;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
+import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
 
 /**
  * Audit (C8), request id, tool registry and the decorator applied to every tool. All beans are
@@ -46,8 +50,17 @@ public class PlatformObservabilityAutoConfiguration {
     @ConditionalOnMissingBean
     static ToolCallbackAuditPostProcessor toolCallbackAuditPostProcessor(
             ObjectProvider<AuditLogger> auditLogger, ObjectProvider<McpErrorMapper> errorMapper,
-            ObjectProvider<ToolRiskRegistry> registry, ObjectProvider<ToolCallInterceptor> interceptors) {
-        return new ToolCallbackAuditPostProcessor(auditLogger, errorMapper, registry, interceptors);
+            ObjectProvider<ToolRiskRegistry> registry, ObjectProvider<ToolCallInterceptor> interceptors,
+            ObjectProvider<ToolInputPolicy> inputPolicy) {
+        return new ToolCallbackAuditPostProcessor(auditLogger, errorMapper, registry, interceptors, inputPolicy);
+    }
+
+    /** Only the one-and-only {@code dev} profile may run a tool without a closed inputSchema. */
+    @Bean
+    @ConditionalOnMissingBean
+    ToolInputPolicy toolInputPolicy(Environment environment) {
+        boolean dev = List.of(environment.getActiveProfiles()).equals(List.of(PlatformConfigurationGuard.DEV_PROFILE));
+        return dev ? ToolInputPolicy.DEV : ToolInputPolicy.STRICT;
     }
 
     @Bean
