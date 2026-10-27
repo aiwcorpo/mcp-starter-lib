@@ -12,6 +12,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.method.MethodToolCallback;
 import org.springframework.core.annotation.AnnotatedElementUtils;
+import pl.aiwcorpo.mcp.platform.text.ToolOutputSchemas;
+import tools.jackson.databind.node.ObjectNode;
 
 /**
  * Knows the {@link RiskLevel} of every tool the server exposes. Purely deterministic: the answer comes from
@@ -47,7 +49,7 @@ public class ToolRiskRegistry {
     private final Unclassified unclassified;
     private final Map<String, Registered> registered = new ConcurrentHashMap<>();
 
-    private record Registered(ToolCallback tool, RiskLevel risk) {
+    private record Registered(ToolCallback tool, RiskLevel risk, Optional<ObjectNode> outputSchema) {
     }
 
     public ToolRiskRegistry(Unclassified unclassified) {
@@ -68,7 +70,8 @@ public class ToolRiskRegistry {
             throw new IllegalStateException("Two tools are named '" + name + "'. Tool names must be unique.");
         }
         RiskLevel risk = classify(callback);
-        Registered previous = registered.putIfAbsent(name, new Registered(callback, risk));
+        Optional<ObjectNode> outputSchema = methodOf(callback).flatMap(ToolOutputSchemas::forMethod);
+        Registered previous = registered.putIfAbsent(name, new Registered(callback, risk, outputSchema));
         if (previous != null && previous.tool() != callback) {
             throw new IllegalStateException("Two tools are named '" + name + "'. Tool names must be unique.");
         }
@@ -82,6 +85,12 @@ public class ToolRiskRegistry {
     public Optional<RiskLevel> riskOf(String toolName) {
         Registered entry = registered.get(toolName);
         return entry == null ? Optional.empty() : Optional.of(entry.risk());
+    }
+
+    /** The output schema of a tool whose result holds {@code UntrustedText}, see {@link ToolOutputSchemas}. */
+    public Optional<ObjectNode> outputSchemaOf(String toolName) {
+        Registered entry = registered.get(toolName);
+        return entry == null ? Optional.empty() : entry.outputSchema();
     }
 
     private RiskLevel classify(ToolCallback callback) {
@@ -117,20 +126,26 @@ public class ToolRiskRegistry {
         if (callback instanceof RiskClassifiedTool classified) {
             return Optional.ofNullable(classified.riskLevel());
         }
+        return methodOf(callback).map(method -> AnnotatedElementUtils.findMergedAnnotation(method, ToolRisk.class))
+                .map(ToolRisk::value);
+    }
+
+    /**
+     * The {@code @Tool} method behind a callback. Spring AI keeps the reflective Method private and offers no
+     * accessor. Found by type rather than by field name, so a rename upstream fails startup (tool counts as
+     * unflagged) instead of unflagging.
+     */
+    private static Optional<Method> methodOf(ToolCallback callback) {
         if (!(callback instanceof MethodToolCallback)) {
             return Optional.empty();
         }
-        // Spring AI keeps the reflective Method private and offers no accessor. Found by type rather than by
-        // field name, so a rename upstream fails startup (tool counts as unflagged) instead of unflagging.
         for (Field field : MethodToolCallback.class.getDeclaredFields()) {
             if (field.getType() != Method.class) {
                 continue;
             }
             try {
                 field.setAccessible(true);
-                Method method = (Method) field.get(callback);
-                ToolRisk flag = method == null ? null : AnnotatedElementUtils.findMergedAnnotation(method, ToolRisk.class);
-                return flag == null ? Optional.empty() : Optional.of(flag.value());
+                return Optional.ofNullable((Method) field.get(callback));
             } catch (ReflectiveOperationException | RuntimeException ex) {
                 LOG.warn("event=tool_risk_unreadable tool=\"{}\" reason=\"{}\"",
                         callback.getToolDefinition().name(), ex.toString());

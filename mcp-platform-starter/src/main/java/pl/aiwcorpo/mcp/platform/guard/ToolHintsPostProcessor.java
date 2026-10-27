@@ -4,8 +4,16 @@ import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 import io.modelcontextprotocol.server.McpStatelessServerFeatures;
 import io.modelcontextprotocol.spec.McpSchema;
+import io.modelcontextprotocol.server.McpSyncServerExchange;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.function.BiFunction;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ObjectNode;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 
@@ -22,6 +30,8 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
  * without passing through the platform decorator is caught, and the server stopped.
  */
 public class ToolHintsPostProcessor implements BeanPostProcessor {
+
+    private static final JsonMapper JSON = JsonMapper.builder().build();
 
     private final ObjectProvider<ToolRiskRegistry> registry;
 
@@ -106,8 +116,37 @@ public class ToolHintsPostProcessor implements BeanPostProcessor {
                 existing == null ? null : existing.idempotentHint(),
                 existing == null ? null : existing.openWorldHint(),
                 existing == null ? null : existing.returnDirect());
+        Optional<ObjectNode> outputSchema = toolRegistry.outputSchemaOf(tool.name());
+        Map<String, Object> published = tool.outputSchema() != null || outputSchema.isEmpty() ? tool.outputSchema()
+                : JSON.convertValue(outputSchema.get(), new TypeReference<Map<String, Object>>() { });
         McpSchema.Tool annotated = new McpSchema.Tool(tool.name(), tool.title(), tool.description(),
-                tool.inputSchema(), tool.outputSchema(), hints, tool.meta(), tool.icons());
-        return new SyncToolSpecification(annotated, specification.callHandler());
+                tool.inputSchema(), published, hints, tool.meta(), tool.icons());
+        return new SyncToolSpecification(annotated,
+                outputSchema.isPresent() ? withStructuredContent(specification.callHandler()) : specification.callHandler());
+    }
+
+    /**
+     * MCP requires a tool with an output schema to return the result as {@code structuredContent}; Spring AI
+     * returns text content only, so the JSON text of a successful result is repeated there. An error result
+     * (C10) is left as it is.
+     */
+    private static BiFunction<McpSyncServerExchange, McpSchema.CallToolRequest, McpSchema.CallToolResult>
+            withStructuredContent(BiFunction<McpSyncServerExchange, McpSchema.CallToolRequest, McpSchema.CallToolResult> handler) {
+        return (exchange, request) -> {
+            McpSchema.CallToolResult result = handler.apply(exchange, request);
+            if (Boolean.TRUE.equals(result.isError()) || result.structuredContent() != null
+                    || result.content() == null || result.content().size() != 1
+                    || !(result.content().getFirst() instanceof McpSchema.TextContent text)) {
+                return result;
+            }
+            Object structured;
+            try {
+                structured = JSON.readValue(text.text(), Object.class);
+            } catch (JacksonException ex) {
+                throw new IllegalStateException("the result of a tool with an output schema is not JSON", ex);
+            }
+            return McpSchema.CallToolResult.builder().content(result.content()).isError(false)
+                    .structuredContent(structured).meta(result.meta()).build();
+        };
     }
 }

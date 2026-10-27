@@ -45,6 +45,22 @@ poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i
    spoza zakresu `long` (`1e30`) powodowała wyjątek biblioteki schematów i `internal_error` z ERROR w logu; teraz
    `invalid_argument`. Testy: `BoundedSchemaTest` (8), `ForeignToolPolicyCheckTest` (4), zmienione testy schematów.
    Razem 267 testów (starter 209, mcp-platform-test 58).
+4. S-L1 i `UntrustedText` (CC-072): pakiet `pl.aiwcorpo.mcp.platform.text`. `TextHygiene.normalize` (tekst z
+   systemu: usuwa C0/C1/DEL, niesparowane surogaty, nieznaki, każdy `\p{Cf}` łącznie z bidi, zero-width, U+2060,
+   BOM i znakami tagów; U+2028/U+2029/U+0085 i CR dają `\n`) i `TextHygiene.firstProblem` (tekst od modelu).
+   `ToolInputValidator` używa go dla każdego napisu w argumentach: w tekście swobodnym odrzuca kontrolne, U+2028/9,
+   niesparowane surogaty i nieznaki, bidi override/isolate, zero-width, U+2060..2064, BOM, znaki tagów (ZWJ/ZWNJ i
+   znaczniki kierunku LRM/RLM zostają dla emoji i pisma RTL); w wartości z `pattern` także `\n \r \t` i każdy `\p{Cf}`.
+   `UntrustedText` (record: `kind`, `format`, `text`, `truncated`; fabryki `plain`/`markdown` normalizują i tną do
+   limitu bez rozcinania pary surogatów). `ToolOutputSchemas`: narzędzie, którego wynik (rekord, także zagnieżdżony
+   lub w liście) zawiera `UntrustedText`, dostaje `outputSchema` z definicją z `common.schema.json` kontraktów,
+   publikowaną w `tools/list` (wchodzi do `definitionHash`), a wynik `structuredContent` (MCP wymaga go przy
+   `outputSchema`; Spring AI 2.0.0 zwraca sam tekst). Pola dodatkowe systemu (np. `omittedMacros`) idą obok
+   `UntrustedText` w rekordzie wyniku, nie wewnątrz. Testy: `TextHygieneTest`, `ToolOutputSchemasTest`,
+   `BoundedSchemaTest` (znaki, wiersze w zagnieżdżonych wartościach), `OutputSchemaTest` (transport, klient SDK
+   waliduje `structuredContent`). Poprawki z automatycznego przeglądu bezpieczeństwa (MEDIUM): `prefixItems` bez
+   `items` (elementy poza prefiksem bez limitu) i reguła `\n\r\t` brana z argumentu najwyższego poziomu dla wartości
+   zagnieżdżonych; opis w tabeli poniżej. Razem 280 testów (starter 220, mcp-platform-test 60).
 
 3.0.0-alpha-6: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-6`,
 tag `v3.0.0-alpha-6`. API bez usunięć; zgłoszenia pięciu serwerów ws-04 i template'u. Instrukcja dla serwerów

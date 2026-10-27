@@ -16,7 +16,8 @@ import tools.jackson.databind.JsonNode;
  *   <li>string (except {@code enum}/{@code const}): {@code maxLength}; a {@code pattern} is anchored with
  *       {@code ^} and {@code $} and has no alternation outside a group, because an unanchored match
  *       ({@code [0-9]+} accepts {@code ../../1}, {@code ^a|b$} accepts {@code a/../x}) is no format at all;</li>
- *   <li>array: {@code maxItems} and an {@code items} schema that is bounded in turn;</li>
+ *   <li>array: {@code maxItems} and an {@code items} schema that is bounded in turn (after {@code prefixItems}
+ *       too: {@code items: false} or a bounded schema, so elements past the prefix have a limit);</li>
  *   <li>integer, number: a lower and an upper bound;</li>
  *   <li>no type at all (accepts any JSON value) and {@code patternProperties} are refused.</li>
  * </ul>
@@ -131,10 +132,9 @@ final class InputSchemaBounds {
         }
         JsonNode items = schema.path("items");
         JsonNode prefix = schema.path("prefixItems");
-        if (items.isMissingNode() && !prefix.isArray()) {
-            problems.add(where + ": a list needs an items schema");
-        }
-        if (!items.isMissingNode()) {
+        if (items.isMissingNode()) {
+            problems.add(where + ": a list needs an items schema (items: false after prefixItems)");
+        } else if (!(items.isBoolean() && !items.asBoolean())) {
             visit(items, path + "[]", depth + 1, followedRefs);
         }
         if (prefix.isArray()) {

@@ -212,4 +212,50 @@ class BoundedSchemaTest {
         open.validate("{\"l\":[\"a\"]}");
         assertThatThrownBy(() -> open.validate("{\"l\":[\"abcd\"]}")).isInstanceOf(InvalidToolArgumentException.class);
     }
+
+    @Test
+    void elementsPastAPrefixNeedALimitToo() {
+        String template = "{\"type\":\"object\",\"properties\":{\"l\":{\"type\":\"array\",\"maxItems\":3,"
+                + "\"prefixItems\":[{\"type\":\"string\",\"maxLength\":5}]%s}},\"additionalProperties\":false}";
+        refused(template.formatted(""), "l: a list needs an items schema");
+        refused(template.formatted(",\"items\":{\"type\":\"string\"}"), "l[]: text needs maxLength");
+        handWritten(template.formatted(",\"items\":false"), ToolInputPolicy.STRICT);
+        handWritten(template.formatted(",\"items\":{\"type\":\"string\",\"maxLength\":5}"), ToolInputPolicy.STRICT);
+    }
+
+    @Test
+    void lineBreaksAreJudgedByTheRuleOfTheValueTheySitIn() {
+        ToolInputValidator validator = handWritten("""
+                {"type":"object","properties":{
+                  "note":{"type":"string","maxLength":100},
+                  "filter":{"type":"object","additionalProperties":false,"properties":{
+                    "key":{"type":"string","maxLength":20,"pattern":"^[^/]+$"},
+                    "text":{"type":"string","maxLength":100},
+                    "keys":{"type":"array","maxItems":3,"items":{"type":"string","maxLength":20,"pattern":"^[^/]+$"}},
+                    "ref":{"$ref":"#/$defs/Key"}}}},
+                 "additionalProperties":false,
+                 "$defs":{"Key":{"type":"string","maxLength":20,"pattern":"^[^/]+$"}}}""", ToolInputPolicy.STRICT);
+
+        validator.validate("{\"note\":\"a\\nb\",\"filter\":{\"text\":\"a\\nb\\tc\",\"key\":\"a b\"}}");
+        for (String bad : new String[] {
+                "{\"filter\":{\"key\":\"a\\nb\"}}",
+                "{\"filter\":{\"keys\":[\"ok\",\"a\\rb\"]}}",
+                "{\"filter\":{\"ref\":\"a\\tb\"}}",
+                "{\"filter\":{\"key\":\"a\\u200bb\"}}"}) {
+            assertThatThrownBy(() -> validator.validate(bad)).as(bad).isInstanceOf(InvalidToolArgumentException.class);
+        }
+    }
+
+    @Test
+    void invisibleAndDirectionCharactersAreRefusedInFreeTextToo() {
+        ToolInputValidator validator = handWritten("{\"type\":\"object\",\"properties\":{\"body\":{\"type\":\"string\","
+                + "\"maxLength\":100}},\"additionalProperties\":false}", ToolInputPolicy.STRICT);
+
+        validator.validate("{\"body\":\"family \\u200d emoji, mark \\u200f, text\"}");
+        for (String hidden : new String[] {"\\u2028", "\\u2029", "\\u202e", "\\u2066", "\\u200b", "\\u2060", "\\ufeff",
+                "\\ufffe", "\\uffff", "\\udb40\\udc41", "\\ud800", "\\u0085"}) {
+            assertThatThrownBy(() -> validator.validate("{\"body\":\"a" + hidden + "b\"}")).as(hidden)
+                    .isInstanceOf(InvalidToolArgumentException.class);
+        }
+    }
 }

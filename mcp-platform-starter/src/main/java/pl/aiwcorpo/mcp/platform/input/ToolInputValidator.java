@@ -12,6 +12,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import pl.aiwcorpo.mcp.platform.error.InvalidToolArgumentException;
+import pl.aiwcorpo.mcp.platform.text.TextHygiene;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
@@ -38,13 +39,16 @@ public final class ToolInputValidator {
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final SchemaRegistry REGISTRY = SchemaRegistry.withDefaultDialect(SpecificationVersion.DRAFT_2020_12);
     private static final int MAX_REPORTED = 5;
-    private static final ToolInputValidator NONE = new ToolInputValidator(null, Set.of(), null);
+    private static final int MAX_TEXT_DEPTH = 12;
+    private static final ToolInputValidator NONE = new ToolInputValidator(null, Set.of(), null, null);
 
     private final Schema schema;
     private final Set<String> declared;
     private final JsonNode properties;
+    private final JsonNode root;
 
-    private ToolInputValidator(Schema schema, Set<String> declared, JsonNode properties) {
+    private ToolInputValidator(Schema schema, Set<String> declared, JsonNode properties, JsonNode root) {
+        this.root = root;
         this.schema = schema;
         this.declared = declared;
         this.properties = properties;
@@ -116,7 +120,7 @@ public final class ToolInputValidator {
                     + ex.getClass().getSimpleName() + ")", ex);
         }
         Set<String> declared = new LinkedHashSet<>(root.path("properties").propertyNames());
-        return new ToolInputValidator(schema, declared, root.path("properties"));
+        return new ToolInputValidator(schema, declared, root.path("properties"), root);
     }
 
     /**
@@ -184,7 +188,8 @@ public final class ToolInputValidator {
         }
         List<String> controls = new ArrayList<>();
         if (arguments.isObject()) {
-            arguments.propertyNames().forEach(name -> controlCharacters(arguments.get(name), name, controls));
+            arguments.propertyNames().forEach(name -> textProblems(arguments.get(name), properties.get(name),
+                    declared.contains(name) ? name : "an argument", controls, 0));
         }
         if (errors.isEmpty() && controls.isEmpty()) {
             return;
@@ -208,27 +213,52 @@ public final class ToolInputValidator {
     }
 
     /**
-     * Control characters (C0, DEL, C1) are not text: they forge log lines and terminal output. Newline, carriage
-     * return and tab stay allowed in free text, but not in an argument that has a {@code pattern} unless the
-     * pattern names them itself ({@code \\n}, {@code \\s}, ...): a pattern is a format, and a line break in a
-     * formatted value is never part of it.
+     * Text hygiene ({@link TextHygiene}) of every string in the arguments, judged by the rule of the schema node
+     * that describes that very value (properties, list items, map values, {@code $ref}), not by the rule of the
+     * top-level argument it sits in. A pattern marks a formatted value (a key, a path): there a line break and
+     * every format character are refused unless the pattern names them itself. A node that cannot be determined
+     * counts as formatted, the strictest reading.
      */
-    private void controlCharacters(JsonNode value, String top, List<String> found) {
+    private void textProblems(JsonNode value, JsonNode node, String top, List<String> found, int depth) {
+        JsonNode rule = resolve(node);
         if (value.isString()) {
-            JsonNode rule = properties.path(top);
-            boolean formatted = rule.has("pattern") && !allowsWhitespaceControls(rule.get("pattern").asString());
-            String text = value.asString();
-            for (int i = 0; i < text.length(); i++) {
-                char c = text.charAt(i);
-                boolean whitespace = c == '\n' || c == '\r' || c == '\t';
-                if ((Character.isISOControl(c) && !whitespace) || (whitespace && formatted)) {
-                    found.add((declared.contains(top) ? top : "an argument") + " contains control characters");
-                    return;
-                }
+            boolean formatted = rule == null
+                    || (rule.has("pattern") && !allowsWhitespaceControls(rule.get("pattern").asString()));
+            TextHygiene.Problem problem = TextHygiene.firstProblem(value.asString(), formatted);
+            if (problem != null) {
+                found.add(top + " contains " + problem.description());
             }
-        } else if ((value.isObject() || value.isArray())) {
-            value.forEach(child -> controlCharacters(child, top, found));
+        } else if (depth < MAX_TEXT_DEPTH && value.isObject()) {
+            value.propertyNames().forEach(name -> {
+                JsonNode child = rule == null ? null : rule.path("properties").get(name);
+                if (child == null && rule != null && rule.path("additionalProperties").isObject()) {
+                    child = rule.get("additionalProperties");
+                }
+                textProblems(value.get(name), child, top, found, depth + 1);
+            });
+        } else if (depth < MAX_TEXT_DEPTH && value.isArray()) {
+            JsonNode items = rule == null ? null : rule.get("items");
+            value.forEach(element -> textProblems(element, items, top, found, depth + 1));
+        } else if (value.isObject() || value.isArray()) {
+            found.add(top + " is nested too deeply");
         }
+    }
+
+    /** Follows local {@code $ref}s; {@code null} when the node is absent, not an object or cannot be resolved. */
+    private JsonNode resolve(JsonNode node) {
+        JsonNode current = node;
+        for (int hops = 0; current != null && hops < 8; hops++) {
+            if (!current.isObject()) {
+                return null;
+            }
+            String ref = current.path("$ref").asString(null);
+            if (ref == null) {
+                return current;
+            }
+            JsonNode target = ref.startsWith("#") ? root.at(ref.substring(1)) : null;
+            current = target == null || target.isMissingNode() ? null : target;
+        }
+        return null;
     }
 
     private static boolean allowsWhitespaceControls(String pattern) {
