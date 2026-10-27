@@ -1,15 +1,21 @@
 package pl.aiwcorpo.mcp.platform.autoconfigure;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.core.env.Environment;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Stops the server at startup when its configuration would weaken the gateway model.
@@ -37,6 +43,11 @@ public class PlatformConfigurationGuard implements InitializingBean {
     public static final Set<String> ALLOWED_UNAUTHENTICATED_PATHS =
             Set.of("/actuator/health", "/actuator/health/liveness", "/actuator/health/readiness");
 
+    private static final Logger LOG = LoggerFactory.getLogger(PlatformConfigurationGuard.class);
+
+    /** {@code common.schema.json#/$defs/SystemId} from the contracts jar on the classpath. */
+    static final Set<String> SYSTEM_IDS = systemIds();
+
     /** {@code common.schema.json#/$defs/ComponentId}. */
     private static final Pattern COMPONENT_ID = Pattern.compile("^mcp-[a-z0-9]+(-[a-z0-9]+)*$");
 
@@ -62,6 +73,18 @@ public class PlatformConfigurationGuard implements InitializingBean {
         if (active.contains(DEV_PROFILE) && !dev) {
             problems.add("the 'dev' profile must be the only active profile (active: " + active + "): its relaxations "
                     + "must not ride along with another profile");
+        }
+
+        String system = properties.system();
+        if (system != null && COMPONENT_ID.matcher(serverId).matches() && !SYSTEM_IDS.contains(system)) {
+            String message = "aiwcorpo.mcp.platform.server-id '" + serverId + "': system '" + system + "' is not a "
+                    + "SystemId of the contracts " + SYSTEM_IDS + "; audit events (server) and credential_required "
+                    + "(system) would not match the contract and credential_required would reach clients as internal_error";
+            if (dev) {
+                LOG.warn("event=platform_config_warning detail=\"{}\"", message);
+            } else {
+                problems.add(message);
+            }
         }
 
         if (isBlank(jwt.getJwksUri())) {
@@ -145,6 +168,21 @@ public class PlatformConfigurationGuard implements InitializingBean {
             return uri.isAbsolute() && uri.getHost() != null && schemes.contains(uri.getScheme());
         } catch (Exception ex) {
             return false;
+        }
+    }
+
+    private static Set<String> systemIds() {
+        String resource = "/mcp-contracts/schemas/common.schema.json";
+        try (InputStream in = PlatformConfigurationGuard.class.getResourceAsStream(resource)) {
+            if (in == null) {
+                throw new IllegalStateException(resource + " is missing: mcp-contracts must be on the classpath");
+            }
+            Set<String> ids = new LinkedHashSet<>();
+            JsonMapper.builder().build().readTree(in).required("$defs").required("SystemId").required("enum")
+                    .forEach(id -> ids.add(id.asString()));
+            return Set.copyOf(ids);
+        } catch (IOException ex) {
+            throw new IllegalStateException("cannot read " + resource, ex);
         }
     }
 }

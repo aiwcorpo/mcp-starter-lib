@@ -21,6 +21,17 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
 
+3.0.0-alpha-4: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-4`,
+tag `v3.0.0-alpha-4`. API bez zmian (serwery przechodzą podbiciem BOM). Zgłoszenia ws-03:
+- ciało odpowiedzi błędu backendu w logu: gdy łańcuch wyjątków zawiera `RestClientResponseException`,
+  `event=tool_failed` loguje tylko klasy i status HTTP, bez komunikatów żadnego poziomu (opakowania, w tym
+  `ToolExecutionException`, kopiują ciało do komunikatu). Testy: `McpErrorMapperTest`
+  (`wrappersQuotingAnHttpResponseAreNotLoggedEither`), `CredentialLeakTest.backendErrorBodiesReachNeitherTheLogNorTheClient`
+  (backend 401 i 500 z unikalnym znacznikiem w ciele; znacznika nie ma w żadnym logu, root na DEBUG, ani w wyniku);
+- system spoza `SystemId` kontraktów: poza `dev` odmowa startu, w `dev` ostrzeżenie
+  (`PlatformConfigurationGuardTest.aSystemOutsideTheContractIsRefusedOutsideDevAndOnlyWarnedInDev`).
+`./mvnw clean install`: 203 testy (starter 156, mcp-platform-test 47), 0 błędów.
+
 3.0.0-alpha-3: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-3`,
 tag `v3.0.0-alpha-3`. Poprawki po recenzji bez kontekstu alpha-1. Publiczne API bez usunięć; zmiana zachowania:
 `invalid_argument` z komunikatem tylko dla nowej `InvalidToolArgumentException` (M4), plus nowe odmowy startu

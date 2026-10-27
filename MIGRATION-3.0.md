@@ -1,6 +1,6 @@
 # Migracja z 2.x na 3.0
 
-Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-3**.
+Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-4**.
 
 ## Zmiana modelu
 
@@ -70,6 +70,14 @@ Od 3.0.0-alpha-2 starter ustawia domyślnie `spring.ai.mcp.server.protocol=STREA
 - `unauthenticated-paths` tylko z listy zdrowia; protokół MCP tylko `STREAMABLE`.
 - Skaner `@McpTool` wyłączony; narzędzie spoza opakowania zatrzymuje start.
 - Domyślny `spring.data.redis.timeout=2s`.
+
+## Zmiany w 3.0.0-alpha-4
+
+- `server-id` musi wskazywać system z listy `SystemId` kontraktów; poza profilem `dev` inny system zatrzymuje
+  start, w `dev` jest ostrzeżenie.
+- Log `event=tool_failed` nie zawiera komunikatów wyjątków, gdy w łańcuchu jest błąd HTTP z `RestClient`
+  (tylko klasy i status). Obejście w adapterze (`defaultStatusHandler` przepisujący wyjątek) nie jest już
+  potrzebne, ale nie przeszkadza.
 
 ## Wdrożenie
 

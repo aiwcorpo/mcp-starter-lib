@@ -117,4 +117,15 @@ class PlatformConfigurationGuardTest {
         assertThatThrownBy(() -> check(valid(), env)).hasMessageContaining("guard.*").hasMessageContaining("pat-header-prefix");
         assertThat(PlatformConfigurationGuard.DEV_PROFILE).isEqualTo("dev");
     }
+
+    @Test
+    void aSystemOutsideTheContractIsRefusedOutsideDevAndOnlyWarnedInDev() {
+        McpPlatformProperties props = valid();
+        props.setServerId("mcp-example");
+
+        assertThatThrownBy(() -> check(props, production())).hasMessageContaining("system 'example' is not a SystemId");
+        assertThatCode(() -> check(props, profiles("dev"))).doesNotThrowAnyException();
+        assertThat(PlatformConfigurationGuard.SYSTEM_IDS)
+                .containsExactlyInAnyOrder("jira", "confluence", "gitlab", "servicedesk", "opensearch");
+    }
 }

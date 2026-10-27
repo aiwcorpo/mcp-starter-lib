@@ -190,14 +190,27 @@ public class McpErrorMapper {
         return message.length() <= MAX_MESSAGE ? message : message.substring(0, MAX_MESSAGE - 3) + "...";
     }
 
-    /** {@code Outer: message <- Inner: message}, without response bodies and without the credential. */
+    /**
+     * {@code Outer: message <- Inner: message}, without the credential. When the chain holds an HTTP error
+     * response of RestClient, no message of the chain is logged at all, only classes and the status: wrappers
+     * (Spring AI's {@code ToolExecutionException}, the server's own) copy the response body into their
+     * messages, and the body is where backends echo request headers and return data the log must not keep.
+     */
     static String describeChain(Throwable ex) {
+        boolean httpResponseInChain = false;
+        Throwable probe = ex;
+        for (int depth = 0; probe != null && depth < MAX_CAUSE_DEPTH; depth++) {
+            httpResponseInChain |= probe instanceof RestClientResponseException;
+            probe = probe.getCause() == probe ? null : probe.getCause();
+        }
         List<String> levels = new ArrayList<>();
         Throwable current = ex;
         for (int depth = 0; current != null && depth < MAX_CAUSE_DEPTH; depth++) {
             String text;
             if (current instanceof RestClientResponseException response) {
                 text = current.getClass().getName() + ": HTTP " + response.getStatusCode().value() + " (body not logged)";
+            } else if (httpResponseInChain) {
+                text = current.getClass().getName() + " (message not logged: may quote the HTTP response)";
             } else {
                 String message = current.getMessage();
                 text = current.getClass().getName() + (message == null ? "" : ": " + SecretRedactor.redact(message));

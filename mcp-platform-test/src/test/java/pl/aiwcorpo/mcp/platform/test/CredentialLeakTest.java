@@ -47,6 +47,8 @@ import pl.aiwcorpo.mcp.platform.test.app.ProbeServer;
 class CredentialLeakTest {
 
     private static final String SECRET = "Zx9-jira-pat-of-jkowalski-c0ffee";
+    /** Stands for system data in a backend error body: must reach neither the log nor the client. */
+    private static final String BODY_MARKER = "backend-body-marker-5be1d0";
     private static final String BASIC_PAIR = "svc-jira:Wint3r-Passw0rd";
     private static final String BASIC = java.util.Base64.getEncoder()
             .encodeToString(BASIC_PAIR.getBytes(StandardCharsets.UTF_8));
@@ -60,12 +62,13 @@ class CredentialLeakTest {
             HttpServer server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
             server.createContext("/", exchange -> {
                 String authorization = String.valueOf(exchange.getRequestHeaders().getFirst("Authorization"));
-                byte[] body = ("{\"errorMessages\":[\"Invalid credentials: " + authorization + "\"]}")
-                        .getBytes(StandardCharsets.UTF_8);
+                boolean serverError = exchange.getRequestURI().getPath().contains("SRV-");
+                byte[] body = ("{\"errorMessages\":[\"Invalid credentials: " + authorization + "\"],\"internal\":\""
+                        + BODY_MARKER + "\"}").getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("WWW-Authenticate", "Bearer error=\"invalid_token\", presented=\""
                         + authorization + "\"");
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
-                exchange.sendResponseHeaders(401, body.length);
+                exchange.sendResponseHeaders(serverError ? 500 : 401, body.length);
                 try (OutputStream out = exchange.getResponseBody()) {
                     out.write(body);
                 }
@@ -111,6 +114,10 @@ class CredentialLeakTest {
     }
 
     private List<String> callAll(String credential) {
+        return callAll(credential, "ABC-123");
+    }
+
+    private List<String> callAll(String credential, String issueKey) {
         HttpClientStreamableHttpTransport transport = HttpClientStreamableHttpTransport
                 .builder("http://127.0.0.1:" + port).endpoint(RawMcp.ENDPOINT).openConnectionOnStartup(false)
                 .httpRequestCustomizer(GATEWAY.asGateway(user -> { }, credential))
@@ -120,7 +127,7 @@ class CredentialLeakTest {
             client.initialize();
             for (String tool : List.of("get_issue", "leaky_tool")) {
                 McpSchema.CallToolResult result = client.callTool(McpSchema.CallToolRequest.builder(tool)
-                        .arguments("get_issue".equals(tool) ? Map.of("issueKey", "ABC-123") : Map.of()).build());
+                        .arguments("get_issue".equals(tool) ? Map.of("issueKey", issueKey) : Map.of()).build());
                 assertThat(result.isError()).as(tool).isTrue();
                 responses.add(GatewayTransportTest.text(result));
             }
@@ -160,6 +167,16 @@ class CredentialLeakTest {
         for (String text : concat(responses, logText())) {
             assertThat(text).doesNotContain(BASIC).doesNotContain(BASIC_PAIR).doesNotContain("Wint3r-Passw0rd");
         }
+    }
+
+    @Test
+    void backendErrorBodiesReachNeitherTheLogNorTheClient() {
+        List<String> all = new ArrayList<>(callAll("Bearer " + SECRET, "ABC-123"));
+        all.addAll(callAll("Bearer " + SECRET, "SRV-1"));
+        all.addAll(logText());
+
+        assertThat(all).allSatisfy(text -> assertThat(text).doesNotContain(BODY_MARKER).doesNotContain(SECRET));
+        assertThat(logText()).anySatisfy(line -> assertThat(line).contains("HTTP 500 (body not logged)"));
     }
 
     private static List<String> concat(List<String> a, List<String> b) {

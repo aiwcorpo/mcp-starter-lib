@@ -162,4 +162,16 @@ class McpErrorMapperTest {
 
         assertThat(described).contains("HTTP 401").doesNotContain("jira-pat-0000secret").doesNotContain("echo");
     }
+
+    @Test
+    void wrappersQuotingAnHttpResponseAreNotLoggedEither() {
+        HttpServerErrorException http = HttpServerErrorException.create(HttpStatus.INTERNAL_SERVER_ERROR, "Server Error",
+                null, "{\"data\":\"backend-body-marker-5be1d0\"}".getBytes(), null);
+        RuntimeException wrapper = new RuntimeException("Error executing tool: " + http.getMessage(), http);
+
+        String described = McpErrorMapper.describeChain(wrapper);
+
+        assertThat(described).doesNotContain("backend-body-marker-5be1d0").contains("HTTP 500 (body not logged)")
+                .contains("java.lang.RuntimeException (message not logged");
+    }
 }
