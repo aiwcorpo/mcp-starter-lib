@@ -9,9 +9,15 @@ import org.springframework.core.env.MapPropertySource;
 /**
  * Defaults the platform needs from Spring Boot, at the lowest precedence so a server can still override them.
  *
- * <p>{@code management.health.redis.enabled=false}: Boot's Redis health check runs {@code INFO}, which the
- * per-server Redis user may not run (ACL with an explicit command list, see mcp-platform-dev), so the
- * health endpoint would report DOWN while the jti store works.
+ * <ul>
+ *   <li>{@code management.health.redis.enabled=false}: Boot's Redis health check runs {@code INFO}, which the
+ *       per-server Redis user may not run (ACL with an explicit command list, see mcp-platform-dev), so the
+ *       health endpoint would report DOWN while the jti store works.</li>
+ *   <li>{@code spring.ai.mcp.server.protocol=STREAMABLE}, {@code type=SYNC},
+ *       {@code streamable-http.mcp-endpoint=/mcp}: the transport the gateway speaks to (streamable HTTP) and the
+ *       one the platform's ThreadLocals work with (SYNC). Spring AI's own default protocol does not mount
+ *       {@code /mcp}, which left servers answering 404 on every call.</li>
+ * </ul>
  */
 public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPostProcessor {
 
@@ -21,7 +27,10 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
         if (!environment.getPropertySources().contains(SOURCE_NAME)) {
             environment.getPropertySources().addLast(new MapPropertySource(SOURCE_NAME,
-                    Map.of("management.health.redis.enabled", "false")));
+                    Map.of("management.health.redis.enabled", "false",
+                            "spring.ai.mcp.server.protocol", "STREAMABLE",
+                            "spring.ai.mcp.server.type", "SYNC",
+                            "spring.ai.mcp.server.streamable-http.mcp-endpoint", "/mcp")));
         }
     }
 }

@@ -7,6 +7,17 @@ Linia `pl.aiwcorpo.mcp:mcp-platform*` 3.x (niezależna od wersji kontraktów). K
 `pl.aiwcorpo.mcp:mcp-platform-starter:3.0.0-alpha-1`, `pl.aiwcorpo.mcp:mcp-platform-test:3.0.0-alpha-1` (test),
 w `~/.m2` (`./mvnw install`), tag git `v3.0.0-alpha-1`.
 
+3.0.0-alpha-2: wydane - te same współrzędne w wersji `3.0.0-alpha-2`, tag `v3.0.0-alpha-2`. API bez zmian
+względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według README" (FAIL w alpha-1: 404 na
+`/mcp`):
+- starter ustawia domyślnie (najniższy priorytet) `spring.ai.mcp.server.protocol=STREAMABLE`, `type=SYNC`,
+  `streamable-http.mcp-endpoint=/mcp`; test `TransportDefaultsTest` uruchamia serwer bez żadnej z tych
+  właściwości;
+- README: sekcja "Pierwszy serwer" (rejestracja narzędzi przez `MethodToolCallbackProvider`), pełny test z
+  importami, `initialize`, `callTool`, `credential_required` i żądaniem bez JWT -> 401, opis drugiego argumentu
+  `asGateway` (poświadczenie C3 do `X-MCP-Credential`); przykład jest kompilowanym testem
+  `mcp-platform-test/.../readme/JiraToolsTest.java`.
+
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
 
@@ -34,7 +45,7 @@ poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i
 
 ## Dowód
 
-`./mvnw clean install` (JDK 25, Docker): starter 144 testy, mcp-platform-test 39 testów, 0 błędów.
+`./mvnw clean install` (JDK 25, Docker): starter 144 testy, mcp-platform-test 43 testy (alpha-1: 39), 0 błędów.
 
 - `InternalJwtVectorsTest`: 43/43 wektory `test-vectors/jwt` z jara `test-vectors` 2.0.2, wynik i powód zgodne
   (weryfikator), plus 38 wektorów serwera przez filtr HTTP ze statusem z wektora; test pilnuje, że katalog ma 43

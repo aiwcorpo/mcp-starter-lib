@@ -6,7 +6,7 @@ robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadc
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
 Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 2.0.2.
-Wersja: **3.0.0-alpha-1** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+Wersja: **3.0.0-alpha-2** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
 
@@ -120,6 +120,7 @@ aiwcorpo.mcp.platform:
   credential:
     connect-url: http://localhost:18090/connections?system={system}   # wymagane, do credential_required
   tools.unclassified: fail                                # fail | destructive
+spring.ai.mcp.server.name: mcp-jira                      # protocol/type/endpoint ustawia starter
 spring.data.redis:                                        # magazyn jti
   host: redis
   username: mcp-jira                                      # klucze jti:mcp-jira:*, tylko SET (NX PX)
@@ -139,6 +140,46 @@ domyślnie `management.health.redis.enabled`, bo sprawdzenie zdrowia Redisa uży
 programisty w `X-PAT-<system>` (np. `X-PAT-Jira`) jako `Bearer` typu `user-secret`. Wewnętrzny JWT nadal jest
 wymagany.
 
+## Pierwszy serwer
+
+Transport MCP ustawia starter (od 3.0.0-alpha-2, najniższy priorytet, serwer może nadpisać):
+`spring.ai.mcp.server.protocol=STREAMABLE`, `spring.ai.mcp.server.type=SYNC`,
+`spring.ai.mcp.server.streamable-http.mcp-endpoint=/mcp`. W 3.0.0-alpha-1 trzeba je ustawić samemu, inaczej
+`/mcp` nie istnieje (404). Nazwę serwera podaje `spring.ai.mcp.server.name`.
+
+Narzędzia rejestruje się beanem `ToolCallbackProvider`; sam bean z metodami `@Tool` nie wystarcza (Spring AI
+odpowiada wtedy `Unknown tool`):
+
+```java
+import org.springframework.ai.tool.ToolCallbackProvider;
+import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.method.MethodToolCallbackProvider;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.context.annotation.Bean;
+import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
+import pl.aiwcorpo.mcp.platform.guard.ToolRisk;
+import pl.aiwcorpo.mcp.platform.security.CredentialContext;
+
+@SpringBootApplication
+public class JiraServer {
+
+    @Bean
+    ToolCallbackProvider jiraTools() {
+        return MethodToolCallbackProvider.builder().toolObjects(new JiraTools()).build();
+    }
+
+    public static class JiraTools {
+
+        @Tool(name = "get_issue", description = "Returns an issue by key.")
+        @ToolRisk(RiskLevel.READ_ONLY)
+        public String getIssue(String issueKey) {
+            // A real adapter calls Jira with: .headers(CredentialContext.require("jira")::applyTo)
+            return issueKey + " read with a " + CredentialContext.require("jira").scheme().wireName() + " credential";
+        }
+    }
+}
+```
+
 ## Testy serwera bez gateway'a
 
 ```xml
@@ -147,30 +188,113 @@ wymagany.
 </dependency>
 ```
 
+Poniższy test jest w repozytorium jako
+`mcp-platform-test/src/test/java/pl/aiwcorpo/mcp/platform/test/readme/JiraToolsTest.java` (z serwerem
+`JiraServer` wyżej) i przechodzi przy każdej budowie:
+
 ```java
-@SpringBootTest(webEnvironment = RANDOM_PORT)
-@ActiveProfiles("dev")
+import static org.assertj.core.api.Assertions.assertThat;
+
+import io.modelcontextprotocol.client.McpClient;
+import io.modelcontextprotocol.client.McpSyncClient;
+import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
+import io.modelcontextprotocol.spec.McpSchema;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.util.Map;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import pl.aiwcorpo.mcp.platform.test.TestGateway;
+
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@ActiveProfiles("dev")                              // klucze testowe, jti w pamięci, bez mTLS: tylko w dev
 class JiraToolsTest {
-    static final TestGateway GATEWAY = TestGateway.start("mcp-jira");
+
+    static final TestGateway GATEWAY = TestGateway.start("mcp-jira");   // server-id testowanego serwera
 
     @DynamicPropertySource
     static void gateway(DynamicPropertyRegistry registry) {
         GATEWAY.serverProperties().forEach((name, value) -> registry.add(name, () -> value));
     }
 
-    McpSyncClient client(int port) {
-        var transport = HttpClientStreamableHttpTransport.builder("http://127.0.0.1:" + port).endpoint("/mcp")
+    @AfterAll
+    static void stopGateway() {
+        GATEWAY.close();
+    }
+
+    @LocalServerPort
+    int port;
+
+    McpSyncClient client(String credential) {
+        HttpClientStreamableHttpTransport transport = HttpClientStreamableHttpTransport
+                .builder("http://127.0.0.1:" + port).endpoint("/mcp")
                 .openConnectionOnStartup(false)
-                .httpRequestCustomizer(GATEWAY.asGateway(user -> user.username("jkowalski"), "Bearer test-pat"))
+                .httpRequestCustomizer(GATEWAY.asGateway(user -> user.username("jkowalski"), credential))
                 .build();
-        return McpClient.sync(transport).build();
+        McpSyncClient client = McpClient.sync(transport).build();
+        client.initialize();
+        return client;
+    }
+
+    @Test
+    void toolCallThroughTheTestGateway() {
+        try (McpSyncClient client = client("Bearer test-jira-pat")) {
+            McpSchema.CallToolResult result = client.callTool(
+                    McpSchema.CallToolRequest.builder("get_issue").arguments(Map.of("issueKey", "ABC-1")).build());
+
+            assertThat(result.isError()).isFalse();
+            assertThat(((McpSchema.TextContent) result.content().getFirst()).text())
+                    .contains("ABC-1 read with a Bearer credential");
+        }
+    }
+
+    @Test
+    void withoutCredentialTheToolAnswersCredentialRequired() {
+        try (McpSyncClient client = client(null)) {
+            McpSchema.CallToolResult result = client.callTool(
+                    McpSchema.CallToolRequest.builder("get_issue").arguments(Map.of("issueKey", "ABC-1")).build());
+
+            assertThat(result.isError()).isTrue();
+            assertThat(((McpSchema.TextContent) result.content().getFirst()).text())
+                    .contains("\"error\":\"credential_required\"");
+        }
+    }
+
+    @Test
+    void withoutJwtTheServerAnswers401() throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/mcp"))
+                .header("Content-Type", "application/json")
+                .header("Accept", "application/json, text/event-stream")
+                .POST(HttpRequest.BodyPublishers.ofString("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}"))
+                .build();
+
+        HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+
+        assertThat(response.statusCode()).isEqualTo(401);
     }
 }
 ```
 
-`asGateway` dokłada do każdego żądania nowy JWT (z `tool` przy `tools/call`), `X-Request-Id` i nagłówki C3.
-`GATEWAY.user()` / `GATEWAY.service()` budują pojedyncze tokeny (podmiot, grupy, `vs`/`vsc`, `mfa`, czas życia,
-`aud`, ...) do testów odrzuceń.
+`TestGateway.asGateway(user, credential)` robi to, co gateway, przy każdym żądaniu HTTP klienta MCP:
+
+- ustawia nowy wewnętrzny JWT (`Authorization: Bearer ...`, podpisany testowym kluczem A z kontraktów) i
+  pasujący `X-Request-Id`; przy `tools/call` z `tool` równym `params.name`. Pierwszy argument zmienia claimy
+  użytkownika (`username`, `groups`, `virtualServer`, `mfaAgeSeconds`, ...);
+- drugi argument to **poświadczenie do systemu docelowego (C3)**, nie token do serwera: trafia dosłownie do
+  `X-MCP-Credential` w formacie `<scheme> <value>` (scheme: `Bearer`, `Basic`, `Token`, `ApiKey`), a
+  `X-MCP-Credential-Type` dostaje `user-secret`. W narzędziu widać je jako `CredentialContext.require(system)`.
+  `null` = brak poświadczenia (narzędzie dostanie `credential_required`).
+
+Pojedyncze tokeny do testów odrzuceń: `GATEWAY.user().tool("get_issue").mint().headers()`,
+`GATEWAY.service().mint()`, z ustawieniami `audience`, `lifetime`, `requestId`, `jti`, ... Wynik narzędzia
+zwracającego `String` przychodzi w `TextContent` jako napis JSON (w cudzysłowach), stąd `contains` w przykładzie.
 
 ## Budowa
 
@@ -185,7 +309,7 @@ Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera t
 ```xml
 <dependency>
   <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-  <version>3.0.0-alpha-1</version><type>pom</type><scope>import</scope>
+  <version>3.0.0-alpha-2</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
 
