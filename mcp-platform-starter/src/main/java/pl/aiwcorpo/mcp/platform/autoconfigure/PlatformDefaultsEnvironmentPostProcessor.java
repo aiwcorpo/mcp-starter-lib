@@ -1,8 +1,11 @@
 package pl.aiwcorpo.mcp.platform.autoconfigure;
 
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.Map;
 import org.springframework.boot.EnvironmentPostProcessor;
 import org.springframework.boot.SpringApplication;
+import org.springframework.core.Ordered;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
 
@@ -22,22 +25,34 @@ import org.springframework.core.env.MapPropertySource;
  *       anyway.</li>
  *   <li>{@code spring.data.redis.timeout=2s}: a hung Redis answers 503 quickly instead of holding request
  *       threads for the client's default minute.</li>
+ *   <li>With the {@code dev} profile active only: {@code server.address=127.0.0.1}. The dev relaxations (test
+ *       keys, no mTLS) must not be reachable from the network; {@code PlatformConfigurationGuard} refuses any
+ *       non-loopback address in dev.</li>
  * </ul>
+ * Runs after the config data (application*.yml, profiles) is loaded, so the active profiles are known.
  */
-public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPostProcessor {
+public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPostProcessor, Ordered {
 
     static final String SOURCE_NAME = "mcpPlatformDefaults";
 
     @Override
+    public int getOrder() {
+        return Ordered.LOWEST_PRECEDENCE;
+    }
+
+    @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
         if (!environment.getPropertySources().contains(SOURCE_NAME)) {
-            environment.getPropertySources().addLast(new MapPropertySource(SOURCE_NAME,
-                    Map.of("management.health.redis.enabled", "false",
+            Map<String, Object> defaults = new HashMap<>(Map.of("management.health.redis.enabled", "false",
                             "spring.ai.mcp.server.protocol", "STREAMABLE",
                             "spring.ai.mcp.server.type", "SYNC",
                             "spring.ai.mcp.server.streamable-http.mcp-endpoint", "/mcp",
                             "spring.ai.mcp.server.annotation-scanner.enabled", "false",
-                            "spring.data.redis.timeout", "2s")));
+                            "spring.data.redis.timeout", "2s"));
+            if (Arrays.asList(environment.getActiveProfiles()).contains(PlatformConfigurationGuard.DEV_PROFILE)) {
+                defaults.put("server.address", "127.0.0.1");
+            }
+            environment.getPropertySources().addLast(new MapPropertySource(SOURCE_NAME, defaults));
         }
     }
 }

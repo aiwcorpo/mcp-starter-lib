@@ -26,7 +26,7 @@ class PlatformConfigurationGuardTest {
     }
 
     private static MockEnvironment profiles(String... active) {
-        MockEnvironment env = production();
+        MockEnvironment env = production().withProperty("server.address", "127.0.0.1");
         env.setActiveProfiles(active);
         return env;
     }
@@ -92,7 +92,7 @@ class PlatformConfigurationGuardTest {
                 .hasMessageContaining("dev-pat").hasMessageContaining("allow-test-keys")
                 .hasMessageContaining("replay-store=memory").hasMessageContaining("mtls.required=false");
 
-        MockEnvironment dev = new MockEnvironment();
+        MockEnvironment dev = new MockEnvironment().withProperty("server.address", "127.0.0.1");
         dev.setActiveProfiles("dev");
         assertThatCode(() -> check(props, dev)).doesNotThrowAnyException();
     }
@@ -127,5 +127,33 @@ class PlatformConfigurationGuardTest {
         assertThatCode(() -> check(props, profiles("dev"))).doesNotThrowAnyException();
         assertThat(PlatformConfigurationGuard.SYSTEM_IDS)
                 .containsExactlyInAnyOrder("jira", "confluence", "gitlab", "servicedesk", "opensearch");
+    }
+
+    @Test
+    void devListensOnLoopbackOnly() {
+        for (String address : new String[] {"127.0.0.1", "::1", "localhost"}) {
+            MockEnvironment env = profiles("dev").withProperty("server.address", address);
+            assertThatCode(() -> check(valid(), env)).as(address).doesNotThrowAnyException();
+        }
+        for (String address : new String[] {"0.0.0.0", "10.0.0.5", "mcp-jira.internal", ""}) {
+            MockEnvironment env = profiles("dev").withProperty("server.address", address);
+            assertThatThrownBy(() -> check(valid(), env)).as(address).hasMessageContaining("loopback");
+        }
+        MockEnvironment unset = new MockEnvironment();
+        unset.setActiveProfiles("dev");
+        assertThatThrownBy(() -> check(valid(), unset)).hasMessageContaining("loopback");
+    }
+
+    @Test
+    void theStarterDefaultsDevToLoopbackAndNothingElse() {
+        MockEnvironment dev = new MockEnvironment();
+        dev.setActiveProfiles("dev");
+        new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(dev, null);
+        assertThat(dev.getProperty("server.address")).isEqualTo("127.0.0.1");
+
+        MockEnvironment prod = new MockEnvironment();
+        prod.setActiveProfiles("prod");
+        new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(prod, null);
+        assertThat(prod.getProperty("server.address")).isNull();
     }
 }

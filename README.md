@@ -6,7 +6,7 @@ robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadc
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
 Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 2.0.2.
-Wersja: **3.0.0-alpha-4** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+Wersja: **3.0.0-alpha-5** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
 
@@ -83,9 +83,11 @@ to obiekt `{"error":"<kod>","message":"...",...}` zgodny z `schemas/tool-error.s
 Własne mapowania: beany `ToolErrorMapping`, tylko z kodami C10; wynik niezgodny z `tool-error.schema.json`
 (np. bez wymaganego pola) klient dostaje jako `internal_error`. Z każdego komunikatu (do klienta i do logu)
 usuwane jest poświadczenie bieżącego żądania, także w postaci URL-encoded i JSON-escaped. Ciała odpowiedzi błędów
-backendu nie trafiają ani do klienta, ani do logu: gdy w łańcuchu wyjątków jest błąd HTTP z `RestClient`, log
-`event=tool_failed` zawiera tylko klasy wyjątków i status HTTP, bez komunikatów (opakowania jak
-`ToolExecutionException` Spring AI kopiują do nich ciało odpowiedzi). Adapter nie musi tego obchodzić własnym
+backendu nie trafiają ani do klienta, ani do logu: gdy w łańcuchu wyjątków jest wyjątek z pakietów
+`org.springframework.web.client`, `org.springframework.http.converter`, `com.fasterxml.jackson` albo
+`tools.jackson` (błąd HTTP, ciało 200, którego nie da się sparsować), log `event=tool_failed` zawiera tylko klasy
+wyjątków i status HTTP, bez komunikatów (opakowania jak `ToolExecutionException` Spring AI kopiują do nich
+fragmenty ciała). Adapter nie musi tego obchodzić własnym
 `defaultStatusHandler`.
 
 **Audyt (C8).** Jedna linia JSON na zdarzenie na loggerze `pl.aiwcorpo.mcp.audit` (`component: server`,
@@ -147,6 +149,9 @@ Serwer nie wstaje, gdy:
 - `unauthenticated-paths` zawiera coś spoza `/actuator/health`, `/actuator/health/liveness`,
   `/actuator/health/readiness`; protokół MCP jest inny niż `STREAMABLE`;
 - zostały ustawienia 2.x (`guard.*`, `pat-header-prefix`);
+- w profilu `dev` `server.address` nie jest adresem pętli zwrotnej (`127.0.0.1`, `::1`, `localhost`); starter
+  ustawia w `dev` domyślnie `127.0.0.1`, więc odmowa dotyczy jawnego nadpisania (np. `SERVER_ADDRESS=0.0.0.0`).
+  Serwer w kontenerze, do którego łączy się gateway, nie może więc działać w profilu `dev`;
 - profil `dev` jest aktywny razem z innym profilem (także przez grupę profili). Relaksacje działają tylko, gdy
   `dev` jest **jedynym aktywnym** profilem; `spring.profiles.default=dev` się nie liczy;
 - poza takim profilem `dev`: włączono `dev-pat`, `allow-test-keys`, `replay-store: memory` albo
@@ -332,7 +337,7 @@ Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera t
 ```xml
 <dependency>
   <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-  <version>3.0.0-alpha-4</version><type>pom</type><scope>import</scope>
+  <version>3.0.0-alpha-5</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
 

@@ -75,6 +75,12 @@ public class PlatformConfigurationGuard implements InitializingBean {
                     + "must not ride along with another profile");
         }
 
+        if (dev && !loopback(environment.getProperty("server.address"))) {
+            problems.add("with the 'dev' profile server.address must be a loopback address (127.0.0.1, ::1, localhost), "
+                    + "not '" + environment.getProperty("server.address") + "': the dev relaxations (test keys, no "
+                    + "mTLS, in-memory jti) must not be reachable from the network");
+        }
+
         String system = properties.system();
         if (system != null && COMPONENT_ID.matcher(serverId).matches() && !SYSTEM_IDS.contains(system)) {
             String message = "aiwcorpo.mcp.platform.server-id '" + serverId + "': system '" + system + "' is not a "
@@ -167,6 +173,25 @@ public class PlatformConfigurationGuard implements InitializingBean {
             URI uri = new URI(value);
             return uri.isAbsolute() && uri.getHost() != null && schemes.contains(uri.getScheme());
         } catch (Exception ex) {
+            return false;
+        }
+    }
+
+    private static boolean loopback(String address) {
+        if (address == null || address.isBlank()) {
+            return false;
+        }
+        String host = address.trim();
+        if ("localhost".equalsIgnoreCase(host)) {
+            return true;
+        }
+        // Only literal addresses: resolving a name here would let DNS decide what "local" means.
+        if (!host.matches("[0-9.]+") && !host.contains(":")) {
+            return false;
+        }
+        try {
+            return java.net.InetAddress.getByName(host).isLoopbackAddress();
+        } catch (java.net.UnknownHostException ex) {
             return false;
         }
     }

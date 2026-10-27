@@ -191,16 +191,17 @@ public class McpErrorMapper {
     }
 
     /**
-     * {@code Outer: message <- Inner: message}, without the credential. When the chain holds an HTTP error
-     * response of RestClient, no message of the chain is logged at all, only classes and the status: wrappers
-     * (Spring AI's {@code ToolExecutionException}, the server's own) copy the response body into their
-     * messages, and the body is where backends echo request headers and return data the log must not keep.
+     * {@code Outer: message <- Inner: message}, without the credential. When the chain holds an exception of the
+     * HTTP client, of the message converters or of Jackson (an HTTP error, a 200 body that does not parse), no
+     * message of the chain is logged at all, only classes and the HTTP status: these messages quote the response
+     * body, wrappers (Spring AI's {@code ToolExecutionException}, the server's own) copy them, and the body is
+     * where backends echo request headers and return data the log must not keep.
      */
     static String describeChain(Throwable ex) {
         boolean httpResponseInChain = false;
         Throwable probe = ex;
         for (int depth = 0; probe != null && depth < MAX_CAUSE_DEPTH; depth++) {
-            httpResponseInChain |= probe instanceof RestClientResponseException;
+            httpResponseInChain |= quotesResponse(probe);
             probe = probe.getCause() == probe ? null : probe.getCause();
         }
         List<String> levels = new ArrayList<>();
@@ -219,6 +220,15 @@ public class McpErrorMapper {
             current = current.getCause() == current ? null : current.getCause();
         }
         return String.join(" <- ", levels);
+    }
+
+    /** Packages whose exception messages quote response bodies or parsed documents. */
+    private static final List<String> RESPONSE_QUOTING_PACKAGES = List.of("org.springframework.web.client.",
+            "org.springframework.http.converter.", "com.fasterxml.jackson.", "tools.jackson.");
+
+    private static boolean quotesResponse(Throwable ex) {
+        String name = ex.getClass().getName();
+        return RESPONSE_QUOTING_PACKAGES.stream().anyMatch(name::startsWith);
     }
 
     private static String innermostFrames(Throwable ex) {

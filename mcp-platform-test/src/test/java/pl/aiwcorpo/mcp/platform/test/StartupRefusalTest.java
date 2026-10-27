@@ -50,4 +50,15 @@ class StartupRefusalTest {
                 "aiwcorpo.mcp.platform.internal-jwt.jwks-uri", ""), "dev"))
                 .rootCause().hasMessageContaining("server-id").hasMessageContaining("jwks-uri");
     }
+
+    /** As SERVER_ADDRESS or --server.address would do on a real deployment (above the starter's default). */
+    @Test
+    void devOnANetworkAddress() {
+        Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
+        properties.put("spring.ai.mcp.server.name", "startup-refusal-test");
+        assertThatThrownBy(() -> new SpringApplicationBuilder(ProbeServer.class).web(WebApplicationType.SERVLET)
+                .properties(properties).properties("server.port=0").profiles("dev")
+                .run("--server.address=0.0.0.0").close())
+                .rootCause().hasMessageContaining("loopback");
+    }
 }

@@ -174,4 +174,21 @@ class McpErrorMapperTest {
         assertThat(described).doesNotContain("backend-body-marker-5be1d0").contains("HTTP 500 (body not logged)")
                 .contains("java.lang.RuntimeException (message not logged");
     }
+
+    @Test
+    void anUnparsable200BodyIsNotLoggedThroughConverterOrJacksonMessages() {
+        Throwable jackson = new tools.jackson.core.exc.StreamReadException(null,
+                "Unexpected end-of-input: {\"key\":\"backend-body-marker-5be1d0\"");
+        Throwable converter = new org.springframework.http.converter.HttpMessageNotReadableException(
+                "JSON parse error: " + jackson.getMessage(), jackson,
+                new org.springframework.mock.http.MockHttpInputMessage(new byte[0]));
+        Throwable client = new org.springframework.web.client.RestClientException(
+                "Error while extracting response: " + converter.getMessage(), converter);
+
+        String described = McpErrorMapper.describeChain(new RuntimeException("Error executing tool: "
+                + client.getMessage(), client));
+
+        assertThat(described).doesNotContain("backend-body-marker-5be1d0").contains("message not logged");
+        assertThat(mapper.map(client).code()).isEqualTo("internal_error");
+    }
 }

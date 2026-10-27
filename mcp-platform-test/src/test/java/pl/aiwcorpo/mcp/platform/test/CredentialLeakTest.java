@@ -63,6 +63,16 @@ class CredentialLeakTest {
             server.createContext("/", exchange -> {
                 String authorization = String.valueOf(exchange.getRequestHeaders().getFirst("Authorization"));
                 boolean serverError = exchange.getRequestURI().getPath().contains("SRV-");
+                if (exchange.getRequestURI().getPath().contains("BAD-")) {
+                    // 200 with a body that does not parse: the parser's message quotes it.
+                    byte[] broken = ("{\"fields\":{\"summary\":\"" + BODY_MARKER + "\"").getBytes(StandardCharsets.UTF_8);
+                    exchange.getResponseHeaders().set("Content-Type", "application/json");
+                    exchange.sendResponseHeaders(200, broken.length);
+                    try (OutputStream out = exchange.getResponseBody()) {
+                        out.write(broken);
+                    }
+                    return;
+                }
                 byte[] body = ("{\"errorMessages\":[\"Invalid credentials: " + authorization + "\"],\"internal\":\""
                         + BODY_MARKER + "\"}").getBytes(StandardCharsets.UTF_8);
                 exchange.getResponseHeaders().set("WWW-Authenticate", "Bearer error=\"invalid_token\", presented=\""
@@ -177,6 +187,26 @@ class CredentialLeakTest {
 
         assertThat(all).allSatisfy(text -> assertThat(text).doesNotContain(BODY_MARKER).doesNotContain(SECRET));
         assertThat(logText()).anySatisfy(line -> assertThat(line).contains("HTTP 500 (body not logged)"));
+    }
+
+    @Test
+    void anUnparsable200BodyReachesNeitherTheLogNorTheClient() {
+        HttpClientStreamableHttpTransport transport = HttpClientStreamableHttpTransport
+                .builder("http://127.0.0.1:" + port).endpoint(RawMcp.ENDPOINT).openConnectionOnStartup(false)
+                .httpRequestCustomizer(GATEWAY.asGateway(user -> { }, "Bearer " + SECRET))
+                .build();
+        List<String> all = new ArrayList<>();
+        try (McpSyncClient client = McpClient.sync(transport).requestTimeout(Duration.ofSeconds(20)).build()) {
+            client.initialize();
+            McpSchema.CallToolResult result = client.callTool(McpSchema.CallToolRequest.builder("get_issue_fields")
+                    .arguments(Map.of("issueKey", "BAD-1")).build());
+            assertThat(result.isError()).isTrue();
+            all.add(GatewayTransportTest.text(result));
+        }
+        all.addAll(logText());
+
+        assertThat(all).allSatisfy(text -> assertThat(text).doesNotContain(BODY_MARKER).doesNotContain(SECRET));
+        assertThat(all.getFirst()).contains("\"error\":\"internal_error\"");
     }
 
     private static List<String> concat(List<String> a, List<String> b) {

@@ -21,6 +21,19 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
 
+3.0.0-alpha-5: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-5`,
+tag `v3.0.0-alpha-5`. API bez zmian. Z recenzji template'u:
+- log `tool_failed`: komunikaty pomijane, gdy w łańcuchu jest wyjątek z `org.springframework.web.client`,
+  `org.springframework.http.converter`, `com.fasterxml.jackson` albo `tools.jackson` (wcześniej tylko
+  `RestClientResponseException`). Testy: `McpErrorMapperTest.anUnparsable200BodyIsNotLoggedThroughConverterOrJacksonMessages`,
+  `CredentialLeakTest.anUnparsable200BodyReachesNeitherTheLogNorTheClient` (200 z uciętym JSON-em ze znacznikiem;
+  znacznika nie ma w logach na DEBUG ani w wyniku);
+- profil `dev` tylko na pętli zwrotnej: starter ustawia w `dev` `server.address=127.0.0.1`, inny adres (np.
+  `SERVER_ADDRESS=0.0.0.0`) albo brak adresu zatrzymuje start. Testy: `PlatformConfigurationGuardTest`
+  (`devListensOnLoopbackOnly`, `theStarterDefaultsDevToLoopbackAndNothingElse`), `StartupRefusalTest.devOnANetworkAddress`;
+  testy z `TestGateway` (profil `dev`, klient na 127.0.0.1) działają bez zmian.
+`./mvnw clean install`: 208 testów (starter 159, mcp-platform-test 49), 0 błędów.
+
 3.0.0-alpha-4: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-4`,
 tag `v3.0.0-alpha-4`. API bez zmian (serwery przechodzą podbiciem BOM). Zgłoszenia ws-03:
 - ciało odpowiedzi błędu backendu w logu: gdy łańcuch wyjątków zawiera `RestClientResponseException`,

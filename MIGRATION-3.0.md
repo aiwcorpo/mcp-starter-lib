@@ -1,6 +1,6 @@
 # Migracja z 2.x na 3.0
 
-Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-4**.
+Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-5**.
 
 ## Zmiana modelu
 
@@ -78,6 +78,14 @@ Od 3.0.0-alpha-2 starter ustawia domyślnie `spring.ai.mcp.server.protocol=STREA
 - Log `event=tool_failed` nie zawiera komunikatów wyjątków, gdy w łańcuchu jest błąd HTTP z `RestClient`
   (tylko klasy i status). Obejście w adapterze (`defaultStatusHandler` przepisujący wyjątek) nie jest już
   potrzebne, ale nie przeszkadza.
+
+## Zmiany w 3.0.0-alpha-5
+
+- Profil `dev` słucha tylko na pętli zwrotnej: starter ustawia `server.address=127.0.0.1` (najniższy priorytet),
+  a inny adres w `dev` zatrzymuje start. Serwery w kontenerach (`mcp-platform-dev`, profil `full`) uruchamiaj bez
+  profilu `dev`, z mTLS i kluczem gateway'a.
+- Log `event=tool_failed` pomija komunikaty także przy wyjątkach konwerterów HTTP i Jacksona (ciało 200, którego
+  nie da się sparsować).
 
 ## Wdrożenie
 
