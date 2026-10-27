@@ -1,252 +1,195 @@
-# mcp-platform — wspólna biblioteka dla serwerów MCP
+# mcp-platform: biblioteka serwerów MCP za gateway'em
 
-Jeden, wersjonowany fundament, od którego zależą serwery MCP w organizacji. Skupia cross-cutting
-(bezpieczeństwo, TLS-konwencja, obserwowalność, mapowanie błędów) oraz transport MCP, dzięki czemu
-poprawka bezpieczeństwa = jedno wydanie platformy i bump wersji u serwerów — bez kopiuj-wklej.
+Wspólna biblioteka serwerów MCP platformy (`mcp-jira`, `mcp-confluence`, ...). Od 3.0 serwer stoi wyłącznie za
+gateway'em: nie loguje użytkowników, nie decyduje o uprawnieniach do narzędzi i nie pyta o potwierdzenia, to
+robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadczenie do systemu docelowego,
+audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
-**Stos: Java 25 (LTS), Spring Boot 4.1.0, Spring AI 2.0.0**.
+Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 2.0.2.
+Wersja: **3.0.0-alpha-1** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
-## Co zawiera
+## Moduły
 
-```
-mcp-platform/
-├── mcp-platform-bom/       # zarządzanie wersjami (import w serwerach): starter + Spring AI BOM
-└── mcp-platform-starter/   # Spring Boot auto-configuration (jar) — jedyna zależność serwera
-    └── pl.aiwcorpo.mcp.platform.{security,guard,observability,error,tls,autoconfigure}
-```
+| Artefakt | Co to | Zakres w serwerze |
+| --- | --- | --- |
+| `pl.aiwcorpo.mcp:mcp-platform-bom` | wersje: starter, test, `mcp-contracts`, Spring AI | `import` |
+| `pl.aiwcorpo.mcp:mcp-platform-starter` | auto-konfiguracja (niżej) i transport MCP (streamable HTTP) | `compile` |
+| `pl.aiwcorpo.mcp:mcp-platform-test` | `TestGateway`: JWKS i wewnętrzne JWT z kluczy testowych kontraktów | **tylko `test`** |
 
-Starter po dodaniu na classpath serwera automatycznie konfiguruje:
-- **Poświadczenia do backendów** — w trybie `pat` `PatForwardingFilter` wyciąga per-request PAT-y
-  z nagłówków `X-PAT-<system>` do `CredentialContext`; w trybie `oauth` trafia tam token dostępu
-  wywołującego. Adaptery forwardują go do backendów, więc każdy użytkownik działa tam jako on sam. `SecurityHeadersFilter` dodaje HSTS/nosniff/frame-deny.
-- **Observability** — `CorrelationIdFilter` + strukturalny `AuditLogger` wywołań narzędzi. Audyt jest
-  wpinany automatycznie: `ToolCallbackAuditPostProcessor` opakowuje każdy bean `ToolCallbackProvider`
-  w `AuditingToolCallback`, więc serwer nie musi o niczym pamiętać.
-- **Error** — bezpieczne mapowanie wyjątków na błędy MCP (bez wycieku szczegółów). Egzekwowane w tym
-  samym dekoratorze: **jedynym wyjątkiem opuszczającym narzędzie jest `SanitizedToolException`**.
-- **Tool guard** (od 2.0.0) — przed każdym narzędziem: kim jest wywołujący, czy ma uprawnienie do
-  narzędzia o tym poziomie ryzyka i czy człowiek potwierdził akcję destrukcyjną. Opis niżej.
-- **Transport MCP** — pociąga `spring-ai-starter-mcp-server-webmvc` tranzytywnie (streamable-HTTP).
+Wersja linii `mcp-platform` (3.x) nie ma związku z wersją kontraktów (2.x).
 
-### Tool guard
-
-Deterministyczny punkt egzekwowania polityki: tylko kod i plik polityki, bez pytania modelu.
+## Co robi starter na każdym żądaniu
 
 ```
-tools/call ─► IdentityFilter ─► AuditingToolCallback ─► ToolGuard ─► @Tool serwera
-              Who am I?                                 1. narzędzie włączone?
-              (Authorization: Bearer)                   2. uprawnienie wywołującego ≥ ryzyko narzędzia?
-                                                        3. potwierdzenie człowieka (kod jednorazowy)?
+gateway --mTLS + JWT C2 + X-MCP-Credential--> SecurityHeadersFilter
+  -> CorrelationIdFilter     X-Request-Id -> MDC requestId
+  -> InternalJwtFilter       certyfikat gateway'a, JWT C2 związany z żądaniem -> CallerContext; inaczej 401
+  -> CredentialHeaderFilter  X-MCP-Credential(-Type) -> CredentialContext; nagłówki ukryte przed resztą
+  -> transport MCP -> AuditingToolCallback -> [ToolCallInterceptor...] -> @Tool serwera
 ```
 
-**Flaga ryzyka** — obowiązkowa na każdym `@Tool`; serwer z narzędziem bez flagi nie wstaje:
+**`InternalJwtFilter` (C2).** Przepuszcza tylko żądanie z certyfikatem klienta o CN `mcp-gateway` i poprawnym
+wewnętrznym JWT: ES256, `kid` z JWKS gateway'a, `iss`, `aud` == `server-id`, `exp`/`iat` z tolerancją do 30 s,
+`exp - iat` do 60 s, claimy zgodne z `schemas/internal-jwt.schema.json` (walidowane schematem z jara kontraktów,
+także wzorce `vsc` i `vs` razem z `vsc`), `jti` użyty pierwszy raz (Redis), `rid` == `X-Request-Id`, `tool`
+obecny dokładnie przy `tools/call` i równy `params.name`, wariant serwisowy tylko dla `initialize`,
+`tools/list`, `ping` i `GET /mcp-manifest`. Klucze z identyfikatorem `test-*` i opublikowane klucze testowe
+(rozpoznawane po SPKI z `mcp-contracts/security/published-test-keys.json`) są odrzucane, chyba że
+`allow-test-keys=true` w profilu `dev`. Kolejność kontroli i powody odrzucenia są jak w referencyjnym
+odbiorcy kontraktów, więc wszystkie 43 wektory `test-vectors/jwt` dają ten sam wynik i powód.
+
+Odrzucenie: `401 {"error":"unauthenticated",...}` z `WWW-Authenticate: Bearer`, powód tylko w logu
+(`event=internal_jwt_rejected reason=<kod>`). Niedostępny JWKS albo Redis: `503 upstream_unavailable`, nigdy
+przepuszczenie. Treść żądania jest czytana raz (limit `max-request-body`, inaczej 413) i musi być jednym
+obiektem JSON bez powtórzonych kluczy (inaczej 400), bo z niej pochodzi metoda i nazwa narzędzia: tablica
+JSON-RPC albo `{"name":"a","name":"b"}` mogłyby zostać inaczej odczytane przez transport MCP.
+
+Bez JWT przechodzą tylko dokładne ścieżki z `internal-jwt.unauthenticated-paths` (domyślnie
+`/actuator/health`, `/actuator/health/liveness`, `/actuator/health/readiness`), porównywane ze ścieżką
+znormalizowaną przez kontener i tylko wtedy, gdy surowe URI jest dokładnie tą ścieżką: URI z `;`, `..`, `%`,
+`\` albo `//` zawsze przechodzi pełną weryfikację. Wzorców (`/**`) nie da się skonfigurować.
+
+**`CallerContext`.** Zweryfikowane claimy bieżącego żądania: `subject`, `username`, `groups`, `client`,
+`virtualServer`, `virtualServerScopes` (`vsc`), `tool`, `requestId`, `policyRevision`, `mfaAgeSeconds`.
+`CallerContext.current()` na wątku żądania. Pola odpowiadają wejściu entity buildera Cedar z
+`mcp-cedar-entities`, z którego skorzysta silnik polityk (beta).
+
+**`CredentialContext` (C3).** Poświadczenie do systemu docelowego, wstrzyknięte przez gateway:
 
 ```java
-@Tool(name = "order_cancel", description = "Cancel an order.")
-@ToolRisk(RiskLevel.UPDATE)          // READ_ONLY | UPDATE | DESTRUCTIVE
-public Order cancel(String id) { ... }
+BackendCredential credential = CredentialContext.require("jira");      // brak -> credential_required (C10)
+restClient.get().uri("/rest/api/2/issue/{key}", key)
+        .headers(credential::applyTo)                                    // Authorization: <scheme> <value>
+        .retrieve().body(Issue.class);
 ```
 
-Flaga jest też publikowana klientowi MCP jako `readOnlyHint` / `destructiveHint`. To podpowiedź dla
-klienta; egzekwowanie nie zależy od tego, czy klient ją uszanuje.
+`BackendCredential` ma `scheme()` (`Bearer`, `Basic`, `Token`, `ApiKey`), `value()`, `type()` (`user-oauth`,
+`user-secret`, `token-exchange`, `service-account`), `authorizationValue()` i `applyTo(HttpHeaders)`;
+`toString()` nie pokazuje wartości. Serwer obsługuje jeden system (`server-id` = `mcp-<system>`), prośba o inny
+to błąd programisty (`IllegalStateException`). Po odczycie `Authorization`, `X-MCP-Credential` i `X-PAT-*` są
+niewidoczne dla dalszej części żądania. Zły format, sam typ bez poświadczenia albo dwa poświadczenia: 400.
 
-**Tryb uwierzytelniania** — jeden wybór dla całego serwera, `aiwcorpo.mcp.platform.auth-mode`:
+**`AuditingToolCallback`.** Opakowuje każde narzędzie (bean `ToolCallbackProvider` albo `ToolCallback`):
+uruchamia je tylko dla zweryfikowanego wywołującego, którego JWT ma `tool` równe nazwie narzędzia (inaczej
+`unauthenticated`, narzędzie się nie wykonuje), wywołuje beany `ToolCallInterceptor` (miejsce na politykę zasobów
+i filtr wyników w beta), mapuje wyjątki na błędy C10 i zapisuje jedno zdarzenie C8 `tool_call`.
 
-| | `oauth` (domyślny) | `pat` |
-|---|---|---|
-| Co wysyła klient | `Authorization: Bearer <token JWT>` | `X-PAT-<system>: <token backendu>` |
-| Kim jest wywołujący | użytkownik z tokenu (`sub`), zweryfikowany | `pat:<skrót tokenu>`, niezweryfikowany |
-| Skąd uprawnienia | role z tokenu → `roles` w polityce | jeden poziom dla wszystkich: `pat` w polityce |
-| Co idzie do backendu | ten sam token dostępu | PAT użytkownika |
-| Dostawca tożsamości | wymagany (`guard.oidc`) | brak |
-| Drugi rodzaj poświadczenia | `X-PAT-*` jest ignorowany | token Bearer daje 401 |
+**Błędy narzędzi (C10).** Jedyny wyjątek, który opuszcza narzędzie, to `SanitizedToolException`; jego komunikat
+to obiekt `{"error":"<kod>","message":"...",...}` zgodny z `schemas/tool-error.schema.json`. Mapowanie:
+`CredentialRequiredException` -> `credential_required` (`system`, `connectUrl`), `IllegalArgumentException` ->
+`invalid_argument` z własnym komunikatem (nigdy z treścią odpowiedzi backendu), `SecurityException` ->
+`access_denied`, backend nieosiągalny albo 502/503/504 -> `upstream_unavailable`, reszta -> `internal_error`.
+Własne mapowania: beany `ToolErrorMapping`, tylko z kodami C10. Z każdego komunikatu (do klienta i do logu)
+usuwane jest poświadczenie bieżącego żądania; ciała odpowiedzi błędów backendu nie są logowane.
 
-Adapter wyjściowy nie musi znać trybu: `CredentialContext.requireBackendToken("jira")` zwraca
-właściwy token albo rzuca `MissingPatException` z informacją, co klient ma wysłać.
+**Audyt (C8).** Jedna linia JSON na zdarzenie na loggerze `pl.aiwcorpo.mcp.audit` (`component: server`,
+`componentId` = `server-id`, `requestId` = `rid`, `risk`, `credentialType`, `outcome`, `errorCode`,
+`latencyMs`, `argsLength`). Nigdy wartości argumentów, wyników ani poświadczeń; wszystko poza drukowalnym ASCII
+jest zapisywane jako escape JSON.
 
-Dwie rzeczy, które trzeba wiedzieć przed wyborem:
-- **`pat`:** serwer nie potrafi sprawdzić PAT-a, robi to dopiero backend. Dowolna wartość w `X-PAT-*`
-  daje na serwerze poziom `pat`, więc guard ogranicza tu, co posiadacz tokenu może *spróbować*,
-  a o tym, co może *zrobić*, decyduje backend. Trzymaj `pat` nisko (domyślnie read-only).
-- **`oauth`:** do backendu trafia token wydany dla tego serwera (`aud`). Działa, gdy backend ufa
-  temu samemu dostawcy i akceptuje tę publiczność. Przekazywanie tokenu dalej jest uproszczeniem,
-  którego specyfikacja autoryzacji MCP odradza; docelowo: token exchange (osobny token per backend).
+**Flaga ryzyka.** Każde narzędzie ma `@ToolRisk(RiskLevel.READ_ONLY | UPDATE | DESTRUCTIVE)`; bez niej, z nazwą
+sprzeczną z flagą (`delete_*` jako `READ_ONLY`) albo z powtórzoną nazwą serwer nie wstaje. Flaga trafia do
+`readOnlyHint`/`destructiveHint` i do audytu (`risk`). Narzędzia `@McpTool` omijają opakowanie, więc serwer z
+nimi nie wstaje.
 
-**Tożsamość w trybie `oauth` (OAuth 2 / OIDC)** — serwer jest *resource serverem*: przyjmuje token dostępu JWT
-(`Authorization: Bearer`) wydany przez dostawcę OIDC i go waliduje: podpis względem kluczy dostawcy
-(JWKS, znajdowane przez discovery), `iss`, `exp` i `aud`. Serwer nie prowadzi logowania i nie widzi
-haseł; token zdobywa klient MCP u dostawcy.
+**Transport SYNC.** `CallerContext` i `CredentialContext` to `ThreadLocal`; `spring.ai.mcp.server.type=ASYNC`
+zatrzymuje start (`CredentialTransportGuard`).
+
+## Konfiguracja
 
 ```yaml
-aiwcorpo.mcp.platform.guard.oidc:
-  issuer-uri: https://login.example.com/realms/corp   # jedyne wymagane pole
-  audiences: [mcp-server]          # identyfikator tego serwera u dostawcy; ustaw zawsze
-  subject-claim: sub               # co trafia do audytu jako wywołujący (np. preferred_username)
-  role-claims: [roles, groups, realm_access.roles, permissions, scope, scp]
-  jwk-set-uri:                     # tylko gdy klucze nie mają być brane z discovery
-  resource-uri:                    # publiczny URL endpointu MCP; domyślnie wyliczany z żądania
+aiwcorpo.mcp.platform:
+  server-id: mcp-jira                                     # wymagane
+  auth-mode: gateway                                      # gateway | dev-pat (tylko profil dev)
+  internal-jwt:
+    issuer: https://mcp-gateway.internal                  # domyślnie
+    jwks-uri: https://mcp-gateway.internal:8443/.well-known/jwks.json   # wymagane
+    jwks-ssl-bundle: mcp-internal-ca                      # bundle SSL Springa z CA wewnętrznym
+    jwks-cache-ttl: 10m
+    jwks-max-stale: 1h                                    # dłużej bez JWKS -> 503
+    jwks-refresh-min-interval: 30s                        # nieznany kid pobiera JWKS najwyżej raz na 30 s
+    clock-skew: 30s                                       # najwyżej 30 s
+    max-lifetime: 60s                                     # najwyżej 60 s
+    replay-store: redis                                   # redis | memory (tylko profil dev)
+    allow-test-keys: false                                # true tylko w profilu dev
+    max-request-body: 4MB
+    unauthenticated-paths: [/actuator/health, /actuator/health/liveness, /actuator/health/readiness]
+  mtls:
+    required: true                                        # false tylko w profilu dev
+    allowed-client-names: [mcp-gateway]
+  credential:
+    connect-url: http://localhost:18090/connections?system={system}   # wymagane, do credential_required
+  tools.unclassified: fail                                # fail | destructive
+spring.data.redis:                                        # magazyn jti
+  host: redis
+  username: mcp-jira                                      # klucze jti:mcp-jira:*, tylko SET (NX PX)
+  password: ${REDIS_MCP_JIRA_PASSWORD}
+server.ssl:                                               # mTLS kończy serwer
+  bundle: mcp-jira
+  client-auth: need
 ```
 
-Domyślne `role-claims` pokrywają Keycloak (`realm_access.roles`), Entra ID (`roles`, `groups`, `scp`),
-Okta i Auth0 (`groups`, `permissions`, `scope`). Role klienta w Keycloak dodasz jako
-`resource_access.<client>.roles`. Znalezione role są mapowane na uprawnienia w pliku polityki —
-dostawca mówi, kim jesteś i w jakich grupach; plik polityki mówi, co to znaczy na tym serwerze.
+Serwer nie wstaje, gdy brakuje `server-id`, `jwks-uri` albo `connect-url`, gdy `clock-skew`/`max-lifetime`
+przekraczają limity C2, gdy poza profilem `dev` włączono `dev-pat`, `allow-test-keys`, `replay-store: memory`
+albo `mtls.required: false`, i gdy zostały ustawienia 2.x (`guard.*`, `pat-header-prefix`). Starter wyłącza
+domyślnie `management.health.redis.enabled`, bo sprawdzenie zdrowia Redisa używa `INFO`, którego użytkownik
+`mcp-<system>` w `mcp-platform-dev` nie może wykonać.
 
-- Brak nagłówka: wywołujący anonimowy na poziomie `anonymous` z polityki (domyślnie read-only).
-- Token nieprawidłowy (zły podpis, inny wydawca, inna publiczność, po terminie): HTTP 401, nigdy
-  ciche obniżenie do anonimowego. Powód trafia do logu, nie do odpowiedzi.
-- Ważny token bez żadnej zmapowanej roli: poziom `authenticated` (domyślnie read-only).
-- `GET /.well-known/oauth-protected-resource` zwraca metadane RFC 9728 wskazujące dostawcę, a 401
-  niesie `WWW-Authenticate: Bearer resource_metadata=...` — klient MCP może sam zacząć logowanie.
-- Bez `guard.oidc` serwer nie ma dostawcy tożsamości: wszyscy są anonimowi, a tokeny Bearer są
-  odrzucane (nie da się ich sprawdzić).
+**Tryb `dev-pat`** (tylko z aktywnym profilem `dev`): poza `X-MCP-Credential` serwer przyjmuje token
+programisty w `X-PAT-<system>` (np. `X-PAT-Jira`) jako `Bearer` typu `user-secret`. Wewnętrzny JWT nadal jest
+wymagany.
 
-Tokeny nieprzezroczyste (introspekcja), mTLS itp.: zarejestruj własny bean `IdentityResolver`.
+## Testy serwera bez gateway'a
 
-**Potwierdzanie akcji destrukcyjnych** — kod `XXX-XXX` jest związany z wywołującym, narzędziem
-i dokładnymi argumentami, działa raz, wygasa i ma limit prób. Błędne kody liczą się per wywołujący,
-także między kolejnymi kodami: po `max-attempts` pomyłkach nowe kody nie są wysyłane do końca okna
-(jeden TTL), a liczba kodów na okno jest ograniczona. Zatwierdzający widzi nazwę narzędzia i argumenty
-w ustalonej kolejności kluczy; gdy się nie mieszczą, komunikat mówi wprost, że są obcięte. Dwa tryby:
-
-| Klient | Przebieg |
-|--------|----------|
-| wspiera MCP elicitation | wywołanie czeka, klient pokazuje użytkownikowi pole na kod, po poprawnym kodzie narzędzie się wykonuje |
-| nie wspiera | pierwsze wywołanie wraca jako `confirmation_required`; agent pyta użytkownika o kod i ponawia wywołanie z tymi samymi argumentami plus `confirmation_code` |
-
-Kod dostarcza `ConfirmationCodeSender` kanałem, którego model nie czyta. **Domyślna implementacja
-wypisuje kod do logu serwera (`pl.aiwcorpo.mcp.confirmation`) i służy wyłącznie do demo** — kto czyta
-ten log, może zatwierdzać akcje destrukcyjne. Przed produkcją zarejestruj własny bean (push, SMS,
-komunikator).
-
-**Plik polityki** (`aiwcorpo.mcp.platform.guard.policy-file`, np. `file:/etc/mcp/guard-policy.yml`):
-
-```yaml
-anonymous: read-only              # bez poświadczeń: read-only | update | destructive | deny
-authenticated: read-only          # tryb oauth: ważny token bez zmapowanej roli
-pat: read-only                    # tryb pat: każdy, kto przysłał X-PAT-*
-roles:                            # rola / grupa / scope z tokenu -> co daje na tym serwerze
-  mcp-operator: { max-risk: update }
-  mcp-admin:
-    max-risk: destructive
-    deny-tools: [repo_purge]
-tools:
-  repo_archive: { enabled: false }      # wyłącznik awaryjny
-  repo_rename:  { risk: destructive }   # polityka może ryzyko tylko podnieść
-  repo_comment: { confirmation: true }  # wymuś potwierdzenie
-confirmation:
-  required-from: destructive      # od jakiego poziomu wymagany kod | never
-  ttl-seconds: 120
-  max-attempts: 3
+```xml
+<dependency>
+  <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-test</artifactId><scope>test</scope>
+</dependency>
 ```
 
-Plik jest czytany ponownie, gdy się zmieni — zmiana działa od następnego wywołania, bez restartu.
-Błędny lub pusty plik przy starcie zatrzymuje serwer; błędna edycja w trakcie pracy zostawia w mocy
-ostatnią poprawną politykę i loguje błąd. Nieznany klucz to błąd, a nie cicho zignorowana literówka;
-reguła dla narzędzia, którego serwer nie ma, daje ostrzeżenie `guard_policy_unknown_tools`.
-Podmieniaj plik atomowo (`mv` nowego pliku w miejsce starego): pliku uciętego w miejscu, w którym
-nadal jest poprawnym YAML-em, nie da się odróżnić od zamierzonej zmiany.
+```java
+@SpringBootTest(webEnvironment = RANDOM_PORT)
+@ActiveProfiles("dev")
+class JiraToolsTest {
+    static final TestGateway GATEWAY = TestGateway.start("mcp-jira");
 
-Kody odmowy widziane przez klienta: `unauthenticated`, `access_denied`, `tool_disabled`,
-`confirmation_required`, `confirmation_failed`, `confirmation_declined`.
+    @DynamicPropertySource
+    static void gateway(DynamicPropertyRegistry registry) {
+        GATEWAY.serverProperties().forEach((name, value) -> registry.add(name, () -> value));
+    }
 
-W pliku polityki nie ma użytkowników ani tokenów. Wywołujący dostaje najwyższy `max-risk` spośród
-swoich ról; listy `deny-tools` się sumują; `allow-tools` zawęża tylko wtedy, gdy każda z jego ról ma
-taką listę.
+    McpSyncClient client(int port) {
+        var transport = HttpClientStreamableHttpTransport.builder("http://127.0.0.1:" + port).endpoint("/mcp")
+                .openConnectionOnStartup(false)
+                .httpRequestCustomizer(GATEWAY.asGateway(user -> user.username("jkowalski"), "Bearer test-pat"))
+                .build();
+        return McpClient.sync(transport).build();
+    }
+}
+```
 
-**Ograniczenia, o których trzeba wiedzieć:**
-- Tylko tokeny JWT. Unieważnienie tokenu przed `exp` nie jest sprawdzane — trzymaj krótki czas życia
-  tokenów u dostawcy.
-- Tryby `oauth` i `pat` się wykluczają; serwer nie przyjmuje obu rodzajów poświadczeń naraz.
-- `tools/list` zwraca wszystkie narzędzia każdemu; uprawnienia są egzekwowane przy wywołaniu.
-  Listę „co mi wolno" daje narzędzie `platform_whoami`.
-- Narzędzia `@McpTool` omijają guard, więc serwer z takim narzędziem nie wstaje. Używaj `@Tool`.
-- Pole `confirmation_code` trafia do schematu narzędzi, które przy starcie nie są read-only.
-  Narzędzie read-only, któremu polityka w trakcie pracy podniesie ryzyko albo wymusi potwierdzenie,
-  da się potwierdzić tylko przez elicitation, dopóki serwer nie zostanie zrestartowany.
-- Stan potwierdzeń jest w pamięci jednej instancji. Kilka instancji za load balancerem wymaga
-  wspólnego magazynu albo sticky sessions.
-- Tożsamość, jak PAT-y, żyje w `ThreadLocal` — stąd wymóg transportu SYNC (`CredentialTransportGuard`).
-
-### Dlaczego dekorator, a nie `ToolExecutionExceptionProcessor`
-
-`ToolExecutionExceptionProcessor` to hak strony **klienckiej** (`ToolCallingManager`); w serwerze MCP
-nikt go nie wywołuje. Faktyczna ścieżka to `McpToolUtils`, który łapie `Exception` wokół
-`ToolCallback.call(...)` i wkłada **`e.getMessage()` wprost** do `CallToolResult` (`isError=true`).
-Bez dekoratora `HttpClientErrorException` z `RestClienta` oddaje modelowi URL backendu i fragment ciała
-odpowiedzi. Dlatego platforma opakowuje `ToolCallback`, a nie polega na hakach frameworka.
-
-Mapowanie: `MissingPatException` → `missing_credential` (komunikat przepuszczany — klient musi wiedzieć,
-że brakuje nagłówka), `IllegalArgumentException` → `invalid_argument` (komunikat przepuszczany — model
-ma poprawić własne wywołanie), `SecurityException` → `forbidden`, reszta → `internal_error`.
-**Niezmiennik:** `IllegalArgumentException` nigdy nie może nieść treści z odpowiedzi backendu.
-
-**Od 1.0.2 mapper idzie po łańcuchu przyczyn**, bo inaczej powyższe trzy reguły są martwe: Spring AI
-opakowuje wszystko, co wychodzi z metody `@Tool`, w `ToolExecutionException`, więc mapper nigdy nie
-widział wyjątku, który narzędzie faktycznie rzuciło. Zapomniany nagłówek `X-PAT-*` wracał do klienta
-jako `internal_error`. Na każdym poziomie łańcucha najpierw pytane są `ToolErrorMapping` serwera,
-potem reguły platformy; `SanitizedToolException` napotkany w łańcuchu przechodzi bez zmian.
-
-### Dlaczego serwer z `type: ASYNC` nie wstaje
-
-`CredentialContext` to `ThreadLocal` wypełniany na wątku servletowym. Handler asynchroniczny biegnie
-na innym wątku, więc **każde** narzędzie zachowywałoby się tak, jakby wywołujący nie podał PAT-a —
-bez błędu i bez ostrzeżenia. `CredentialTransportGuard` przerywa więc start przy
-`spring.ai.mcp.server.type=ASYNC` (wyłącznik: `aiwcorpo.mcp.platform.require-sync-transport=false`).
-
-Tego samego dotyczy `immediateExecution(true)`, które Spring AI ustawia na stosie servletowym: nie da
-się go sprawdzić właściwością, więc pilnuje go `CredentialPassthroughTest` — prawdziwe wywołanie
-narzędzia po prawdziwym transporcie, sprawdzające, że PAT dociera do handlera. Jeden test dla całej
-floty, psujący się przy budowie platformy, a nie przy dziewięciu wdrożeniach.
-
-### Czego audyt NIE zapisuje
-
-Nie zapisuje wartości argumentów (to tekst od modelu: treści issue, opisy snapshotów), PAT-ów ani
-kodów potwierdzeń — tylko nazwę narzędzia, wywołującego, poziom ryzyka, correlation id, wynik
-z kodem powodu, latencję, długość argumentów i zbiór systemów, dla których przekazano PAT.
-
-`outcome` przyjmuje wartości `ok`, `error`, `denied` (guard odmówił) i `confirmation_pending`
-(czeka na kod); wykonana akcja zatwierdzona przez człowieka ma `reason="user_confirmed"`.
-`subject` to wywołujący rozpoznany przez guard (`anonymous`, gdy nie podał tokenu). Przy wyłączonym
-guardzie zostaje `-`, a tożsamość jest tylko w logu audytowym backendu — łącz oba logi po
-correlation id.
-
-Serwer dostarcza własną domenę, use-case'y, integracje, beany `@Tool` i `ToolCallbackProvider`.
+`asGateway` dokłada do każdego żądania nowy JWT (z `tool` przy `tools/call`), `X-Request-Id` i nagłówki C3.
+`GATEWAY.user()` / `GATEWAY.service()` budują pojedyncze tokeny (podmiot, grupy, `vs`/`vsc`, `mfa`, czas życia,
+`aud`, ...) do testów odrzuceń.
 
 ## Budowa
 
 ```bash
-./mvnw install                    # zbuduj + zainstaluj lokalnie (mcp-platform-bom + starter)
+export JAVA_HOME=/opt/homebrew/Cellar/openjdk@25/25.0.4.1/libexec/openjdk.jdk/Contents/Home
+./mvnw install          # wymaga Dockera (Testcontainers: Redis z ACL jak w mcp-platform-dev)
 ```
 
-Serwery biorą bibliotekę z lokalnego repozytorium Mavena. Żeby publikować ją do wspólnego
-repozytorium, dodaj `<distributionManagement>` do `pom.xml` agregatora i startera.
-
-## Jak używa tego serwer
-
-Serwer importuje BOM i dodaje jedną zależność (bez wersji — pilnuje jej BOM):
+Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera to
+`spring-boot-starter-parent` 4.1.0:
 
 ```xml
-<dependencyManagement>
-  <dependencies>
-    <dependency>
-      <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-      <version>2.0.0</version><type>pom</type><scope>import</scope>
-    </dependency>
-  </dependencies>
-</dependencyManagement>
-...
 <dependency>
-  <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-starter</artifactId>
+  <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
+  <version>3.0.0-alpha-1</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
 
-Wersja Spring Boot w `<parent>` serwera musi być taka sama jak w `<parent>` startera (4.1.0).
+## Wersjonowanie
 
-## Wersjonowanie (SemVer)
-- **patch/minor** — poprawka bezpieczeństwa/TLS, nowe opcje kompatybilne wstecz. Serwery: bump BOM.
-- **major** — zmiana łamiąca (np. inny model auth). Wymaga migracji serwerów; opisz ją w tym README.
-
-## Rozszerzanie
-Nowy wspólny mechanizm (np. rate-limiting) dodajesz **tu** jako kolejną auto-konfigurację i wpis w
-`AutoConfiguration.imports`. Po wydaniu wszystkie serwery dostają go przez bump wersji.
+SemVer, jedna wersja dla wszystkich modułów. Wydania wstępne: `3.0.0-alpha-N`, `3.0.0-beta-N` (porządek Mavena:
+`alpha-1 < alpha-2 < beta-1 < 3.0.0`). Zmiana łamiąca: nowa wersja major i opis w `MIGRATION-<wersja>.md`.
