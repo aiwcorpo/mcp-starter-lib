@@ -21,7 +21,9 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
 
-3.0.0-alpha-7 (w toku, wersja `3.0.0-alpha-7-SNAPSHOT`; wydanie dopiero po komplecie kamieni): kamienie
+3.0.0-alpha-7: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-7`, tag `v3.0.0-alpha-7`
+(pracowano na `3.0.0-alpha-7-SNAPSHOT`, alpha-6 i wcześniejsze nietknięte). Instrukcja dla serwerów: `MIGRATION-3.0.md`,
+sekcja "Zmiany w 3.0.0-alpha-7". Kamienie
 1. Kontrakty 2.1.1 przez BOM i własność `mcp-contracts.version` modułów. Zmiana w kodzie: `server/discover` jest
    żądaniem protokołu (wariant serwisowy dozwolony, CC-069); `subscriptions/listen`, `notifications/*`, GET/DELETE
    już wymagały wariantu użytkownika (CC-070). Wektory JWT 51 (było 43). Schemat Cedar bajtowo bez zmian w 2.x.
