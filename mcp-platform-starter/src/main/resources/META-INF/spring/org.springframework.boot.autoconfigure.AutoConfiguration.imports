@@ -2,3 +2,4 @@ pl.aiwcorpo.mcp.platform.security.PlatformSecurityAutoConfiguration
 pl.aiwcorpo.mcp.platform.auth.PlatformAuthAutoConfiguration
 pl.aiwcorpo.mcp.platform.observability.PlatformObservabilityAutoConfiguration
 pl.aiwcorpo.mcp.platform.error.PlatformErrorAutoConfiguration
+pl.aiwcorpo.mcp.platform.server.PlatformMcpServerAutoConfiguration
