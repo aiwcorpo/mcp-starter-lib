@@ -236,6 +236,13 @@ wartość. Adnotacji Jacksona na komponentach wyniku nie używać: schemat bierz
 rozjeżdża schemat i serializację, a wywołanie kończy się `internal_error`. Test serwera: wywołanie narzędzia na
 zgłoszeniu z pustymi polami opcjonalnymi (wynik ok, `structuredContent` z `null`).
 
+### Uruchomienie lokalne w `dev` (smoke alpha-7)
+
+W profilu `dev` (jedyny aktywny) starter wymusza powyżej `application*.yml` serwera `server.ssl.enabled=false`,
+`mtls.required=false`, `internal-jwt.replay-store=memory` i puste `internal-jwt.jwks-ssl-bundle`. Z `application-dev.yml`
+serwera można usunąć te cztery ustawienia (i obejścia z CLI); `allow-test-keys: true` zostaje tam, gdzie lokalny gateway
+podpisuje kluczami testowymi. Opis i komenda startu: README, "Uruchomienie lokalne".
+
 ### Pozostałe zmiany zachowania
 
 - Klucze obiektów w argumentach (mapa z `propertyNames`, obiekt zagnieżdżony, nazwa argumentu) przechodzą `TextHygiene`

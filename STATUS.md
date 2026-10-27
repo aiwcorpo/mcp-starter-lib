@@ -40,6 +40,21 @@ poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i
    i bez wartości. Test end-to-end przez klienta SDK (`OutputSchemaTest`: `@Nullable` puste = ok, bez `@Nullable` = C10 +
    `outcome=error`; mutacja: bez walidacji test czerwony) i `ToolResultValidatorTest`. README i MIGRATION opisują zasadę
    (serwer jira i confluence: `@Nullable` na polach z systemu). Razem 303 testy (starter 241, mcp-platform-test 62).
+3. Smoke Haiku alpha-7 (FAIL: README nie pozwalał uruchomić serwera lokalnie). Przyczyna: `NoSuchSslBundleException 'mcp-jira'`
+   (`server.ssl.bundle` z konfiguracji z README) i `'mcp-internal-ca'` (`jwks-ssl-bundle`), do tego `replay-store: redis` i
+   `mtls.required: true`; `application-dev.yml` serwera trzeba było uzupełniać obejściami z CLI. Teraz
+   `PlatformDefaultsEnvironmentPostProcessor` przy `dev` jako jedynym profilu wymusza powyżej `application*.yml` serwera
+   (CLI, właściwości systemowe i środowisko wygrywają): `server.ssl.enabled=false`, `mtls.required=false`,
+   `replay-store=memory`, puste `jwks-ssl-bundle` (loopback pilnuje `PlatformConfigurationGuard`). `allow-test-keys` nie jest
+   wymuszane. README: sekcja "Uruchomienie lokalne" (tabela tego, co `dev` ustawia, komenda startu, health 200,
+   `POST /mcp` bez JWT -> 401, kolejność błędów poza `dev`). Sprawdzone według sekcji na serwerze z konfiguracją skopiowaną z
+   README, bez `application-dev.yml`: `spring-boot:run -Dspring-boot.run.profiles=dev`, port 18600, health 200, 401 z
+   `WWW-Authenticate: Bearer`. Kolejność błędów poza `dev` (brak limitu argumentu niezależnie od błędu SSL): nie zmieniona.
+   Serwer HTTP startuje w `onRefresh`, przed utworzeniem beanów narzędzi, więc błąd SSL zawsze poprzedza kontrolę
+   limitów; sprawdzenie schematów przed startem serwera HTTP wymagałoby tworzenia beanów narzędzi przed kontekstem
+   web (zmiana modelu startu Springa), a koszt to jedna dodatkowa iteracja przy poprawianiu konfiguracji. README opisuje
+   kolejność faz. Testy: `PlatformConfigurationGuardTest` (trzy nowe: nadpisania w `dev`, CLI wygrywa, brak nadpisań poza
+   `dev`). Razem 306 testów (starter 244, mcp-platform-test 62).
 
 3.0.0-alpha-7: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-7`, tag `v3.0.0-alpha-7`
 (pracowano na `3.0.0-alpha-7-SNAPSHOT`, alpha-6 i wcześniejsze nietknięte). Instrukcja dla serwerów: `MIGRATION-3.0.md`,

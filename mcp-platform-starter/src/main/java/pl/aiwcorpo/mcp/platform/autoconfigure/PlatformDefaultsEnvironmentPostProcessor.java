@@ -2,7 +2,10 @@ package pl.aiwcorpo.mcp.platform.autoconfigure;
 
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.EnvironmentPostProcessor;
 import org.springframework.boot.SpringApplication;
 import org.springframework.core.Ordered;
@@ -29,11 +32,23 @@ import org.springframework.core.env.MapPropertySource;
  *       keys, no mTLS) must not be reachable from the network; {@code PlatformConfigurationGuard} refuses any
  *       non-loopback address in dev.</li>
  * </ul>
+ *
+ * <p>With {@code dev} as the only active profile the platform also forces, above the server's own
+ * {@code application*.yml} (command line, system properties and environment variables still win), what a local run
+ * on a developer's machine cannot have: {@code server.ssl.enabled=false} (no certificates), {@code mtls.required=false},
+ * {@code internal-jwt.replay-store=memory} (no Redis) and an empty {@code internal-jwt.jwks-ssl-bundle} (no internal
+ * CA). So the configuration of a real server starts in {@code dev} as it is, without per-run overrides. This is safe
+ * for the same reason the rest of {@code dev} is: the guard refuses a non-loopback {@code server.address} in {@code dev}.
+ * {@code allow-test-keys} is not forced; set it where the gateway signs with the published test keys.
+ *
  * Runs after the config data (application*.yml, profiles) is loaded, so the active profiles are known.
  */
 public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPostProcessor, Ordered {
 
     static final String SOURCE_NAME = "mcpPlatformDefaults";
+    static final String DEV_SOURCE_NAME = "mcpPlatformDevOverrides";
+
+    private static final Logger LOG = LoggerFactory.getLogger(PlatformDefaultsEnvironmentPostProcessor.class);
 
     @Override
     public int getOrder() {
@@ -53,6 +68,26 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
                 defaults.put("server.address", "127.0.0.1");
             }
             environment.getPropertySources().addLast(new MapPropertySource(SOURCE_NAME, defaults));
+        }
+        List<String> active = Arrays.asList(environment.getActiveProfiles());
+        if (active.equals(List.of(PlatformConfigurationGuard.DEV_PROFILE))
+                && !environment.getPropertySources().contains(DEV_SOURCE_NAME)) {
+            Map<String, Object> overrides = Map.of(
+                    "server.ssl.enabled", "false",
+                    "aiwcorpo.mcp.platform.mtls.required", "false",
+                    "aiwcorpo.mcp.platform.internal-jwt.replay-store", "memory",
+                    "aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle", "");
+            MapPropertySource source = new MapPropertySource(DEV_SOURCE_NAME, overrides);
+            String firstConfigFile = environment.getPropertySources().stream().map(p -> p.getName())
+                    .filter(name -> name.startsWith("Config resource") || name.startsWith("applicationConfig"))
+                    .findFirst().orElse(null);
+            if (firstConfigFile == null) {
+                environment.getPropertySources().addLast(source);
+            } else {
+                environment.getPropertySources().addBefore(firstConfigFile, source);
+            }
+            LOG.info("event=dev_profile_overrides detail=\"server.ssl disabled, mtls.required=false, replay-store=memory, "
+                    + "jwks-ssl-bundle ignored (profile dev, loopback only)\"");
         }
     }
 }

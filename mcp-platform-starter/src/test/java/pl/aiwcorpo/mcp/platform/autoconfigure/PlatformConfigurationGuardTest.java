@@ -4,7 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.Map;
 import org.junit.jupiter.api.Test;
+import org.springframework.core.env.MapPropertySource;
 import org.springframework.mock.env.MockEnvironment;
 
 class PlatformConfigurationGuardTest {
@@ -155,5 +157,53 @@ class PlatformConfigurationGuardTest {
         prod.setActiveProfiles("prod");
         new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(prod, null);
         assertThat(prod.getProperty("server.address")).isNull();
+    }
+
+    private static MockEnvironment serverConfigAsInTheReadme(String... activeProfiles) {
+        MockEnvironment env = new MockEnvironment();
+        env.setActiveProfiles(activeProfiles);
+        env.getPropertySources().addFirst(new MapPropertySource("commandLineArgs", Map.of()));
+        env.getPropertySources().addLast(new MapPropertySource(
+                "Config resource 'class path resource [application.yml]' via location 'optional:classpath:/'",
+                Map.of("server.ssl.bundle", "mcp-jira", "server.ssl.client-auth", "need",
+                        "aiwcorpo.mcp.platform.mtls.required", "true",
+                        "aiwcorpo.mcp.platform.internal-jwt.replay-store", "redis",
+                        "aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle", "mcp-internal-ca")));
+        return env;
+    }
+
+    @Test
+    void devRunsTheServersOwnConfigurationWithoutCertificatesRedisOrInternalCa() {
+        MockEnvironment dev = serverConfigAsInTheReadme("dev");
+        new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(dev, null);
+
+        assertThat(dev.getProperty("server.ssl.enabled")).isEqualTo("false");
+        assertThat(dev.getProperty("aiwcorpo.mcp.platform.mtls.required")).isEqualTo("false");
+        assertThat(dev.getProperty("aiwcorpo.mcp.platform.internal-jwt.replay-store")).isEqualTo("memory");
+        assertThat(dev.getProperty("aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle")).isEmpty();
+        assertThat(dev.getProperty("server.ssl.bundle")).isEqualTo("mcp-jira");
+    }
+
+    @Test
+    void theCommandLineStillBeatsTheDevOverrides() {
+        MockEnvironment dev = serverConfigAsInTheReadme("dev");
+        dev.getPropertySources().remove("commandLineArgs");
+        dev.getPropertySources().addFirst(new MapPropertySource("commandLineArgs",
+                Map.of("aiwcorpo.mcp.platform.internal-jwt.replay-store", "redis")));
+        new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(dev, null);
+
+        assertThat(dev.getProperty("aiwcorpo.mcp.platform.internal-jwt.replay-store")).isEqualTo("redis");
+    }
+
+    @Test
+    void outsideTheOneAndOnlyDevProfileNothingIsOverridden() {
+        for (String[] profiles : new String[][] {{"prod"}, {"dev", "prod"}, {}}) {
+            MockEnvironment env = serverConfigAsInTheReadme(profiles);
+            new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(env, null);
+
+            assertThat(env.getProperty("server.ssl.enabled")).as(String.join(",", profiles)).isNull();
+            assertThat(env.getProperty("aiwcorpo.mcp.platform.mtls.required")).isEqualTo("true");
+            assertThat(env.getProperty("aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle")).isEqualTo("mcp-internal-ca");
+        }
     }
 }

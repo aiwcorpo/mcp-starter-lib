@@ -212,6 +212,54 @@ public class JiraServer {
 }
 ```
 
+## Uruchomienie lokalne
+
+Serwer z konfiguracji z sekcji "Konfiguracja" (z `server.ssl`, bundlem CA wewnętrznego i Redisem) startuje na
+stacji programisty bez certyfikatów, CA ani Redisa, jeśli `dev` jest **jedynym** aktywnym profilem. W tym profilu
+starter, powyżej `application*.yml` serwera (wiersz poleceń, właściwości systemowe i zmienne środowiskowe nadal
+wygrywają), ustawia:
+
+| Właściwość | Wartość w `dev` | Po co |
+| --- | --- | --- |
+| `server.address` | `127.0.0.1` (domyślnie; adres spoza pętli zwrotnej zatrzymuje start) | relaksacje `dev` nie wychodzą z maszyny |
+| `server.ssl.enabled` | `false` | bez `server.ssl.bundle` i certyfikatu serwera (bez `NoSuchSslBundleException`) |
+| `aiwcorpo.mcp.platform.mtls.required` | `false` | bez certyfikatu klienta gateway'a |
+| `aiwcorpo.mcp.platform.internal-jwt.replay-store` | `memory` | bez Redisa |
+| `aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle` | puste | bez bundla CA wewnętrznego (JWKS po zwykłym https albo http) |
+
+`internal-jwt.allow-test-keys` nie jest wymuszane: ustaw `true` w `application-dev.yml` serwera, gdy gateway lokalny
+(`mcp-platform-dev` albo `TestGateway`) podpisuje kluczami testowymi. `jwks-uri` pozostaje wymagane, ale nie jest
+pobierane, dopóki nie przyjdzie żądanie z JWT.
+
+Start (zależności startera muszą być w `~/.m2`: `./mvnw install` w tym repozytorium, albo wydana wersja):
+
+```bash
+export JAVA_HOME=/opt/homebrew/Cellar/openjdk@25/25.0.4.1/libexec/openjdk.jdk/Contents/Home
+./mvnw spring-boot:run -Dspring-boot.run.profiles=dev -Dspring-boot.run.arguments=--server.port=18600
+# albo po ./mvnw package:
+java -jar target/mcp-jira.jar --spring.profiles.active=dev --server.port=18600
+```
+
+Sprawdzenie:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18600/actuator/health      # 200
+curl -s -i -X POST http://127.0.0.1:18600/mcp -H 'Content-Type: application/json' \
+     -H 'Accept: application/json, text/event-stream' \
+     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | head -1                   # HTTP/1.1 401
+```
+
+`/actuator/health` jest w zależnościach startera (`spring-boot-starter-actuator`). `POST /mcp` bez wewnętrznego JWT
+daje 401 z `WWW-Authenticate: Bearer` i zdarzeniem `authentication` w audycie, nigdy odpowiedzi anonimowej. Wywołanie
+narzędzia wymaga JWT gateway'a (nagłówki jak w teście z sekcji "Testy serwera bez gateway'a").
+
+Poza `dev` błędy konfiguracji pojawiają się po kolei, bo Spring sprawdza je w różnych fazach: najpierw start serwera
+HTTP (brak bundla SSL, certyfikatu, CA), potem `PlatformConfigurationGuard` (zbiorczo, wszystkie naruszenia w jednym
+komunikacie), na końcu narzędzia (brak limitu argumentu, `@ToolRisk`). Poprawiony błąd SSL może więc odsłonić następny
+z kolejnej fazy (brak limitu argumentu zgłosi się dopiero po usunięciu błędu SSL: serwer HTTP startuje przed
+utworzeniem beanów narzędzi). W `dev` pierwsza faza jest wyłączona, a brak limitu argumentu jest ostrzeżeniem
+`event=tool_schema_open` zamiast błędu.
+
 ## Argumenty narzędzi: schemat, limity, walidacja
 
 Spring AI generuje z `@Tool` tylko typy i opisy; nie wpisuje do `inputSchema` `maxLength`, `pattern` ani
