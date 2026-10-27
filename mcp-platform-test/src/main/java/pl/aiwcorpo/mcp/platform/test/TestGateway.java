@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import pl.aiwcorpo.mcp.platform.observability.RequestIds;
+import pl.aiwcorpo.mcp.platform.security.BackendCredential;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -135,6 +136,17 @@ public final class TestGateway implements AutoCloseable {
      * }</pre>
      */
     public McpSyncHttpClientRequestCustomizer asGateway(java.util.function.Consumer<Token> user, String credential) {
+        return asGateway(user, credential, BackendCredential.Type.USER_SECRET);
+    }
+
+    /**
+     * As {@link #asGateway(java.util.function.Consumer, String)} with the credential type the gateway would put
+     * in {@code X-MCP-Credential-Type} ({@code user-oauth}, {@code user-secret}, {@code token-exchange} or
+     * {@code service-account}); ignored when {@code credential} is {@code null}.
+     */
+    public McpSyncHttpClientRequestCustomizer asGateway(java.util.function.Consumer<Token> user, String credential,
+                                                        BackendCredential.Type credentialType) {
+        java.util.Objects.requireNonNull(credentialType, "credentialType");
         return (request, method, uri, body, context) -> {
             Token token = user();
             user.accept(token);
@@ -146,7 +158,7 @@ public final class TestGateway implements AutoCloseable {
             minted.headers().forEach(request::setHeader);
             if (credential != null) {
                 request.setHeader("X-MCP-Credential", credential);
-                request.setHeader("X-MCP-Credential-Type", "user-secret");
+                request.setHeader("X-MCP-Credential-Type", credentialType.wireName());
             }
         };
     }

@@ -19,6 +19,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import pl.aiwcorpo.mcp.platform.security.BackendCredential;
 import pl.aiwcorpo.mcp.platform.test.app.ProbeServer;
 
 /**
@@ -79,6 +80,20 @@ class GatewayTransportTest {
             assertThat(text(call(client, "probe_credential"))).isEqualTo("\"user-secret Bearer " + PAT + "\"");
             assertThat(text(call(client, "probe_caller"))).startsWith("\"jkowalski|probe_caller|");
             assertThat(client.listTools().tools()).extracting(McpSchema.Tool::name).contains("probe_credential");
+        }
+    }
+
+    @Test
+    @DisplayName("asGateway with a credential type: the tool sees that type")
+    void theCredentialTypeSetByTheTestGatewayReachesTheTool() {
+        for (BackendCredential.Type type : BackendCredential.Type.values()) {
+            HttpClientStreamableHttpTransport transport = HttpClientStreamableHttpTransport
+                    .builder("http://127.0.0.1:" + port).endpoint(RawMcp.ENDPOINT).openConnectionOnStartup(false)
+                    .httpRequestCustomizer(GATEWAY.asGateway(user -> { }, "Bearer " + PAT, type)).build();
+            try (McpSyncClient client = McpClient.sync(transport).requestTimeout(Duration.ofSeconds(20)).build()) {
+                client.initialize();
+                assertThat(text(call(client, "probe_credential"))).isEqualTo("\"" + type.wireName() + " Bearer " + PAT + "\"");
+            }
         }
     }
 
