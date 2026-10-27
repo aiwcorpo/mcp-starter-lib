@@ -43,7 +43,7 @@ public record CallerContext(String subject, String username, List<String> groups
         }
     }
 
-    /** True for the gateway's own calls ({@code initialize}, {@code tools/list}, {@code ping}, manifest). */
+    /** True for the gateway's own calls ({@code initialize}, {@code server/discover}, {@code tools/list}, {@code ping}, manifest). */
     public boolean isService() {
         return SERVICE_SUBJECT.equals(subject);
     }

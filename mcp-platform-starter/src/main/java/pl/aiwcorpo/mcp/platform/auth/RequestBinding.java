@@ -20,7 +20,7 @@ public record RequestBinding(Kind kind, String toolName, String requestIdHeader)
          */
         TOOL_SCOPED,
         /**
-         * {@code initialize}, {@code tools/list}, {@code ping}, {@code GET /mcp-manifest} (and the broker's
+         * {@code initialize}, {@code server/discover}, {@code tools/list}, {@code ping}, {@code GET /mcp-manifest} (and the broker's
          * {@code GET /v1/systems}): both variants, {@code tool} absent.
          */
         PROTOCOL,

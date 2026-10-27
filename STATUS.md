@@ -1,7 +1,7 @@
 # STATUS - mcp-starter-lib (ws-02)
 
 Linia `pl.aiwcorpo.mcp:mcp-platform*` 3.x (niezależna od wersji kontraktów). Kontrakty:
-`pl.aiwcorpo.mcp:mcp-contracts:2.0.2` (decyzja koordynatora: ta sama wersja co gateway).
+`pl.aiwcorpo.mcp:mcp-contracts:2.1.1` od alpha-7 (2.0.2 do alpha-6).
 
 3.0.0-alpha: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom:3.0.0-alpha-1` (import),
 `pl.aiwcorpo.mcp:mcp-platform-starter:3.0.0-alpha-1`, `pl.aiwcorpo.mcp:mcp-platform-test:3.0.0-alpha-1` (test),
@@ -20,6 +20,12 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
+
+3.0.0-alpha-7 (w toku, wersja `3.0.0-alpha-7-SNAPSHOT`; wydanie dopiero po komplecie kamieni): kamienie
+1. Kontrakty 2.1.1 przez BOM i własność `mcp-contracts.version` modułów. Zmiana w kodzie: `server/discover` jest
+   żądaniem protokołu (wariant serwisowy dozwolony, CC-069); `subscriptions/listen`, `notifications/*`, GET/DELETE
+   już wymagały wariantu użytkownika (CC-070). Wektory JWT 51 (było 43). Schemat Cedar bajtowo bez zmian w 2.x.
+   `./mvnw clean install`: 250 testów (starter 192, mcp-platform-test 58).
 
 3.0.0-alpha-6: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-6`,
 tag `v3.0.0-alpha-6`. API bez usunięć; zgłoszenia pięciu serwerów ws-04 i template'u. Instrukcja dla serwerów

@@ -38,8 +38,8 @@ class InternalJwtVectorsTest {
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final String ROOT = "mcp-contracts/test-vectors/";
 
-    /** As listed in the mcp-contracts README ("Wektory testowe"), plus valid-broker counted there with the rest. */
-    private static final int EXPECTED_VECTORS = 43;
+    /** Files in test-vectors/jwt of mcp-contracts 2.1.1. */
+    private static final int EXPECTED_VECTORS = 51;
 
     record Vector(String name, JsonNode data) {
         @Override

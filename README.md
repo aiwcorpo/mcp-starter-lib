@@ -33,10 +33,10 @@ wewnętrznym JWT: ES256, `kid` z JWKS gateway'a, `iss`, `aud` == `server-id`, `e
 `exp - iat` do 60 s, claimy zgodne z `schemas/internal-jwt.schema.json` (walidowane schematem z jara kontraktów,
 także wzorce `vsc` i `vs` razem z `vsc`), `jti` użyty pierwszy raz (Redis), `rid` == `X-Request-Id`, `tool`
 obecny dokładnie przy `tools/call` i równy `params.name`, wariant serwisowy tylko dla `initialize`,
-`tools/list`, `ping` i `GET /mcp-manifest`. Klucze z identyfikatorem `test-*` i opublikowane klucze testowe
+`server/discover`, `tools/list`, `ping` i `GET /mcp-manifest`. Klucze z identyfikatorem `test-*` i opublikowane klucze testowe
 (rozpoznawane po SPKI z `mcp-contracts/security/published-test-keys.json`) są odrzucane, chyba że
 `allow-test-keys=true` w profilu `dev`. Kolejność kontroli i powody odrzucenia są jak w referencyjnym
-odbiorcy kontraktów, więc wszystkie 43 wektory `test-vectors/jwt` dają ten sam wynik i powód.
+odbiorcy kontraktów, więc wszystkie 51 wektorów `test-vectors/jwt` dają ten sam wynik i powód.
 
 Odrzucenie: `401 {"error":"unauthenticated",...}` z `WWW-Authenticate: Bearer`, powód tylko w logu
 (`event=internal_jwt_rejected reason=<kod>`). Niedostępny JWKS albo Redis: `503 upstream_unavailable`, nigdy

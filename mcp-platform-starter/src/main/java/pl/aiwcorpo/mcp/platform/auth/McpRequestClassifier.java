@@ -15,7 +15,7 @@ import tools.jackson.databind.JsonNode;
 final class McpRequestClassifier {
 
     /** JSON-RPC methods the gateway may send with its service variant (C2). */
-    static final Set<String> PROTOCOL_METHODS = Set.of("initialize", "tools/list", "ping");
+    static final Set<String> PROTOCOL_METHODS = Set.of("initialize", "server/discover", "tools/list", "ping");
 
     /** C6 manifest endpoint; the service variant may read it. */
     static final String MANIFEST_PATH = "/mcp-manifest";
