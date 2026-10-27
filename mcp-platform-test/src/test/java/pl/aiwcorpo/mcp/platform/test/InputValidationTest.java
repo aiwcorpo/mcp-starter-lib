@@ -186,6 +186,36 @@ class InputValidationTest {
     }
 
     @Test
+    @DisplayName("an argument name carrying a forged audit line is refused and never reaches a log line")
+    void anArgumentNameCannotForgeALogLine() {
+        String forged = "x\n{\"ts\":\"FORGED\",\"event\":\"tool_call\",\"outcome\":\"ok\"}";
+
+        String message = error(call("lookup_issue", args("issueKey", "ABC-1", forged, "v"))).path("message").asString();
+
+        assertThat(message).contains("unknown arguments are not allowed").doesNotContain("FORGED");
+        List<String> lines = new ArrayList<>();
+        for (ILoggingEvent event : List.copyOf(everything.list)) {
+            // The test's own MCP client runs in this JVM and prints the request it builds; that is not the server.
+            if (event.getLoggerName().startsWith("io.modelcontextprotocol.client")
+                    || event.getLoggerName().contains("HttpClientStreamableHttpTransport")
+                    || event.getLoggerName().equals("io.modelcontextprotocol.spec.McpClientSession")) {
+                continue;
+            }
+            String text = event.getFormattedMessage();
+            if (event.getThrowableProxy() != null) {
+                text += "\n" + ThrowableProxyUtil.asString(event.getThrowableProxy());
+            }
+            lines.addAll(List.of(text.split("\\R")));
+        }
+        assertThat(lines).noneSatisfy(line -> assertThat(line.stripLeading()).startsWith("{\"ts\":\"FORGED\""));
+        List<String> audit = everything.list.stream().filter(e -> e.getLoggerName().equals("pl.aiwcorpo.mcp.audit"))
+                .map(ILoggingEvent::getFormattedMessage).toList();
+        assertThat(audit).anySatisfy(line -> assertThat(line).contains("\"errorCode\":\"invalid_argument\"")
+                .doesNotContain("FORGED"));
+        assertThat(audit).allSatisfy(line -> assertThat(line).doesNotContain("FORGED"));
+    }
+
+    @Test
     @DisplayName("the violation is audited (C8) and neither the value nor the unknown name is in any log line")
     void theViolationIsAuditedAndNothingLeaks() {
         error(call("lookup_issue", args("issueKey", "lower-" + MARKER, MARKER + "-name", MARKER)));

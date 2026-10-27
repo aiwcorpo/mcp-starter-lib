@@ -39,6 +39,11 @@ Zmiana zachowania (nie łamie API): serwer, którego narzędzie ma schemat otwar
 własny `@Primary McpSyncServerCustomizer`, nie wstanie. Schematy z `@Tool` (Spring AI) są zamknięte,
 więc `MethodToolCallbackProvider` nadal przechodzi.
 
+Incydent budowy: przed wydaniem `./mvnw install` zainstalował niewydany kod jako 3.0.0-alpha-5 w `~/.m2`
+(nadpisanie wydanej wersji). Przywrócone z tagu `v3.0.0-alpha-5` (jar bez `ForeignPrimaryCustomizerCheck`);
+prace szły na `3.0.0-alpha-6-SNAPSHOT`, wersja `3.0.0-alpha-6` ustawiona dopiero przy wydaniu.
+Recenzja serwerów (HIGH): nazwa nieznanego argumentu w logu walidacji SDK mogła sfałszować linię audytu C8;
+zamknięte przez wyłączenie walidacji SDK (test z nazwą `x\n{"ts":"FORGED"...}`: C10, C8, brak linii z FORGED).
 Recenzja bezpieczeństwa alpha-6 (MEDIUM, poprawione): (a) customizer serwera nie cofa ustawień platformy
 (ustawienia startera są stosowane po customizerach serwera; test z `validateToolInputs(true)`); (b) `$` w
 `pattern` w Javie pasuje przed końcowym znakiem nowej linii (`"ABC-1\n"` przechodziło `^[A-Z]+-[0-9]+$`): przy

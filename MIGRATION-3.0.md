@@ -110,9 +110,10 @@ API bez usunięć (podbicie BOM wystarcza do kompilacji). Zmiany zachowania i st
 | wszystkie | własny `@Primary McpSyncServerCustomizer` z `validateToolInputs(false)` i `immediateExecution(true)` (gitlab: `toolInputsCheckedByTheTools`) | nic; kto potrzebuje własnych ustawień MCP, dopisuje bean `McpSyncServerCustomizer` bez `@Primary` |
 | template, gitlab | własna adnotacja `ArgumentLimits` i `SchemaLimitedToolCallbacks` / `withArgumentLimits` w `McpToolsConfiguration` | `pl.aiwcorpo.mcp.platform.input.ArgumentLimits` i `SchemaLimitedToolCallbacks.of(...)` |
 | confluence | `@StringArgument`, `ConstrainedToolCallbacks` | `@ArgumentLimits(minLength, maxLength, pattern)` i `SchemaLimitedToolCallbacks.of(...)` (zwraca `ToolCallbackProvider`; confluence dziś zwraca `ToolCallback[]`) |
-| gitlab | `StrictArgumentsToolCallback` (odrzucanie nieznanych argumentów) | `additionalProperties: false` dopisuje `SchemaLimitedToolCallbacks`, odrzuca je starter jako `invalid_argument` |
+| gitlab | własny `@Primary McpSyncServerCustomizer` (`toolInputsCheckedByTheTools`; bez usunięcia serwer nie wstanie) oraz `StrictArgumentsToolCallback` (odrzucanie nieznanych argumentów) | `additionalProperties: false` dopisuje `SchemaLimitedToolCallbacks`, odrzuca je starter jako `invalid_argument` |
 | servicedesk | ręcznie pisane schematy (mapa `inputSchemas` w `McpToolsConfiguration`) | `@Tool` + `@ArgumentLimits`; jeśli schemat zostaje ręczny, musi mieć `type: object` i `additionalProperties: false` (ma) |
-| jira, opensearch | (brak własnych obejść schematu) | opcjonalnie `SchemaLimitedToolCallbacks.of(...)` zamiast `MethodToolCallbackProvider`, żeby limity trafiły do `inputSchema` |
+| opensearch | `StrictArgumentsInterceptor` (odrzucanie nieznanych argumentów) | zbędny: `additionalProperties: false` w schemacie + walidacja startera; do wyrzucenia razem z testami tekstu SDK |
+| jira | (brak własnych obejść schematu) | opcjonalnie `SchemaLimitedToolCallbacks.of(...)` zamiast `MethodToolCallbackProvider`, żeby limity trafiły do `inputSchema` |
 | wszystkie | kopie wzorców identyfikatorów z `ResourceIds` w stałych `pattern` | `@ArgumentLimits(contractPattern = "JiraIssueKey")` itd. (nazwa definicji z `common.schema.json`) |
 | wszystkie | `TestGateway`: ręczne ustawianie `X-MCP-Credential-Type` w testach `service-account`/`user-oauth` | `GATEWAY.asGateway(user, credential, BackendCredential.Type.SERVICE_ACCOUNT)` |
 
@@ -121,6 +122,11 @@ Różnice względem wersji własnych: `@ArgumentLimits` nie ma wartości domyśl
 całkowitych (są w starterze). Walidacja w kodzie narzędzia zostaje jako druga linia, ale komunikatu o
 naruszeniu schematu nie trzeba już tworzyć: ten sam kod `invalid_argument` daje starter. Testy, które sprawdzały
 tekst `input validation failed` z SDK, trzeba zmienić na C10 `invalid_argument`.
+
+Nazwa nieznanego argumentu pochodzi od klienta: walidacja SDK wstawiała ją do logu bez escapowania (linia
+udająca zdarzenie audytu). Od alpha-6 walidacja SDK jest wyłączona, a starter nie loguje i nie zwraca nazw spoza
+schematu (`InputValidationTest.anArgumentNameCannotForgeALogLine`). Serwer nie powinien logować nazw argumentów
+spoza schematu ani wartości.
 
 Testy serwera: do sprawdzenia, że zły argument daje C10 i C8, wystarczy wywołanie przez `TestGateway` (wzór:
 `InputValidationTest` w `mcp-platform-test`).
