@@ -8,21 +8,30 @@ import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.EnvironmentAware;
 import org.springframework.core.env.Environment;
 import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
+import pl.aiwcorpo.mcp.platform.guard.RegisteredToolsCheck;
+import pl.aiwcorpo.mcp.platform.guard.ToolHintsPostProcessor;
 import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
 
 /**
- * Outside the {@code dev} profile, refuses to start when a server declares its own {@link ToolInputPolicy} or
- * {@link ToolCallbackAuditPostProcessor} bean.
+ * Outside the {@code dev} profile, refuses to start when a server declares its own {@link ToolInputPolicy},
+ * {@link ToolCallbackAuditPostProcessor}, {@link RegisteredToolsCheck} or {@link ToolHintsPostProcessor} bean.
  *
- * <p>Both used to be {@code @ConditionalOnMissingBean}: a server bean such as {@code ToolInputPolicy.DEV}
- * switched off the bounded-schema rule, and a replacement post-processor dropped the audit wrapper and the
- * argument validation, without any message. They are not extension points; what a server may add are
- * {@link ToolCallInterceptor}s. Works on bean definitions, so nothing is instantiated.
+ * <p>These used to be {@code @ConditionalOnMissingBean}: a server bean such as {@code ToolInputPolicy.DEV}
+ * switched off the bounded-schema rule, a replacement post-processor dropped the audit wrapper and the
+ * argument validation, and a replacement check no longer noticed a tool that skipped the wrapper, all without
+ * any message. They are not extension points; what a server may add are {@link ToolCallInterceptor}s.
+ *
+ * <p>Works on bean definitions by their declared type, so nothing is instantiated, and that is only a tripwire:
+ * a bean declared as {@code Object}, a {@code BeanPostProcessor} swapping an instance or a registry
+ * post-processor are not seen. The input policy therefore does not depend on it: the wrapper takes the policy
+ * from the active profiles when it is created and reads no bean.
  */
 public class ForeignToolPolicyCheck implements BeanFactoryPostProcessor, EnvironmentAware {
 
     static final String INPUT_POLICY_BEAN = "toolInputPolicy";
     static final String AUDIT_POST_PROCESSOR_BEAN = "toolCallbackAuditPostProcessor";
+    static final String REGISTERED_TOOLS_CHECK_BEAN = "registeredToolsCheck";
+    static final String HINTS_POST_PROCESSOR_BEAN = "toolHintsPostProcessor";
 
     private Environment environment;
 
@@ -39,10 +48,13 @@ public class ForeignToolPolicyCheck implements BeanFactoryPostProcessor, Environ
         List<String> foreign = new ArrayList<>();
         collect(beanFactory, ToolInputPolicy.class, INPUT_POLICY_BEAN, foreign);
         collect(beanFactory, ToolCallbackAuditPostProcessor.class, AUDIT_POST_PROCESSOR_BEAN, foreign);
+        collect(beanFactory, RegisteredToolsCheck.class, REGISTERED_TOOLS_CHECK_BEAN, foreign);
+        collect(beanFactory, ToolHintsPostProcessor.class, HINTS_POST_PROCESSOR_BEAN, foreign);
         if (!foreign.isEmpty()) {
-            throw new IllegalStateException("Bean(s) " + foreign + " replace the platform's tool input policy or "
-                    + "audit wrapper. Outside the 'dev' profile they would switch off the bounded-schema rule or "
-                    + "the argument validation and audit of every tool; remove them (extra behaviour belongs in a "
+            throw new IllegalStateException("Bean(s) " + foreign + " replace a platform component of the tool "
+                    + "pipeline (input policy, audit wrapper, registered-tools check, hints post-processor). Outside the "
+                    + "'dev' profile they would switch off the bounded-schema rule, the argument validation and audit of "
+                    + "every tool or the check that every tool went through the wrapper; remove them (extra behaviour belongs in a "
                     + "ToolCallInterceptor). See MIGRATION-3.0.md.");
         }
     }

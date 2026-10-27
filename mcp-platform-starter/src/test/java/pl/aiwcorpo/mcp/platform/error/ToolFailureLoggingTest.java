@@ -12,6 +12,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.client.ResourceAccessException;
+import pl.aiwcorpo.mcp.platform.CapturedLogs;
 import pl.aiwcorpo.mcp.platform.security.CredentialRequiredException;
 
 /** The level of {@code event=tool_failed} follows what the failure means; expected outcomes are not errors. */
@@ -39,8 +40,8 @@ class ToolFailureLoggingTest {
     }
 
     private ILoggingEvent only() {
-        assertThat(lines.list).hasSize(1);
-        return lines.list.getFirst();
+        assertThat(CapturedLogs.snapshot(lines)).hasSize(1);
+        return CapturedLogs.snapshot(lines).getFirst();
     }
 
     @Test
@@ -61,7 +62,7 @@ class ToolFailureLoggingTest {
                 .map(new CredentialRequiredException("jira"));
         mapper.map(new SecurityException("no"));
 
-        assertThat(lines.list).hasSize(3).allSatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.INFO));
+        assertThat(CapturedLogs.snapshot(lines)).hasSize(3).allSatisfy(event -> assertThat(event.getLevel()).isEqualTo(Level.INFO));
     }
 
     @Test

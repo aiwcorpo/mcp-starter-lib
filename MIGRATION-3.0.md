@@ -173,6 +173,8 @@ Test `McpToolsConfigurationTest` na `boundedFilter` zastąpić testem wywołania
   dla argumentu najwyższego poziomu.
 - Tekst z systemu (opisy, komentarze, tytuły) przez `TextHygiene.normalize(...)` albo od razu `UntrustedText.plain(...)`.
   Serwery jira i confluence zastępują własne czyszczenie (`JiraToolViews`: `\p{Cntrl}`/`\p{Cf}`) wywołaniem helpera.
+  Od alpha-8 usunięty ciąg niewidocznych znaków zastępuje jedna spacja (patrz "Zmiany w 3.0.0-alpha-8"), a normalizację
+  trzeba zrobić **przed** filtrowaniem serwera.
 
 ### `UntrustedText` jako typ wspólny (CC-072)
 
@@ -181,7 +183,8 @@ rekordem; starter publikuje `outputSchema` i zwraca `structuredContent`. Zmienia
 (nowe pole `outputSchema`), więc gateway oznaczy je jako `pending_approval` do ponownego zatwierdzenia. Confluence:
 `omittedMacros` przenieść z wnętrza `body` obok `body`. Jira: `description` i komentarze dotąd z `format: text/plain`
 zawierały surowy wiki markup (J2-L2); do `UntrustedText.plain(...)` trafia tekst po usunięciu składni obrazów, linków i
-makr albo, jeśli markup zostaje, odstępstwo trzeba opisać.
+makr (usuwanie robi serwer na tekście już znormalizowanym: `TextHygiene.normalize(raw)`, potem filtr, potem fabryka)
+albo, jeśli markup zostaje, odstępstwo trzeba opisać.
 
 ### Audyt i logi
 
@@ -197,6 +200,38 @@ makr albo, jeśli markup zostaje, odstępstwo trzeba opisać.
 
 `mcp-platform-test` ma test na `tool_failed` i zdarzenia `authentication` (nasłuch na loggerze `pl.aiwcorpo.mcp.audit`).
 Testy serwera sprawdzające poziom ERROR dla błędu domenowego trzeba zmienić na INFO.
+
+## Zmiany w 3.0.0-alpha-8
+
+Pracowano na `3.0.0-alpha-8-SNAPSHOT`; alpha-7 i wcześniejsze nietknięte.
+
+### Kolejność: najpierw normalizacja, potem filtr (A7-M2)
+
+`TextHygiene.normalize` nie usuwa już znaków niewidocznych bez śladu: ciąg usuniętych znaków (kontrolne, nieznaki,
+każdy `\p{Cf}`) zastępuje jedna spacja (pomijana na początku i końcu tekstu oraz obok białych znaków). Wcześniej
+`"@a<ZWSP>ll"` dawało `"@all"` i `"!<ZWSP>https://host/x.png!"` składnię obrazu, czyli tekst, który filtr serwera
+przepuścił, bo go nie rozpoznał, wychodził jako dokładnie to, czego filtr szukał. Teraz wychodzi `"@a ll"` i
+`"! https://host/x.png!"`. Koszt: sekwencja emoji z ZWJ rozpada się na osobne emoji, ZWNJ w tekście perskim staje się spacją.
+
+Kolejność w serwerze (jira, confluence, każdy, który usuwa składnię z tekstu systemu):
+
+1. `String clean = TextHygiene.normalize(raw);`
+2. filtr serwera na `clean` (obrazy, linki, makra, wzmianki, `{noformat}`): widzi to samo, co zobaczy klient;
+3. `UntrustedText.plain(filtered, MAX)` albo `markdown(...)`.
+
+Odwrotna kolejność (filtr na surowym tekście, normalizacja w fabryce) nie jest bezpieczna: filtr nie rozpozna
+`!<ZWSP>https`. Konstruktor `UntrustedText` też normalizuje (`new UntrustedText(...)` i deserializacja Jacksona nie
+omijają higieny), ale to ostatnia linia obrony, nie miejsce na filtrowanie.
+
+### Pozostałe zmiany zachowania
+
+- Klucze obiektów w argumentach (mapa z `propertyNames`, obiekt zagnieżdżony, nazwa argumentu) przechodzą `TextHygiene`
+  jak wartość z `pattern`; naruszenie to `invalid_argument` ("x has a name with ..."), bez cytowania klucza.
+- Element tablicy `i` jest oceniany regułą `prefixItems[i]`, kolejne regułą `items`.
+- `ToolCallbackAuditPostProcessor` nie czyta już beana `ToolInputPolicy`: polityka wynika z aktywnych profili w chwili
+  tworzenia. `RegisteredToolsCheck` i `ToolHintsPostProcessor` nie są `@ConditionalOnMissingBean`; własny bean któregoś z
+  czterech typów zatrzymuje start poza `dev`.
+- `tool_failed` (WARN i ERROR): w łańcuchu przyczyn usunięte znaki sterujące i bidi, jedna linia, bez zapytania w URL.
 
 ## Wdrożenie
 

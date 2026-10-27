@@ -15,6 +15,7 @@ import org.springframework.ai.tool.definition.DefaultToolDefinition;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.HttpClientErrorException;
+import pl.aiwcorpo.mcp.platform.CapturedLogs;
 import pl.aiwcorpo.mcp.platform.ContractSchemas;
 import pl.aiwcorpo.mcp.platform.auth.TestCallers;
 import pl.aiwcorpo.mcp.platform.error.McpErrorMapper;
@@ -58,7 +59,7 @@ class AuditingToolCallbackTest {
     }
 
     private String lastAudit() {
-        String line = auditLines.list.getLast().getFormattedMessage();
+        String line = CapturedLogs.snapshot(auditLines).getLast().getFormattedMessage();
         assertThat(ContractSchemas.violations(ContractSchemas.AUDIT_EVENT, line)).as(line).isEmpty();
         return line;
     }

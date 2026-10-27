@@ -172,7 +172,8 @@ public final class SchemaLimitedToolCallbacks {
 
     private static void numberLimits(ArgumentLimits limits, String where, String type, ObjectNode property) {
         if (limits == null || limits.minimum() == Long.MIN_VALUE || limits.maximum() == Long.MAX_VALUE) {
-            throw new IllegalStateException("@Tool " + where + ": a " + type + " argument needs "
+            throw new IllegalStateException("@Tool " + where + ": " + (type.startsWith("integer") ? "an " : "a ") + type
+                    + " argument needs "
                     + "@ArgumentLimits(minimum = ..., maximum = ...), otherwise the model may send any value");
         }
         if (limits.minLength() >= 0 || limits.maxLength() >= 0 || !limits.pattern().isEmpty()

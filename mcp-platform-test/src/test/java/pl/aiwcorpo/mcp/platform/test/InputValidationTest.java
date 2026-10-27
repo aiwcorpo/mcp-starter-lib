@@ -103,7 +103,7 @@ class InputValidationTest {
 
     private List<String> logLines() {
         List<String> lines = new ArrayList<>();
-        for (ILoggingEvent event : List.copyOf(everything.list)) {
+        for (ILoggingEvent event : CapturedLogs.snapshot(everything)) {
             // The SDK's DEBUG wire logging (client and server share one JVM here) prints every message by
             // design; this checks what the platform and Spring write.
             if (event.getLoggerName().startsWith("io.modelcontextprotocol")) {
@@ -180,7 +180,7 @@ class InputValidationTest {
             assertThat(error(call("lookup_issue", args("issueKey", value))).path("message").asString())
                     .as(value).contains("issueKey does not match the required format");
         }
-        List<String> audit = everything.list.stream().filter(e -> e.getLoggerName().equals("pl.aiwcorpo.mcp.audit"))
+        List<String> audit = CapturedLogs.snapshot(everything).stream().filter(e -> e.getLoggerName().equals("pl.aiwcorpo.mcp.audit"))
                 .map(ILoggingEvent::getFormattedMessage).filter(l -> l.contains("invalid_argument")).toList();
         assertThat(audit).hasSizeGreaterThanOrEqualTo(3);
     }
@@ -194,7 +194,7 @@ class InputValidationTest {
 
         assertThat(message).contains("unknown arguments are not allowed").doesNotContain("FORGED");
         List<String> lines = new ArrayList<>();
-        for (ILoggingEvent event : List.copyOf(everything.list)) {
+        for (ILoggingEvent event : CapturedLogs.snapshot(everything)) {
             // The test's own MCP client runs in this JVM and prints the request it builds; that is not the server.
             if (event.getLoggerName().startsWith("io.modelcontextprotocol.client")
                     || event.getLoggerName().contains("HttpClientStreamableHttpTransport")
@@ -208,7 +208,7 @@ class InputValidationTest {
             lines.addAll(List.of(text.split("\\R")));
         }
         assertThat(lines).noneSatisfy(line -> assertThat(line.stripLeading()).startsWith("{\"ts\":\"FORGED\""));
-        List<String> audit = everything.list.stream().filter(e -> e.getLoggerName().equals("pl.aiwcorpo.mcp.audit"))
+        List<String> audit = CapturedLogs.snapshot(everything).stream().filter(e -> e.getLoggerName().equals("pl.aiwcorpo.mcp.audit"))
                 .map(ILoggingEvent::getFormattedMessage).toList();
         assertThat(audit).anySatisfy(line -> assertThat(line).contains("\"errorCode\":\"invalid_argument\"")
                 .doesNotContain("FORGED"));
@@ -220,7 +220,7 @@ class InputValidationTest {
     void theViolationIsAuditedAndNothingLeaks() {
         error(call("lookup_issue", args("issueKey", "lower-" + MARKER, MARKER + "-name", MARKER)));
 
-        List<String> audit = everything.list.stream().filter(e -> e.getLoggerName().equals("pl.aiwcorpo.mcp.audit"))
+        List<String> audit = CapturedLogs.snapshot(everything).stream().filter(e -> e.getLoggerName().equals("pl.aiwcorpo.mcp.audit"))
                 .map(ILoggingEvent::getFormattedMessage).toList();
         assertThat(audit).anySatisfy(line -> {
             JsonNode event = JSON.readTree(line);

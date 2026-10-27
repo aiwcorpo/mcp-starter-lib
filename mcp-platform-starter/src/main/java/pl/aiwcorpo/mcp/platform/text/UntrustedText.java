@@ -7,8 +7,10 @@ package pl.aiwcorpo.mcp.platform.text;
  * nested record) gets an {@code outputSchema} with this shape published by the platform, so the shape is part
  * of the tool's {@code definitionHash}; see {@link ToolOutputSchemas}.
  *
- * <p>The factories normalize the text ({@link TextHygiene#normalize}) and cut it to a limit, so a value built
- * through them carries no control, bidi or zero-width characters. Fields a system adds next to the four
+ * <p>The constructor normalizes the text ({@link TextHygiene#normalize}), so a value carries no control, bidi or
+ * zero-width characters however it was built (a factory, {@code new}, Jackson). Normalization replaces what it
+ * removes with a space, so a server must normalize the raw text <em>before</em> it filters it (links, images,
+ * macros, mentions) and pass the filtered result on; the factories also cut the text to a limit. Fields a system adds next to the four
  * required ones (for example {@code omittedMacros}) go in the surrounding result record.
  *
  * @param kind      always {@code untrusted-data}
@@ -33,6 +35,7 @@ public record UntrustedText(String kind, String format, String text, boolean tru
         if (text == null) {
             throw new IllegalArgumentException("text must not be null");
         }
+        text = TextHygiene.normalize(text);
     }
 
     /** Plain text, normalized, cut to at most {@code maxLength} UTF-16 units (never inside a surrogate pair). */

@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.mock.web.MockFilterChain;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
+import pl.aiwcorpo.mcp.platform.CapturedLogs;
 import pl.aiwcorpo.mcp.platform.ContractSchemas;
 import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
 import tools.jackson.databind.JsonNode;
@@ -67,8 +68,8 @@ class InternalJwtAuditTest {
     }
 
     private JsonNode onlyEvent() {
-        assertThat(lines.list).hasSize(1);
-        String line = lines.list.getFirst().getFormattedMessage();
+        assertThat(CapturedLogs.snapshot(lines)).hasSize(1);
+        String line = CapturedLogs.snapshot(lines).getFirst().getFormattedMessage();
         assertThat(ContractSchemas.violations(ContractSchemas.AUDIT_EVENT, line)).as(line).isEmpty();
         JsonNode event = JSON.readTree(line);
         assertThat(event.get("event").asString()).isEqualTo("authentication");
@@ -94,7 +95,7 @@ class InternalJwtAuditTest {
     void aReplayedTokenIsAuditedWithoutTheIdentityItClaims() throws Exception {
         InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock), false);
         filter.doFilter(toolCall("Bearer " + token), new MockHttpServletResponse(), new MockFilterChain());
-        assertThat(lines.list).isEmpty();
+        assertThat(CapturedLogs.snapshot(lines)).isEmpty();
 
         MockHttpServletResponse response = new MockHttpServletResponse();
         filter.doFilter(toolCall("Bearer " + token), response, new MockFilterChain());

@@ -188,8 +188,11 @@ public final class ToolInputValidator {
         }
         List<String> controls = new ArrayList<>();
         if (arguments.isObject()) {
-            arguments.propertyNames().forEach(name -> textProblems(arguments.get(name), properties.get(name),
-                    declared.contains(name) ? name : "an argument", controls, 0));
+            arguments.propertyNames().forEach(name -> {
+                String top = declared.contains(name) ? name : "an argument";
+                keyProblem(name, top, controls);
+                textProblems(arguments.get(name), properties.get(name), top, controls, 0);
+            });
         }
         if (errors.isEmpty() && controls.isEmpty()) {
             return;
@@ -229,6 +232,7 @@ public final class ToolInputValidator {
             }
         } else if (depth < MAX_TEXT_DEPTH && value.isObject()) {
             value.propertyNames().forEach(name -> {
+                keyProblem(name, top, found);
                 JsonNode child = rule == null ? null : rule.path("properties").get(name);
                 if (child == null && rule != null && rule.path("additionalProperties").isObject()) {
                     child = rule.get("additionalProperties");
@@ -237,9 +241,24 @@ public final class ToolInputValidator {
             });
         } else if (depth < MAX_TEXT_DEPTH && value.isArray()) {
             JsonNode items = rule == null ? null : rule.get("items");
-            value.forEach(element -> textProblems(element, items, top, found, depth + 1));
+            JsonNode prefix = rule == null ? null : rule.get("prefixItems");
+            int index = 0;
+            for (JsonNode element : value) {
+                JsonNode elementRule = prefix != null && prefix.isArray() && index < prefix.size() ? prefix.get(index)
+                        : items;
+                textProblems(element, elementRule, top, found, depth + 1);
+                index++;
+            }
         } else if (value.isObject() || value.isArray()) {
             found.add(top + " is nested too deeply");
+        }
+    }
+
+    /** An object key is an identifier (a field name, a label, a header): judged as a formatted value. */
+    private static void keyProblem(String key, String top, List<String> found) {
+        TextHygiene.Problem problem = TextHygiene.firstProblem(key, true);
+        if (problem != null) {
+            found.add(top + " has a name with " + problem.description());
         }
     }
 

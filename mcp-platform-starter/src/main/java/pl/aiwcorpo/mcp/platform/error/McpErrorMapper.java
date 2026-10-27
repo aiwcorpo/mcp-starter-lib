@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 import com.networknt.schema.Schema;
 import com.networknt.schema.SchemaLocation;
 import com.networknt.schema.SchemaRegistry;
@@ -16,6 +17,7 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientResponseException;
 import pl.aiwcorpo.mcp.platform.security.CredentialRequiredException;
 import pl.aiwcorpo.mcp.platform.security.SecretRedactor;
+import pl.aiwcorpo.mcp.platform.text.TextHygiene;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -238,10 +240,22 @@ public class McpErrorMapper {
                 String message = current.getMessage();
                 text = current.getClass().getName() + (message == null ? "" : ": " + SecretRedactor.redact(message));
             }
-            levels.add(text.replace('"', '\'').replace('\n', ' ').replace('\r', ' '));
+            levels.add(oneSafeLine(text));
             current = current.getCause() == current ? null : current.getCause();
         }
         return String.join(" <- ", levels);
+    }
+
+    private static final Pattern URL_QUERY = Pattern.compile("(https?://[^\\s?#\"']*)\\?[^\\s\"']*");
+
+    /**
+     * One log-safe line: control, bidi and zero-width characters removed ({@link TextHygiene#normalize}), line
+     * breaks and tabs turned into spaces, quotes softened so the value cannot close the {@code chain="..."}
+     * field, and the query of any URL left out (it carries the model's arguments, e.g. a JQL expression).
+     */
+    private static String oneSafeLine(String text) {
+        String clean = TextHygiene.normalize(text).replace('\n', ' ').replace('\t', ' ').replace('"', '\'');
+        return URL_QUERY.matcher(clean).replaceAll("$1?<query not logged>");
     }
 
     /** Packages whose exception messages quote response bodies or parsed documents. */

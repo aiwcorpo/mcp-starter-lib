@@ -21,6 +21,19 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
 
+3.0.0-alpha-8: w toku (praca na `3.0.0-alpha-8-SNAPSHOT`; alpha-7 w `~/.m2` nietknięte). Instrukcja dla serwerów:
+`MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-8". Kamienie:
+1. Przegląd Opus alpha-7, A7-M2 i LOW. `TextHygiene.normalize` zastępuje usunięty ciąg niewidocznych znaków jedną spacją
+   (pomijaną na brzegach i obok białych znaków), więc `@a<ZWSP>ll` i `!<ZWSP>https` nie sklejają się w token; konstruktor
+   `UntrustedText` normalizuje (L5: `new` i Jackson nie omijają higieny); MIGRATION: kolejność normalizacja, filtr, fabryka.
+   L1: klucze obiektów przez `TextHygiene` (wartość z `pattern`), komunikat bez cytowania klucza. L2: element `i` oceniany
+   regułą `prefixItems[i]`, testy treści prefiksu i startu z nieograniczonym prefiksem. L6: opakowanie bierze politykę z
+   profili (nie z beana, więc `@Bean Object` zwracający `DEV`, `BeanPostProcessor` i nadpisanie definicji nic nie zmieniają),
+   `RegisteredToolsCheck` i `ToolHintsPostProcessor` bez `@ConditionalOnMissingBean` i objęte `ForeignToolPolicyCheck`.
+   L8: `describeChain` przez `TextHygiene.normalize`, jedna linia, bez zapytania w URL. L9: `CapturedLogs.snapshot` (kopia pod
+   monitorem appendera) we wszystkich testach czytających `ListAppender`. Literówka "a integer" w komunikacie limitu.
+   298 testów (starter 238, mcp-platform-test 60).
+
 3.0.0-alpha-7: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-7`, tag `v3.0.0-alpha-7`
 (pracowano na `3.0.0-alpha-7-SNAPSHOT`, alpha-6 i wcześniejsze nietknięte). Instrukcja dla serwerów: `MIGRATION-3.0.md`,
 sekcja "Zmiany w 3.0.0-alpha-7". Kamienie

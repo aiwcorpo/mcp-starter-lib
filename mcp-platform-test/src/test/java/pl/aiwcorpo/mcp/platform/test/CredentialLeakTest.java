@@ -147,7 +147,7 @@ class CredentialLeakTest {
 
     private List<String> logText() {
         List<String> lines = new ArrayList<>();
-        for (ILoggingEvent event : List.copyOf(everything.list)) {
+        for (ILoggingEvent event : CapturedLogs.snapshot(everything)) {
             lines.add(event.getFormattedMessage());
             if (event.getThrowableProxy() != null) {
                 lines.add(ThrowableProxyUtil.asString(event.getThrowableProxy()));

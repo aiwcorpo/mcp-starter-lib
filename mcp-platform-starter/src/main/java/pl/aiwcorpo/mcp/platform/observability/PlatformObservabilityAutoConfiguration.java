@@ -20,8 +20,8 @@ import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
 
 /**
  * Audit (C8), request id, tool registry and the decorator applied to every tool. A server may override the audit
- * logger, the registry and the error mapper; the tool decorator and the input policy are not replaceable
- * ({@link ForeignToolPolicyCheck}).
+ * logger, the registry and the error mapper; the tool decorator, the input policy, the check that every tool went
+ * through the decorator and the hints post-processor are not replaceable ({@link ForeignToolPolicyCheck}).
  */
 @AutoConfiguration
 @EnableConfigurationProperties(McpPlatformProperties.class)
@@ -57,26 +57,30 @@ public class PlatformObservabilityAutoConfiguration {
     static ToolCallbackAuditPostProcessor toolCallbackAuditPostProcessor(
             ObjectProvider<AuditLogger> auditLogger, ObjectProvider<McpErrorMapper> errorMapper,
             ObjectProvider<ToolRiskRegistry> registry, ObjectProvider<ToolCallInterceptor> interceptors,
-            ObjectProvider<ToolInputPolicy> inputPolicy) {
-        return new ToolCallbackAuditPostProcessor(auditLogger, errorMapper, registry, interceptors, inputPolicy);
+            Environment environment) {
+        return new ToolCallbackAuditPostProcessor(auditLogger, errorMapper, registry, interceptors,
+                policyFor(environment));
     }
 
     /** Only the one-and-only {@code dev} profile may run a tool without a closed inputSchema. */
-    @Bean
-    ToolInputPolicy toolInputPolicy(Environment environment) {
+    static ToolInputPolicy policyFor(Environment environment) {
         boolean dev = List.of(environment.getActiveProfiles()).equals(List.of(PlatformConfigurationGuard.DEV_PROFILE));
         return dev ? ToolInputPolicy.DEV : ToolInputPolicy.STRICT;
     }
 
+    /** For inspection; the wrapper does not read it, see {@link ToolCallbackAuditPostProcessor}. */
     @Bean
-    @ConditionalOnMissingBean
+    ToolInputPolicy toolInputPolicy(Environment environment) {
+        return policyFor(environment);
+    }
+
+    @Bean
     RegisteredToolsCheck registeredToolsCheck(ObjectProvider<McpSyncServer> servers, ToolRiskRegistry registry) {
         return new RegisteredToolsCheck(servers, registry);
     }
 
     @Bean
     @ConditionalOnClass(ToolCallbackProvider.class)
-    @ConditionalOnMissingBean
     static ToolHintsPostProcessor toolHintsPostProcessor(ObjectProvider<ToolRiskRegistry> registry) {
         return new ToolHintsPostProcessor(registry);
     }

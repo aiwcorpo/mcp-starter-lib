@@ -24,7 +24,7 @@ public class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
     private final ObjectProvider<McpErrorMapper> errorMapper;
     private final ObjectProvider<ToolRiskRegistry> registry;
     private final ObjectProvider<ToolCallInterceptor> interceptors;
-    private final ObjectProvider<ToolInputPolicy> inputPolicy;
+    private final ToolInputPolicy inputPolicy;
 
     public ToolCallbackAuditPostProcessor(ObjectProvider<AuditLogger> auditLogger,
                                           ObjectProvider<McpErrorMapper> errorMapper,
@@ -33,13 +33,17 @@ public class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
         this(auditLogger, errorMapper, registry, interceptors, null);
     }
 
-    /** {@code inputPolicy} may be {@code null} or empty: then {@link ToolInputPolicy#STRICT} applies. */
+    /**
+     * {@code inputPolicy} is a value, not a bean lookup: the policy comes from the active profiles when the
+     * post-processor is created, so no bean of a server can change what the wrapper enforces. {@code null} means
+     * {@link ToolInputPolicy#STRICT}.
+     */
     public ToolCallbackAuditPostProcessor(ObjectProvider<AuditLogger> auditLogger,
                                           ObjectProvider<McpErrorMapper> errorMapper,
                                           ObjectProvider<ToolRiskRegistry> registry,
                                           ObjectProvider<ToolCallInterceptor> interceptors,
-                                          ObjectProvider<ToolInputPolicy> inputPolicy) {
-        this.inputPolicy = inputPolicy;
+                                          ToolInputPolicy inputPolicy) {
+        this.inputPolicy = inputPolicy == null ? ToolInputPolicy.STRICT : inputPolicy;
         this.auditLogger = auditLogger;
         this.errorMapper = errorMapper;
         this.registry = registry;
@@ -62,10 +66,8 @@ public class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
             return callback;
         }
         List<ToolCallInterceptor> chain = interceptors.orderedStream().toList();
-        ToolInputPolicy policy = inputPolicy == null ? ToolInputPolicy.STRICT
-                : inputPolicy.getIfAvailable(() -> ToolInputPolicy.STRICT);
         return new AuditingToolCallback(callback, auditLogger.getObject(), errorMapper.getObject(),
-                registry.getObject(), chain, policy);
+                registry.getObject(), chain, inputPolicy);
     }
 
     /** Marker + decorator; the marker keeps a second post-processing pass from double-wrapping. */

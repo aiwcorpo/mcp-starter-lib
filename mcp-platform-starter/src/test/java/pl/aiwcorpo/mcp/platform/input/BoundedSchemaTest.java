@@ -247,6 +247,60 @@ class BoundedSchemaTest {
     }
 
     @Test
+    void keysOfObjectsAreIdentifiersAndGoThroughTheSameHygiene() {
+        ToolInputValidator validator = handWritten("""
+                {"type":"object","properties":{
+                  "labels":{"type":"object","maxProperties":3,"propertyNames":{"maxLength":20},
+                            "additionalProperties":{"type":"string","maxLength":20}}},
+                 "additionalProperties":false}""", ToolInputPolicy.STRICT);
+
+        validator.validate("{\"labels\":{\"team\":\"a\",\"zone-1\":\"b\"}}");
+        for (String key : new String[] {"a\\u202eb", "a\\nb", "a\\u200bb", "a\\u001bb", "a\\u200db", "a\\ud800b"}) {
+            String json = "{\"labels\":{\"" + key + "\":\"v\"}}";
+            assertThatThrownBy(() -> validator.validate(json)).as(key).isInstanceOf(InvalidToolArgumentException.class)
+                    .hasMessageContaining("labels has a name with");
+        }
+    }
+
+    @Test
+    void anUndeclaredTopLevelNameWithHiddenCharactersIsRefusedWithoutBeingEchoed() {
+        ToolInputValidator validator = handWritten("{\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\","
+                + "\"maxLength\":5}},\"additionalProperties\":false}", ToolInputPolicy.STRICT);
+
+        assertThatThrownBy(() -> validator.validate("{\"x\\u202ey\":\"v\"}"))
+                .isInstanceOf(InvalidToolArgumentException.class)
+                .satisfies(ex -> assertThat(ex.getMessage()).doesNotContain("x").doesNotContain("\u202e"));
+    }
+
+    @Test
+    void eachPrefixElementIsJudgedByItsOwnRuleAndTheRestByItems() {
+        ToolInputValidator validator = handWritten("""
+                {"type":"object","properties":{
+                  "pair":{"type":"array","maxItems":3,
+                          "prefixItems":[{"type":"string","maxLength":20,"pattern":"^[^/]+$"}],
+                          "items":{"type":"string","maxLength":50}}},
+                 "additionalProperties":false}""", ToolInputPolicy.STRICT);
+
+        validator.validate("{\"pair\":[\"key\",\"free\\ntext\\tallowed here\"]}");
+        for (String bad : new String[] {
+                "{\"pair\":[\"a\\nb\"]}",
+                "{\"pair\":[\"a\\u200db\"]}",
+                "{\"pair\":[\"ok\",\"x\\u200by\"]}",
+                "{\"pair\":[\"ok\",\"" + "z".repeat(51) + "\"]}"}) {
+            assertThatThrownBy(() -> validator.validate(bad)).as(bad).isInstanceOf(InvalidToolArgumentException.class);
+        }
+    }
+
+    @Test
+    void anUnboundedPrefixElementStopsTheServer() {
+        String template = "{\"type\":\"object\",\"properties\":{\"l\":{\"type\":\"array\",\"maxItems\":2,"
+                + "\"prefixItems\":[%s],\"items\":false}},\"additionalProperties\":false}";
+        refused(template.formatted("{\"type\":\"string\"}"), "l[]: text needs maxLength");
+        refused(template.formatted("{\"type\":\"integer\",\"minimum\":0}"), "l[]: a number needs minimum and maximum");
+        handWritten(template.formatted("{\"type\":\"string\",\"maxLength\":5}"), ToolInputPolicy.STRICT);
+    }
+
+    @Test
     void invisibleAndDirectionCharactersAreRefusedInFreeTextToo() {
         ToolInputValidator validator = handWritten("{\"type\":\"object\",\"properties\":{\"body\":{\"type\":\"string\","
                 + "\"maxLength\":100}},\"additionalProperties\":false}", ToolInputPolicy.STRICT);

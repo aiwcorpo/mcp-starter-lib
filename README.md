@@ -246,19 +246,23 @@ każdego napisu w argumentach (także zagnieżdżonego, według reguły jego wł
 `TextHygiene`: znaki sterujące (C0, DEL, C1), U+2028/U+2029, niesparowane surogaty i nieznaki, bidi override i
 isolate, zero-width, U+2060..U+2064, BOM, znaki tagów i każdy inny `\p{Cf}` poza U+200C..U+200F to `invalid_argument`; `\t`, `\n`, `\r` są dozwolone w tekście
 swobodnym, a w wartości z `pattern` (klucz, ścieżka) odrzucane razem z każdym znakiem formatującym `\p{Cf}`.
-Narzędzie nadal powinno sprawdzać to, na czym polega, tymi samymi stałymi.
+Klucze obiektów (nazwy pól mapy lub obiektu) przechodzą tę samą higienę co wartości z `pattern`. Narzędzie nadal powinno
+sprawdzać to, na czym polega, tymi samymi stałymi.
 
 **Fail-closed.** Poza `dev` start zatrzymuje narzędzie bez `inputSchema`, ze schematem bez `type: object` i
 `additionalProperties: false` albo z poziomem bez limitu na dowolnej głębokości (`InputSchemaBounds`): obiekt otwarty,
 tekst bez `maxLength`, lista bez `maxItems` lub bez `items`, liczba bez `minimum` i `maximum`, wartość bez typu,
 `pattern` bez kotwic. W profilu `dev` (jedyny aktywny) jest ostrzeżenie `event=tool_schema_open` i egzekwowane jest to,
-co schemat mówi. Polityki nie da się wyłączyć beanem: `ToolInputPolicy` i `ToolCallbackAuditPostProcessor` nie są
-punktami rozszerzenia, a bean tych typów w serwerze zatrzymuje start poza `dev`. Własne zachowanie wokół narzędzi dodaje
+co schemat mówi. Polityki nie da się wyłączyć beanem: `ToolInputPolicy`, `ToolCallbackAuditPostProcessor`, `RegisteredToolsCheck`
+i `ToolHintsPostProcessor` nie są punktami rozszerzenia, a bean tych typów w serwerze zatrzymuje start poza `dev`
+(opakowanie bierze politykę z aktywnych profili, nie z beana, więc bean innego typu jej nie zmieni). Własne zachowanie wokół narzędzi dodaje
 się przez `ToolCallInterceptor`. Wzorce z `pattern` pisze serwer, więc unikaj wyrażeń o wykładniczym czasie dopasowania.
 
 **Treść z systemu.** Wynik narzędzia z tekstem z systemu (opis, komentarz, tytuł, wiersz logu) zawiera
-`pl.aiwcorpo.mcp.platform.text.UntrustedText` (`UntrustedText.plain(raw, maxLength)` albo `markdown(...)`: normalizuje
-tekst przez `TextHygiene.normalize` i tnie do limitu). Wynik musi być rekordem; starter publikuje wtedy `outputSchema`
+`pl.aiwcorpo.mcp.platform.text.UntrustedText` (`UntrustedText.plain(raw, maxLength)` albo `markdown(...)`: tnie do limitu;
+konstruktor normalizuje tekst przez `TextHygiene.normalize`, a usunięty ciąg niewidocznych znaków zastępuje jedną spacją,
+żeby nie skleić tokenów). Serwer, który usuwa z tekstu składnię (obrazy, linki, makra, wzmianki), normalizuje surowy tekst
+**przed** tym filtrem i dopiero potem woła fabrykę. Wynik musi być rekordem; starter publikuje wtedy `outputSchema`
 z definicją `UntrustedText` z kontraktów (wchodzi do `definitionHash`) i zwraca wynik także jako `structuredContent`.
 Pola dodatkowe systemu idą obok `UntrustedText` w rekordzie wyniku.
 

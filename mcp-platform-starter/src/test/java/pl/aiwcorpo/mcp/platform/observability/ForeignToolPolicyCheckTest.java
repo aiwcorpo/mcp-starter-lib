@@ -1,13 +1,23 @@
 package pl.aiwcorpo.mcp.platform.observability;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.DefaultToolDefinition;
+import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfigurations;
 import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
+import pl.aiwcorpo.mcp.platform.error.PlatformErrorAutoConfiguration;
+import pl.aiwcorpo.mcp.platform.guard.RegisteredToolsCheck;
+import pl.aiwcorpo.mcp.platform.guard.RiskClassifiedTool;
+import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
+import pl.aiwcorpo.mcp.platform.guard.ToolHintsPostProcessor;
 import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
 
 /** S-L3: a server bean cannot switch the bounded-schema rule or the audit wrapper off quietly. */
@@ -30,8 +40,34 @@ class ForeignToolPolicyCheckTest {
         }
     }
 
+    @Configuration
+    static class DisguisedPolicy {
+        @Bean
+        @Primary
+        Object relaxed() {
+            return ToolInputPolicy.DEV;
+        }
+    }
+
+    @Configuration
+    static class OwnChecks {
+        @Bean
+        RegisteredToolsCheck ownCheck() {
+            return new RegisteredToolsCheck(null, null);
+        }
+    }
+
+    @Configuration
+    static class OwnHints {
+        @Bean
+        static ToolHintsPostProcessor ownHints() {
+            return new ToolHintsPostProcessor(null);
+        }
+    }
+
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
-            .withConfiguration(AutoConfigurations.of(PlatformObservabilityAutoConfiguration.class))
+            .withConfiguration(AutoConfigurations.of(PlatformObservabilityAutoConfiguration.class,
+                    PlatformErrorAutoConfiguration.class))
             .withPropertyValues("aiwcorpo.mcp.platform.server-id=mcp-jira");
 
     @Test
@@ -60,5 +96,41 @@ class ForeignToolPolicyCheckTest {
             assertThat(context).hasNotFailed();
             assertThat(context.getBean(ToolInputPolicy.class)).isEqualTo(ToolInputPolicy.STRICT);
         });
+    }
+
+    @Test
+    void aServerCheckOrHintsBeanStopsTheServerOutsideDev() {
+        runner.withUserConfiguration(OwnChecks.class).run(context -> assertThat(context).hasFailed()
+                .getFailure().hasMessageContaining("ownCheck"));
+        runner.withUserConfiguration(OwnHints.class).run(context -> assertThat(context).hasFailed()
+                .getFailure().hasMessageContaining("ownHints"));
+    }
+
+    @Test
+    void aPolicyBeanTheCheckCannotSeeStillDoesNotRelaxTheWrapper() {
+        runner.withUserConfiguration(DisguisedPolicy.class).run(context -> {
+            assertThat(context).hasNotFailed();
+            ToolCallbackAuditPostProcessor wrapper = context.getBean(ToolCallbackAuditPostProcessor.class);
+            assertThatThrownBy(() -> wrapper.decorate(new OpenTool()))
+                    .isInstanceOf(IllegalStateException.class).hasMessageContaining("open_tool");
+        });
+    }
+
+    private record OpenTool() implements ToolCallback, RiskClassifiedTool {
+        @Override
+        public ToolDefinition getToolDefinition() {
+            return DefaultToolDefinition.builder().name("open_tool").description("d")
+                    .inputSchema("{\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\"}}}").build();
+        }
+
+        @Override
+        public String call(String toolInput) {
+            return "ok";
+        }
+
+        @Override
+        public RiskLevel riskLevel() {
+            return RiskLevel.READ_ONLY;
+        }
     }
 }

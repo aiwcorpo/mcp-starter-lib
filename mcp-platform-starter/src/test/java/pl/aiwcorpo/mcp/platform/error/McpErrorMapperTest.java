@@ -191,4 +191,16 @@ class McpErrorMapperTest {
         assertThat(described).doesNotContain("backend-body-marker-5be1d0").contains("message not logged");
         assertThat(mapper.map(client).code()).isEqualTo("internal_error");
     }
+
+    @Test
+    void theLogLineIsOneLineWithoutHiddenCharactersOrUrlQueries() {
+        RuntimeException failure = new IllegalStateException("bad\u2028{\"forged\":1}\u001b[2J\u202e\nline2\tx "
+                + "GET http://jira.internal/rest/api/2/search?jql=project%20%3D%20HR&fields=summary failed");
+
+        String described = McpErrorMapper.describeChain(failure);
+
+        assertThat(described).doesNotContain("\n", "\r", "\t", "\u2028", "\u001b", "\u202e", "\"")
+                .doesNotContain("jql=", "project%20", "fields=summary")
+                .contains("http://jira.internal/rest/api/2/search?<query not logged>", "line2 x");
+    }
 }

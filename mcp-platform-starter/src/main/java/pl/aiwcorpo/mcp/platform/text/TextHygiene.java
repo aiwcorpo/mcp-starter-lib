@@ -43,10 +43,18 @@ public final class TextHygiene {
 
     /**
      * Text from a system, made safe to show: control characters, unpaired surrogates, noncharacters and every
-     * {@code \p{Cf}} character are dropped (a zero-width joiner in an emoji sequence goes too: the sequence
-     * degrades to separate emoji, which is the cost of not letting invisible characters through); U+2028, U+2029
-     * and U+0085 become a newline, and a carriage return becomes a newline (CRLF one newline). Tab and newline
-     * stay. {@code null} gives the empty string.
+     * {@code \p{Cf}} character are dropped; U+2028, U+2029 and U+0085 become a newline, and a carriage return
+     * becomes a newline (CRLF one newline). Tab and newline stay. {@code null} gives the empty string.
+     *
+     * <p>A dropped run is replaced by one space, not by nothing: with nothing, {@code "@a<ZWSP>ll"} becomes
+     * {@code "@all"} and {@code "!<ZWSP>https://host/x.png!"} becomes image syntax, that is, text a server's own
+     * filter let through because it did not recognise it comes out as the very token it looks for. The space
+     * is left out at the start and end of the text and next to whitespace. A zero-width joiner inside an emoji
+     * sequence therefore splits it into separate emoji, and a ZWNJ in Persian becomes a space; that is the price
+     * of not letting invisible characters through.
+     *
+     * <p>Run this on the raw text <em>before</em> any server-side filtering (removing links, images, macros,
+     * mentions), not after it: the filter has to see the text the client will see.
      */
     public static String normalize(String text) {
         if (text == null) {
@@ -54,22 +62,31 @@ public final class TextHygiene {
         }
         StringBuilder out = new StringBuilder(text.length());
         int[] points = text.codePoints().toArray();
+        boolean dropped = false;
         for (int i = 0; i < points.length; i++) {
             int point = points[i];
+            int kept;
             if (point == '\r') {
                 if (i + 1 < points.length && points[i + 1] == '\n') {
                     continue;
                 }
-                out.append('\n');
+                kept = '\n';
             } else if (point == 0x2028 || point == 0x2029 || point == 0x85) {
-                out.append('\n');
+                kept = '\n';
             } else if (point == '\n' || point == '\t') {
-                out.append((char) point);
+                kept = point;
             } else if (isControl(point) || isInvalid(point) || Character.getType(point) == Character.FORMAT) {
+                dropped = true;
                 continue;
             } else {
-                out.appendCodePoint(point);
+                kept = point;
             }
+            if (dropped && !out.isEmpty() && !Character.isWhitespace(out.charAt(out.length() - 1))
+                    && !Character.isWhitespace(kept)) {
+                out.append(' ');
+            }
+            dropped = false;
+            out.appendCodePoint(kept);
         }
         return out.toString();
     }

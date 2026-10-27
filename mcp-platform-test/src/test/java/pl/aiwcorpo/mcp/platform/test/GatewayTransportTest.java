@@ -122,7 +122,7 @@ class GatewayTransportTest {
         HttpResponse<String> response;
         try {
             response = raw.post(RawMcp.toolCall("probe_caller"), Map.of(), null);
-            assertThat(lines.list).anySatisfy(line -> assertThat(line.getFormattedMessage())
+            assertThat(CapturedLogs.snapshot(lines)).anySatisfy(line -> assertThat(line.getFormattedMessage())
                     .contains("\"event\":\"authentication\"", "\"reason\":\"missing_token\"",
                             "\"outcome\":\"denied\"", "\"errorCode\":\"unauthenticated\"")
                     .doesNotContain("\"tool\""));

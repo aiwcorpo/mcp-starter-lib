@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
+import pl.aiwcorpo.mcp.platform.CapturedLogs;
 import pl.aiwcorpo.mcp.platform.ContractSchemas;
 import pl.aiwcorpo.mcp.platform.auth.CallerContext;
 import pl.aiwcorpo.mcp.platform.auth.TestCallers;
@@ -32,8 +33,8 @@ class AuditLoggerTest {
     }
 
     private String onlyLine() {
-        assertThat(lines.list).hasSize(1);
-        String line = lines.list.getFirst().getFormattedMessage();
+        assertThat(CapturedLogs.snapshot(lines)).hasSize(1);
+        String line = CapturedLogs.snapshot(lines).getFirst().getFormattedMessage();
         assertThat(ContractSchemas.violations(ContractSchemas.AUDIT_EVENT, line)).as(line).isEmpty();
         return line;
     }
