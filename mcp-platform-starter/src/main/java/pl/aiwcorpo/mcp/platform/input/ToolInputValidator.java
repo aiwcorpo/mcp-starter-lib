@@ -51,7 +51,7 @@ public final class ToolInputValidator {
     }
 
     /**
-     * @throws IllegalStateException when the schema cannot be used, or (with {@link ToolInputPolicy#requireClosedSchema})
+     * @throws IllegalStateException when the schema cannot be used, or (with {@link ToolInputPolicy#requireBoundedSchema})
      *                               is missing or not closed
      */
     public static ToolInputValidator compile(ToolDefinition tool, ToolInputPolicy policy) {
@@ -71,19 +71,33 @@ public final class ToolInputValidator {
         }
         boolean closed = "object".equals(root.path("type").asString(null))
                 && root.path("additionalProperties").isBoolean() && !root.path("additionalProperties").asBoolean(true);
-        if (closed) {
-            return compiled(name, root);
+        if (!closed) {
+            // Outside dev open() throws; in dev the schema is still enforced as far as it goes.
+            open(name, "has an inputSchema without type: object and additionalProperties: false", policy);
         }
-        // Outside dev open() throws; in dev the schema is still enforced as far as it goes.
-        open(name, "has an inputSchema without type: object and additionalProperties: false", policy);
+        List<String> unbounded = InputSchemaBounds.problems(root);
+        if (!unbounded.isEmpty() && closed) {
+            unbounded(name, unbounded, policy);
+        }
         return compiled(name, root);
+    }
+
+    private static void unbounded(String tool, List<String> problems, ToolInputPolicy policy) {
+        String message = "Tool '" + tool + "' has an inputSchema with unbounded levels: " + String.join("; ", problems)
+                + ". Every level needs a limit (@ArgumentLimits on arguments and on record components, "
+                + "SchemaLimitedToolCallbacks.of(...) publishes them); maps cannot be bounded, use a record "
+                + "or a list of records.";
+        if (policy.requireBoundedSchema()) {
+            throw new IllegalStateException(message);
+        }
+        LOG.warn("event=tool_schema_open tool=\"{}\" detail=\"{}\" profile=dev", tool, message.replace('"', '\''));
     }
 
     private static ToolInputValidator open(String tool, String what, ToolInputPolicy policy) {
         String message = "Tool '" + tool + "' " + what + ": arguments the schema does not declare would reach the "
                 + "tool. Declare the arguments (@ToolParam) and publish additionalProperties: false "
                 + "(SchemaLimitedToolCallbacks.of(...) adds it).";
-        if (policy.requireClosedSchema()) {
+        if (policy.requireBoundedSchema()) {
             throw new IllegalStateException(message);
         }
         LOG.warn("event=tool_schema_open tool=\"{}\" detail=\"{}\" profile=dev", tool, message);
@@ -161,7 +175,13 @@ public final class ToolInputValidator {
         } catch (JacksonException ex) {
             throw new InvalidToolArgumentException("The arguments are not a valid JSON object.");
         }
-        List<Error> errors = schema.validate(arguments);
+        List<Error> errors;
+        try {
+            errors = schema.validate(arguments);
+        } catch (JacksonException ex) {
+            // The schema library converts numbers to long for minimum/maximum and throws on 1e30.
+            throw new InvalidToolArgumentException("Invalid arguments: a number is out of range.");
+        }
         List<String> controls = new ArrayList<>();
         if (arguments.isObject()) {
             arguments.propertyNames().forEach(name -> controlCharacters(arguments.get(name), name, controls));

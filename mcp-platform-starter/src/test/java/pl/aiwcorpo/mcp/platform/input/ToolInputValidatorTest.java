@@ -105,7 +105,7 @@ class ToolInputValidatorTest {
     @Test
     void controlCharactersAreRefusedInTextAndLineBreaksOnlyWhereThereIsNoFormat() {
         ToolInputValidator free = ToolInputValidator.compile(tool(
-                "{\"type\":\"object\",\"properties\":{\"body\":{\"type\":\"string\"},\"key\":{\"type\":\"string\","
+                "{\"type\":\"object\",\"properties\":{\"body\":{\"type\":\"string\",\"maxLength\":100},\"key\":{\"type\":\"string\",\"maxLength\":100,"
                         + "\"pattern\":\"^[\\\\s\\\\S]+$\"}},\"additionalProperties\":false}"), ToolInputPolicy.STRICT);
 
         free.validate("{\"body\":\"line one\\nline two\\ttabbed\"}");

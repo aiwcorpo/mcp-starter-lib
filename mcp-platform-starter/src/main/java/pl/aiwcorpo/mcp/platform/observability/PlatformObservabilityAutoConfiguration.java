@@ -19,8 +19,9 @@ import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
 
 /**
- * Audit (C8), request id, tool registry and the decorator applied to every tool. All beans are
- * {@code @ConditionalOnMissingBean} so a server may override them.
+ * Audit (C8), request id, tool registry and the decorator applied to every tool. A server may override the audit
+ * logger, the registry and the error mapper; the tool decorator and the input policy are not replaceable
+ * ({@link ForeignToolPolicyCheck}).
  */
 @AutoConfiguration
 @EnableConfigurationProperties(McpPlatformProperties.class)
@@ -46,8 +47,13 @@ public class PlatformObservabilityAutoConfiguration {
 
     /** Static so that registering a post-processor does not initialize this configuration early. */
     @Bean
+    static ForeignToolPolicyCheck foreignToolPolicyCheck() {
+        return new ForeignToolPolicyCheck();
+    }
+
+    /** Static so that registering a post-processor does not initialize this configuration early. */
+    @Bean
     @ConditionalOnClass(ToolCallbackProvider.class)
-    @ConditionalOnMissingBean
     static ToolCallbackAuditPostProcessor toolCallbackAuditPostProcessor(
             ObjectProvider<AuditLogger> auditLogger, ObjectProvider<McpErrorMapper> errorMapper,
             ObjectProvider<ToolRiskRegistry> registry, ObjectProvider<ToolCallInterceptor> interceptors,
@@ -57,7 +63,6 @@ public class PlatformObservabilityAutoConfiguration {
 
     /** Only the one-and-only {@code dev} profile may run a tool without a closed inputSchema. */
     @Bean
-    @ConditionalOnMissingBean
     ToolInputPolicy toolInputPolicy(Environment environment) {
         boolean dev = List.of(environment.getActiveProfiles()).equals(List.of(PlatformConfigurationGuard.DEV_PROFILE));
         return dev ? ToolInputPolicy.DEV : ToolInputPolicy.STRICT;

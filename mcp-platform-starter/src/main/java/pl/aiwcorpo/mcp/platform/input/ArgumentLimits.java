@@ -13,13 +13,20 @@ import java.lang.annotation.Target;
  * should still validate what it relies on, with the same constants.
  *
  * <ul>
- *   <li>text ({@code String}): {@link #maxLength()} is required (or comes from {@link #contractPattern()});
- *       {@link #minLength()} and {@link #pattern()} are optional;</li>
- *   <li>integers: {@link #minimum()} and {@link #maximum()}.</li>
+ *   <li>text ({@code String}, dates and the like that Spring AI describes as {@code string}):
+ *       {@link #maxLength()} is required (or comes from {@link #contractPattern()}); {@link #minLength()} and
+ *       {@link #pattern()} are optional;</li>
+ *   <li>integers and decimals: {@link #minimum()} and {@link #maximum()} are both required;</li>
+ *   <li>lists and arrays: {@link #maxItems()} is required; the other limits describe the elements (scalars);
+ *       a list of records has its limits on the record components;</li>
+ *   <li>records (a filter object): no limits on the parameter itself, they go on the record components, which
+ *       take this annotation too. A component that may be absent is marked {@code @Nullable} (Spring AI then
+ *       leaves it out of {@code required});</li>
+ *   <li>{@code Map} cannot be bounded and stops the server: use a record or a list of records.</li>
  * </ul>
  */
 @Documented
-@Target(ElementType.PARAMETER)
+@Target({ElementType.PARAMETER, ElementType.RECORD_COMPONENT})
 @Retention(RetentionPolicy.RUNTIME)
 public @interface ArgumentLimits {
 
@@ -42,6 +49,12 @@ public @interface ArgumentLimits {
      * with {@link #pattern()}. An unknown name, or a definition without a pattern, stops the server.
      */
     String contractPattern() default "";
+
+    /** JSON Schema {@code maxItems} of a list or array; -1 = none, which {@link SchemaLimitedToolCallbacks} refuses. */
+    int maxItems() default -1;
+
+    /** JSON Schema {@code minItems} of a list or array; -1 = none. */
+    int minItems() default -1;
 
     /** JSON Schema {@code minimum}; {@link Long#MIN_VALUE} = none. */
     long minimum() default Long.MIN_VALUE;

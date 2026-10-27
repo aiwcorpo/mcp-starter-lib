@@ -48,7 +48,7 @@ class SchemaLimitedToolCallbacksTest {
     static class TextLimitOnInteger {
         @Tool(name = "t", description = "d")
         @ToolRisk(RiskLevel.READ_ONLY)
-        public String t(@ArgumentLimits(maxLength = 5) Long size) {
+        public String t(@ArgumentLimits(maxLength = 5, minimum = 1, maximum = 9) Long size) {
             return "";
         }
     }

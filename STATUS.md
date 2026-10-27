@@ -30,6 +30,21 @@ poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i
    wołane z `InternalJwtFilter` przy każdym odrzuceniu (401 z `reason` = kod odrzucenia, 503 z `errorCode`
    `upstream_unavailable`); bez `sub`, `username`, `client`, `tool`, bez treści tokenu. Testy: `InternalJwtAuditTest`,
    `GatewayTransportTest.withoutJwt401` (zdarzenie w audycie po żądaniu bez JWT). Razem 255 testów (starter 197).
+3. S-M1, S-L2, S-L3 (przegląd alpha-6): limit na każdym poziomie `inputSchema`, poza `dev` brak limitu zatrzymuje
+   start. `InputSchemaBounds` przechodzi schemat rekurencyjnie (właściwości, `items`, `prefixItems`, `$ref`,
+   `allOf/anyOf/oneOf`, głębokość do 8): obiekt wymaga `additionalProperties: false` (mapa typowana tylko z
+   `maxProperties`, `propertyNames.maxLength` i ograniczoną wartością), tekst `maxLength`, lista `maxItems` i
+   `items`, liczba `minimum` i `maximum`, brak typu odrzucany; `pattern` musi zaczynać się od `^`, kończyć na `$`
+   i nie ma mieć `|` poza grupą (S-L2: `[0-9]+` i `^a|b$` zatrzymują start). `SchemaLimitedToolCallbacks` publikuje
+   limity z `@ArgumentLimits` także dla komponentów rekordów (zagnieżdżone obiekty zamknięte; opcjonalne pole
+   oznacza się `@Nullable`, Spring AI nie daje wtedy `required`), elementów list (`maxItems`, limity elementów) i
+   liczb (`minimum` i `maximum` obowiązkowe); `Map`, obiekt niebędący rekordem i lista list zatrzymują start.
+   `ToolInputPolicy.requireClosedSchema` zmienione na `requireBoundedSchema`. S-L3: `ToolInputPolicy` i
+   `ToolCallbackAuditPostProcessor` nie są już `@ConditionalOnMissingBean`; `ForeignToolPolicyCheck` zatrzymuje
+   start poza `dev`, gdy serwer zadeklaruje własny bean któregoś z tych typów. Poprawka przy okazji: liczba
+   spoza zakresu `long` (`1e30`) powodowała wyjątek biblioteki schematów i `internal_error` z ERROR w logu; teraz
+   `invalid_argument`. Testy: `BoundedSchemaTest` (8), `ForeignToolPolicyCheckTest` (4), zmienione testy schematów.
+   Razem 267 testów (starter 209, mcp-platform-test 58).
 
 3.0.0-alpha-6: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-6`,
 tag `v3.0.0-alpha-6`. API bez usunięć; zgłoszenia pięciu serwerów ws-04 i template'u. Instrukcja dla serwerów

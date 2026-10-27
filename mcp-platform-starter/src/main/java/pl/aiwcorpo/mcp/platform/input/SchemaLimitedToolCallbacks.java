@@ -2,10 +2,13 @@ package pl.aiwcorpo.mcp.platform.input;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Parameter;
+import java.lang.reflect.ParameterizedType;
+import java.lang.reflect.RecordComponent;
+import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
@@ -33,14 +36,17 @@ import tools.jackson.databind.node.ObjectNode;
  * }
  * }</pre>
  *
- * Fail-closed at startup: a text parameter without {@code maxLength}, limits on a parameter of another type or
- * a parameter missing from the generated schema (compile with {@code -parameters}) stop the server.
+ * Fail-closed at startup, at every depth (record components, list elements): a text value without
+ * {@code maxLength}, a list without {@code maxItems}, a number without {@code minimum} and {@code maximum}, a
+ * {@code Map}, an object that is not a record, limits of the wrong kind, or a parameter missing from the
+ * generated schema (compile with {@code -parameters}) stop the server. An optional record component is marked
+ * {@code @Nullable}; Spring AI then leaves it out of {@code required}.
  */
 public final class SchemaLimitedToolCallbacks {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final JsonNode CONTRACT_DEFINITIONS = contractDefinitions();
-    private static final Set<String> INTEGER_TYPES = Set.of("integer");
+    private static final int MAX_DEPTH = 6;
 
     private SchemaLimitedToolCallbacks() {
     }
@@ -85,32 +91,135 @@ public final class SchemaLimitedToolCallbacks {
                 throw new IllegalStateException("@Tool " + where + ": no property in the generated schema "
                         + "(compile with -parameters)");
             }
-            ArgumentLimits annotation = parameter.getAnnotation(ArgumentLimits.class);
-            String type = property.path("type").asString(null);
-            if ("string".equals(type) && !property.has("enum")) {
-                Limits limits = textLimits(annotation, where);
-                property.put("maxLength", limits.maxLength());
-                if (limits.minLength() >= 0) {
-                    property.put("minLength", limits.minLength());
-                }
-                if (limits.pattern() != null) {
-                    property.put("pattern", limits.pattern());
-                }
-            } else if (annotation != null) {
-                if (!INTEGER_TYPES.contains(type) || annotation.minLength() >= 0 || annotation.maxLength() >= 0
-                        || !annotation.pattern().isEmpty() || !annotation.contractPattern().isEmpty()) {
-                    throw new IllegalStateException("@ArgumentLimits on " + where + ": text limits only on text "
-                            + "arguments, minimum/maximum only on integers (schema type: " + type + ")");
-                }
-                if (annotation.minimum() != Long.MIN_VALUE) {
-                    property.put("minimum", annotation.minimum());
-                }
-                if (annotation.maximum() != Long.MAX_VALUE) {
-                    property.put("maximum", annotation.maximum());
+            limit(property, parameter.getParameterizedType(), parameter.getAnnotation(ArgumentLimits.class), where, 0);
+        }
+        return JSON.writeValueAsString(schema);
+    }
+
+    /** Publishes the limits for one value of {@code javaType}, recursing into records and list elements. */
+    private static void limit(ObjectNode property, Type javaType, ArgumentLimits limits, String where, int depth) {
+        if (depth > MAX_DEPTH) {
+            throw new IllegalStateException("@Tool " + where + ": nested deeper than " + MAX_DEPTH + " levels");
+        }
+        Class<?> raw = rawClass(javaType);
+        if (Map.class.isAssignableFrom(raw)) {
+            throw new IllegalStateException("@Tool " + where + ": a Map has no bounded schema (any number of "
+                    + "entries, any keys); use a record with named fields or a list of records");
+        }
+        String type = schemaType(property);
+        if (property.has("enum")) {
+            noLimits(limits, where, "an enum");
+        } else if ("string".equals(type)) {
+            Limits text = textLimits(limits, where);
+            property.put("maxLength", text.maxLength());
+            if (text.minLength() >= 0) {
+                property.put("minLength", text.minLength());
+            }
+            if (text.pattern() != null) {
+                property.put("pattern", text.pattern());
+            }
+        } else if ("integer".equals(type) || "number".equals(type)) {
+            numberLimits(limits, where, type, property);
+        } else if ("boolean".equals(type)) {
+            noLimits(limits, where, "a boolean");
+        } else if ("array".equals(type)) {
+            listLimits(property, javaType, raw, limits, where, depth);
+        } else if ("object".equals(type)) {
+            recordLimits(property, raw, limits, where, depth);
+        } else {
+            throw new IllegalStateException("@Tool " + where + ": type " + javaType.getTypeName() + " has no "
+                    + "bounded JSON schema; use String, numbers, booleans, enums, records and lists of them");
+        }
+    }
+
+    private static void listLimits(ObjectNode property, Type javaType, Class<?> raw, ArgumentLimits limits,
+                                   String where, int depth) {
+        if (limits == null || limits.maxItems() < 0) {
+            throw new IllegalStateException("@Tool " + where + ": a list needs @ArgumentLimits(maxItems = ...), "
+                    + "otherwise the model may send any number of elements");
+        }
+        property.put("maxItems", limits.maxItems());
+        if (limits.minItems() >= 0) {
+            property.put("minItems", limits.minItems());
+        }
+        Type element = raw.isArray() ? raw.getComponentType()
+                : javaType instanceof ParameterizedType parameterized ? parameterized.getActualTypeArguments()[0] : null;
+        if (element == null || !(property.path("items") instanceof ObjectNode items)) {
+            throw new IllegalStateException("@Tool " + where + ": the element type of the list is unknown");
+        }
+        if ("array".equals(schemaType(items))) {
+            throw new IllegalStateException("@Tool " + where + ": a list of lists has no bounded schema");
+        }
+        limit(items, element, "object".equals(schemaType(items)) ? null : limits, where + "[]", depth + 1);
+    }
+
+    private static void recordLimits(ObjectNode property, Class<?> raw, ArgumentLimits limits, String where, int depth) {
+        if (!raw.isRecord()) {
+            throw new IllegalStateException("@Tool " + where + ": an object argument must be a record (type "
+                    + raw.getName() + "), so that every field can carry its limits");
+        }
+        noLimits(limits, where, "a record (put the limits on its components)");
+        property.put("additionalProperties", false);
+        for (RecordComponent component : raw.getRecordComponents()) {
+            String name = component.getName();
+            if (!(property.path("properties").path(name) instanceof ObjectNode field)) {
+                throw new IllegalStateException("@Tool " + where + "." + name + ": no property in the generated schema");
+            }
+            limit(field, component.getGenericType(), component.getAnnotation(ArgumentLimits.class),
+                    where + "." + name, depth + 1);
+        }
+    }
+
+    private static void numberLimits(ArgumentLimits limits, String where, String type, ObjectNode property) {
+        if (limits == null || limits.minimum() == Long.MIN_VALUE || limits.maximum() == Long.MAX_VALUE) {
+            throw new IllegalStateException("@Tool " + where + ": a " + type + " argument needs "
+                    + "@ArgumentLimits(minimum = ..., maximum = ...), otherwise the model may send any value");
+        }
+        if (limits.minLength() >= 0 || limits.maxLength() >= 0 || !limits.pattern().isEmpty()
+                || !limits.contractPattern().isEmpty()) {
+            throw new IllegalStateException("@ArgumentLimits on " + where + ": text limits only on text "
+                    + "arguments, minimum/maximum only on numbers (schema type: " + type + ")");
+        }
+        property.put("minimum", limits.minimum());
+        property.put("maximum", limits.maximum());
+    }
+
+    private static void noLimits(ArgumentLimits limits, String where, String what) {
+        if (limits == null) {
+            return;
+        }
+        boolean any = limits.minLength() >= 0 || limits.maxLength() >= 0 || !limits.pattern().isEmpty()
+                || !limits.contractPattern().isEmpty() || limits.minimum() != Long.MIN_VALUE
+                || limits.maximum() != Long.MAX_VALUE || limits.maxItems() >= 0 || limits.minItems() >= 0;
+        if (any) {
+            throw new IllegalStateException("@ArgumentLimits on " + where + ": " + what + " takes no limits here");
+        }
+    }
+
+    /** The JSON schema type, ignoring {@code null} in a union such as {@code ["string", "null"]} (Optional). */
+    private static String schemaType(JsonNode property) {
+        JsonNode type = property.path("type");
+        if (type.isString()) {
+            return type.asString();
+        }
+        if (type.isArray()) {
+            for (JsonNode candidate : type) {
+                if (!"null".equals(candidate.asString())) {
+                    return candidate.asString();
                 }
             }
         }
-        return JSON.writeValueAsString(schema);
+        return null;
+    }
+
+    private static Class<?> rawClass(Type type) {
+        if (type instanceof Class<?> clazz) {
+            return clazz;
+        }
+        if (type instanceof ParameterizedType parameterized && parameterized.getRawType() instanceof Class<?> clazz) {
+            return clazz;
+        }
+        return Object.class;
     }
 
     private record Limits(int minLength, int maxLength, String pattern) {
