@@ -21,7 +21,8 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
 
-3.0.0-alpha-8: w toku (praca na `3.0.0-alpha-8-SNAPSHOT`; alpha-7 w `~/.m2` nietknięte). Instrukcja dla serwerów:
+3.0.0-alpha-8: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-8`, tag
+`v3.0.0-alpha-8` (praca na `3.0.0-alpha-8-SNAPSHOT`, alpha-7 w `~/.m2` nietknięte). Instrukcja dla serwerów:
 `MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-8". Kamienie:
 1. Przegląd Opus alpha-7, A7-M2 i LOW. `TextHygiene.normalize` zastępuje usunięty ciąg niewidocznych znaków jedną spacją
    (pomijaną na brzegach i obok białych znaków), więc `@a<ZWSP>ll` i `!<ZWSP>https` nie sklejają się w token; konstruktor
@@ -103,6 +104,38 @@ sekcja "Zmiany w 3.0.0-alpha-7". Kamienie
    `ToolFailureLoggingTest`. Kombinatory (`allOf`, `anyOf`, `oneOf`, `not`, `if`) w `inputSchema` są odrzucane poza `dev`
    (żaden serwer ich nie używa, Spring AI ich nie generuje). Razem 287 testów (starter 227, mcp-platform-test 60).
 
+Znalezisko -> status (przegląd Opus alpha-7 i smoke Haiku alpha-7):
+
+| Znalezisko | Status | Gdzie |
+| --- | --- | --- |
+| A7-M1 wynik z `null` w komponencie bez `@Nullable`: SDK, nie C10, audyt `ok` | naprawione: wynik sprawdzany względem `outputSchema` w opakowaniu przed audytem, C10 `internal_error` + `outcome=error` | `ToolResultValidator`, `OutputSchemaTest`, `ToolResultValidatorTest` |
+| A7-M2 `normalize` skleja tokeny po usunięciu Cf | naprawione: usunięty ciąg zastępuje jedna spacja; MIGRATION: normalizacja przed filtrem serwera | `TextHygieneTest` (sklejanie, brzegi, idempotencja) |
+| A7-L1 klucze map bez `TextHygiene` | naprawione | `BoundedSchemaTest.keysOfObjects...` |
+| A7-L2 `prefixItems`: treść bez testu, reguła wg `items` | naprawione: element `i` wg `prefixItems[i]`; test startu z nieograniczonym prefiksem | `BoundedSchemaTest.eachPrefixElement...`, `anUnboundedPrefixElement...` |
+| A7-L3 heurystyka `allowsWhitespaceControls` i kotwice składniowe | otwarte, świadomie (niżej) | - |
+| A7-L4 niewidoczne znaki poza `\p{Cf}` | otwarte, świadomie (niżej) | propozycja CC 5 |
+| A7-L5 kanoniczny konstruktor `UntrustedText` przyjmuje surowy tekst | naprawione: konstruktor normalizuje (także Jackson) | `TextHygieneTest.theConstructorNormalizesToo` |
+| A7-L6 `ForeignToolPolicyCheck` i pozostałe `@ConditionalOnMissingBean` | naprawione: polityka z profili, nie z beana; `RegisteredToolsCheck` i `ToolHintsPostProcessor` bez `@ConditionalOnMissingBean` i objęte kontrolą | `ForeignToolPolicyCheckTest` |
+| A7-L7 400/413 przed JWT bez `authentication` i bez 401 | otwarte, świadomie (niżej) | - |
+| A7-L8 `describeChain` czyści tylko `"`, `\n`, `\r` | naprawione: `TextHygiene.normalize`, jedna linia, bez zapytania w URL | `McpErrorMapperTest` |
+| A7-L9 niestabilny `trailingLineBreaksDoNotSatisfyTheAnchoredPattern` | naprawione w teście: `CapturedLogs.snapshot` (kopia pod monitorem appendera) we wszystkich 7 klasach czytających `ListAppender` | `CapturedLogs` w obu modułach |
+| Smoke alpha-7: README nie pozwala uruchomić serwera lokalnie | naprawione: sekcja "Uruchomienie lokalne", nadpisania `dev`; sprawdzone według sekcji | `PlatformConfigurationGuardTest`, ręcznie port 18600 |
+| Literówka "a integer" w komunikacie limitu | naprawione | `SchemaLimitedToolCallbacks.numberLimits` |
+
+Otwarte z uzasadnieniem:
+- A7-L3: wzorce pisze autor serwera, więc to obrona przed pomyłką, nie przed atakiem; zaostrzenie (reguła Cf zawsze ścisła
+  przy `pattern`, próbka `"a\nb"` skompilowanym regexem, odrzucanie `(?x)`, `\Q`) zmienia zachowanie istniejących wzorców
+  i wymaga przejrzenia wzorców wszystkich pięciu serwerów; plan na beta, razem z `BackendRestClient` (W2-L1).
+- A7-L4: lista dodatkowych niewidocznych znaków (selektory wariantu, CGJ, wypełniacze Hangul, U+2800) ma być wspólna z
+  gateway'em (wektory `text-hygiene`, propozycje CC 2 i 5); jednostronne rozszerzenie rozjechałoby gateway i serwery, a
+  selektory wariantu są częścią zwykłych emoji (U+FE0F), więc reguła wymaga kontekstu, nie samej listy.
+- A7-L7: 400/413 przed weryfikacją JWT osiągalne tylko z certyfikatem gateway'a (mTLS); weryfikacja podpisu przed
+  buforowaniem ciała nie jest możliwa bez ciała (wiązanie `tool` z `params.name`), a samo zdarzenie `authentication` dla
+  400/413 z `reason=malformed_request` wymaga decyzji, czy to 401 (niezmiennik 3) czy 400; do rozstrzygnięcia z ws-05.
+
+Znane ograniczenia alpha-8: `TextHygiene.normalize` rozbija sekwencje emoji z ZWJ na osobne emoji rozdzielone spacją i
+zamienia ZWNJ w tekście perskim na spację (koszt braku sklejania); `pattern` jest wykonywany regexem JDK.
+
 Znalezisko -> status (przegląd alpha-6 i przeglądy automatyczne commitów alpha-7):
 
 | Znalezisko | Status | Gdzie |
@@ -140,6 +173,10 @@ przebiegach zielony: do uodpornienia w teście, nie w kodzie startera; `pattern`
 4. C8 (patch): lista znanych `reason` dla `authentication` uzupełniona o `client_certificate_rejected`,
    `jwks_unavailable`, `replay_store_unavailable`; przy kodach `jwks_unavailable` i `replay_store_unavailable`
    `errorCode` to `upstream_unavailable` (503), nie `unauthenticated`.
+5. C10/C8 (uzupełnienie 2): w `test-vectors/text-hygiene/` wektor normalizacji tekstu z systemu: usunięty ciąg znaków
+   niewidocznych zastępuje jedna spacja (`@a<ZWSP>ll` -> `@a ll`, `!<ZWSP>https://h/x.png!` -> `! https://h/x.png!`), pomijana
+   na brzegach i obok białych znaków; do wspólnej listy dopisać znaki niewidoczne poza `\p{Cf}` (A7-L4): selektory wariantu
+   U+FE00..FE0F i U+E0100..E01EF poza pojedynczym U+FE0F po emoji, U+034F, U+115F, U+1160, U+3164, U+FFA0, U+2800 w wartości z `pattern`.
 
 3.0.0-alpha-6: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-6`,
 tag `v3.0.0-alpha-6`. API bez usunięć; zgłoszenia pięciu serwerów ws-04 i template'u. Instrukcja dla serwerów
