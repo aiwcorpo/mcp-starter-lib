@@ -33,6 +33,13 @@ poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i
    L8: `describeChain` przez `TextHygiene.normalize`, jedna linia, bez zapytania w URL. L9: `CapturedLogs.snapshot` (kopia pod
    monitorem appendera) we wszystkich testach czytających `ListAppender`. Literówka "a integer" w komunikacie limitu.
    298 testów (starter 238, mcp-platform-test 60).
+2. A7-M1: wynik z `null` w komponencie bez `@Nullable`. Wybrany kierunek: walidacja wyniku w opakowaniu (`ToolResultValidator`
+   w `AuditingToolCallback`, przed audytem) zamiast zmiany schematu na domyślnie nullowalny: zgodność ze schematem
+   publikowanym w `definitionHash` zostaje ścisła (pole bez `@Nullable` jest `required`), a rozjazd typ-serializacja
+   (null, `@JsonProperty`, `@JsonIgnore`) kończy się C10 `internal_error` i audytem `error`, z ścieżką pola w logu ERROR
+   i bez wartości. Test end-to-end przez klienta SDK (`OutputSchemaTest`: `@Nullable` puste = ok, bez `@Nullable` = C10 +
+   `outcome=error`; mutacja: bez walidacji test czerwony) i `ToolResultValidatorTest`. README i MIGRATION opisują zasadę
+   (serwer jira i confluence: `@Nullable` na polach z systemu). Razem 303 testy (starter 241, mcp-platform-test 62).
 
 3.0.0-alpha-7: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-7`, tag `v3.0.0-alpha-7`
 (pracowano na `3.0.0-alpha-7-SNAPSHOT`, alpha-6 i wcześniejsze nietknięte). Instrukcja dla serwerów: `MIGRATION-3.0.md`,

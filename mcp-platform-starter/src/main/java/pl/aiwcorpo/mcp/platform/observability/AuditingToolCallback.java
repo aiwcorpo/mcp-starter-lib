@@ -19,6 +19,7 @@ import pl.aiwcorpo.mcp.platform.input.ToolInputValidator;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 import pl.aiwcorpo.mcp.platform.security.BackendCredential;
 import pl.aiwcorpo.mcp.platform.security.CredentialContext;
+import pl.aiwcorpo.mcp.platform.text.ToolResultValidator;
 
 /**
  * Wraps every tool the server exposes (applied by {@link ToolCallbackAuditPostProcessor}, servers do not wire
@@ -32,6 +33,9 @@ import pl.aiwcorpo.mcp.platform.security.CredentialContext;
  *       violation is {@code invalid_argument} (C10) without the offending value. The MCP SDK's own validation
  *       is off because it answers before this class, with a text that is not C10 and no audit event.</li>
  *   <li><b>Interceptors</b> ({@link ToolCallInterceptor}), then the tool.</li>
+ *   <li><b>Result.</b> A tool that publishes an {@code outputSchema} ({@code UntrustedText} in its result) has
+ *       its result checked against it ({@link ToolResultValidator}) before the audit event is written; a
+ *       mismatch is {@code internal_error} and {@code outcome=error}, not an SDK error after an {@code ok} event.</li>
  *   <li><b>Errors.</b> Whatever escapes is mapped by {@link McpErrorMapper}; only a
  *       {@link SanitizedToolException} carrying a C10 error object leaves this class. Spring AI puts an
  *       exception's message verbatim into the tool result, so an unmapped {@code RestClientException} would
@@ -52,6 +56,7 @@ public class AuditingToolCallback implements ToolCallback {
     private final List<ToolCallInterceptor> interceptors;
     private final RiskLevel risk;
     private final ToolInputValidator inputValidator;
+    private final ToolResultValidator resultValidator;
 
     /** With {@link ToolInputPolicy#STRICT}: the tool must publish a closed {@code inputSchema}. */
     public AuditingToolCallback(ToolCallback delegate, AuditLogger auditLogger, McpErrorMapper errorMapper,
@@ -68,6 +73,8 @@ public class AuditingToolCallback implements ToolCallback {
         this.interceptors = List.copyOf(interceptors);
         this.risk = registry.register(delegate);
         this.inputValidator = ToolInputValidator.compile(delegate.getToolDefinition(), inputPolicy);
+        this.resultValidator = registry.outputSchemaOf(delegate.getToolDefinition().name())
+                .map(schema -> ToolResultValidator.compile(delegate.getToolDefinition().name(), schema)).orElse(null);
     }
 
     /** The undecorated tool. */
@@ -111,6 +118,9 @@ public class AuditingToolCallback implements ToolCallback {
             inputValidator.validate(toolInput);
             String result = chain(0, new ToolCallInterceptor.Invocation(name, risk, toolInput, caller), tool)
                     .proceed(toolInput);
+            if (resultValidator != null) {
+                resultValidator.validate(result);
+            }
             audit(caller, name, toolInput, null, start);
             return result;
         } catch (Exception ex) {

@@ -266,6 +266,13 @@ konstruktor normalizuje tekst przez `TextHygiene.normalize`, a usunięty ciąg n
 z definicją `UntrustedText` z kontraktów (wchodzi do `definitionHash`) i zwraca wynik także jako `structuredContent`.
 Pola dodatkowe systemu idą obok `UntrustedText` w rekordzie wyniku.
 
+**Zasada nullowalności wyniku.** Schemat wyniku wynika z typu rekordu: komponent bez `@Nullable` (dowolnej biblioteki)
+jest `required` i nie przyjmuje `null`, komponent z `@Nullable` przyjmuje `null`. Pole, które system potrafi zostawić
+puste (`assignee`, `dueDate`, `resolution`), musi więc mieć `@Nullable`; nazwy pól to nazwy komponentów (adnotacje
+Jacksona `@JsonProperty`, `@JsonIgnore` nie są uwzględniane w schemacie). Opakowanie narzędzia sprawdza wynik względem
+schematu **przed** zapisem audytu: niezgodność to C10 `internal_error`, zdarzenie C8 z `outcome=error` i wiersz
+ERROR z ścieżką pola (`/assignee (type)`), bez wartości. Komunikat SDK (`output validation failed`) nie dochodzi do klienta.
+
 **Audyt odrzuceń.** Odrzucone żądanie (brak/zły JWT, certyfikat, niedostępny JWKS albo Redis) zostawia w audycie C8
 zdarzenie `authentication` (`outcome=denied`, `reason` = kod odrzucenia) tylko z pól dozwolonych w kontraktach 2.1.1,
 bez `sub`, `client`, `tool` z niezweryfikowanego tokenu.

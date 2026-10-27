@@ -223,6 +223,19 @@ Odwrotna kolejność (filtr na surowym tekście, normalizacja w fabryce) nie jes
 `!<ZWSP>https`. Konstruktor `UntrustedText` też normalizuje (`new UntrustedText(...)` i deserializacja Jacksona nie
 omijają higieny), ale to ostatnia linia obrony, nie miejsce na filtrowanie.
 
+### Wynik z `null` w komponencie bez `@Nullable` (A7-M1)
+
+Dla narzędzia z `UntrustedText` w wyniku schemat wyniku wynika z typu rekordu: komponent bez `@Nullable` jest
+`required` i bez `null`. Serwer, który przechodzi na `UntrustedText` (jira, confluence), ma w rekordach wyniku pola z
+systemu, które bywają puste (`assignee`, `dueDate`, `resolution`, `parentId`): **każde takie pole oznaczyć
+`@Nullable`** (`org.springframework.lang.Nullable` albo `org.jspecify.annotations.Nullable`), inaczej zgłoszenie bez
+przypisanej osoby kończy się błędem. Zmiana w starterze: wynik jest sprawdzany względem schematu w opakowaniu narzędzia,
+przed audytem. Niezgodność to C10 `internal_error` i zdarzenie C8 `outcome=error` (wcześniej: audyt `ok`, a klient
+dostawał `isError` z tekstem SDK, którego nie rozpoznaje ani klient, ani gateway). W logu ERROR jest ścieżka pola, nie
+wartość. Adnotacji Jacksona na komponentach wyniku nie używać: schemat bierze nazwy komponentów, więc `@JsonProperty`
+rozjeżdża schemat i serializację, a wywołanie kończy się `internal_error`. Test serwera: wywołanie narzędzia na
+zgłoszeniu z pustymi polami opcjonalnymi (wynik ok, `structuredContent` z `null`).
+
 ### Pozostałe zmiany zachowania
 
 - Klucze obiektów w argumentach (mapa z `propertyNames`, obiekt zagnieżdżony, nazwa argumentu) przechodzą `TextHygiene`

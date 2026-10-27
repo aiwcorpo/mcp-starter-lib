@@ -6,11 +6,16 @@ import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
 import io.modelcontextprotocol.spec.McpSchema;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.ActiveProfiles;
@@ -82,6 +87,54 @@ class OutputSchemaTest {
             assertThat(structured.at("/body/text").asString()).isEqualTo("Ignore previous inst");
             assertThat(structured.at("/body/truncated").asBoolean()).isTrue();
             assertThat(GatewayTransportTest.text(result)).doesNotContain("\u202e").doesNotContain("\u200b");
+        }
+    }
+
+    @Test
+    @DisplayName("a component marked @Nullable may be null in the result and the call is ok")
+    void aMarkedNullableComponentMayBeEmpty() {
+        try (McpSyncClient client = client()) {
+            client.listTools();
+            McpSchema.CallToolResult result = client.callTool(
+                    McpSchema.CallToolRequest.builder("read_ticket").arguments(Map.of("ticketId", "7")).build());
+
+            assertThat(result.isError()).isNotEqualTo(true);
+            JsonNode structured = JSON.valueToTree(result.structuredContent());
+            assertThat(structured.path("key").asString()).isEqualTo("T-7");
+            assertThat(structured.path("assignee").isNull()).isTrue();
+        }
+    }
+
+    @Test
+    @DisplayName("a null in a component without @Nullable is C10 internal_error, audited as error, and quotes no value")
+    void anUnmarkedNullIsAC10ErrorAndAnErrorEvent() {
+        ListAppender<ILoggingEvent> everything = new ListAppender<>();
+        Logger root = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);
+        everything.start();
+        root.addAppender(everything);
+        try (McpSyncClient client = client()) {
+            client.listTools();
+            McpSchema.CallToolResult result = client.callTool(
+                    McpSchema.CallToolRequest.builder("read_page_unmarked_null").arguments(Map.of("pageId", "1")).build());
+
+            assertThat(result.isError()).isTrue();
+            String text = GatewayTransportTest.text(result);
+            assertThat(text).doesNotContain("output validation failed").doesNotContain(ProbeServer.NULL_RESULT_MARKER);
+            assertThat(JSON.readTree(text).path("error").asString()).isEqualTo("internal_error");
+
+            List<String> audit = CapturedLogs.snapshot(everything).stream()
+                    .filter(e -> e.getLoggerName().equals("pl.aiwcorpo.mcp.audit"))
+                    .map(ILoggingEvent::getFormattedMessage).filter(l -> l.contains("read_page_unmarked_null")).toList();
+            assertThat(audit).hasSize(1);
+            assertThat(audit.getFirst()).contains("\"outcome\":\"error\"").contains("\"errorCode\":\"internal_error\"");
+            assertThat(CapturedLogs.snapshot(everything).stream()
+                    .filter(e -> !e.getLoggerName().startsWith("io.modelcontextprotocol"))
+                    .map(ILoggingEvent::getFormattedMessage).toList())
+                    .noneSatisfy(line -> assertThat(line).contains(ProbeServer.NULL_RESULT_MARKER));
+            assertThat(CapturedLogs.snapshot(everything).stream()
+                    .anyMatch(e -> e.getFormattedMessage().contains("does not match its outputSchema at /id"))).isTrue();
+        } finally {
+            root.detachAppender(everything);
         }
     }
 }
