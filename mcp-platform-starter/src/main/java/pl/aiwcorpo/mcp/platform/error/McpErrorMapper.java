@@ -60,7 +60,7 @@ public class McpErrorMapper {
     public record SafeError(String code, String message, Map<String, Object> details) {
 
         public SafeError {
-            details = details == null ? Map.of() : Map.copyOf(details);
+            details = details == null ? Map.of() : java.util.Collections.unmodifiableMap(new LinkedHashMap<>(details));
         }
 
         public SafeError(String code, String message) {

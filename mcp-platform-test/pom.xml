@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  mcp-platform-test: test support for MCP servers built on mcp-platform-starter. Test scope only.
+    - TestGateway: serves the published test JWKS of mcp-contracts and mints internal JWTs (C2) with the
+      published test keys, plus an MCP client request customizer that sends a fresh token per request
+  Brings mcp-contracts:test-vectors (test keys) and the MCP client; never put it on a production classpath.
+  Its own tests are the starter's end-to-end tests over the real transport.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>pl.aiwcorpo.mcp</groupId>
+    <artifactId>mcp-platform-test</artifactId>
+    <version>3.0.0-alpha-1-SNAPSHOT</version>
+    <name>Aiwcorpo MCP Platform :: Test support</name>
+
+    <properties>
+        <java.version>25</java.version>
+        <spring-ai.version>2.0.0</spring-ai.version>
+        <mcp-contracts.version>2.0.2</mcp-contracts.version>
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>pl.aiwcorpo.mcp</groupId>
+            <artifactId>mcp-platform-starter</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>pl.aiwcorpo.mcp</groupId>
+            <artifactId>mcp-contracts</artifactId>
+            <version>${mcp-contracts.version}</version>
+            <classifier>test-vectors</classifier>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

@@ -25,6 +25,7 @@
     <modules>
         <module>mcp-platform-bom</module>
         <module>mcp-platform-starter</module>
+        <module>mcp-platform-test</module>
     </modules>
 
 </project>
