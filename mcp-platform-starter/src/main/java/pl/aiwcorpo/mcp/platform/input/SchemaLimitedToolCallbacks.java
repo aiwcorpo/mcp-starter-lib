@@ -39,6 +39,7 @@ import tools.jackson.databind.node.ObjectNode;
 public final class SchemaLimitedToolCallbacks {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
+    private static final JsonNode CONTRACT_DEFINITIONS = contractDefinitions();
     private static final Set<String> INTEGER_TYPES = Set.of("integer");
 
     private SchemaLimitedToolCallbacks() {
@@ -84,41 +85,78 @@ public final class SchemaLimitedToolCallbacks {
                 throw new IllegalStateException("@Tool " + where + ": no property in the generated schema "
                         + "(compile with -parameters)");
             }
-            ArgumentLimits limits = parameter.getAnnotation(ArgumentLimits.class);
+            ArgumentLimits annotation = parameter.getAnnotation(ArgumentLimits.class);
             String type = property.path("type").asString(null);
-            if ("string".equals(type)) {
-                if (limits == null || limits.maxLength() < 0) {
-                    throw new IllegalStateException("@Tool " + where + ": a text argument needs "
-                            + "@ArgumentLimits(maxLength = ...), otherwise the model may send any amount of text");
-                }
-                requireNoNumericLimits(limits, where);
+            if ("string".equals(type) && !property.has("enum")) {
+                Limits limits = textLimits(annotation, where);
                 property.put("maxLength", limits.maxLength());
                 if (limits.minLength() >= 0) {
                     property.put("minLength", limits.minLength());
                 }
-                if (!limits.pattern().isEmpty()) {
+                if (limits.pattern() != null) {
                     property.put("pattern", limits.pattern());
                 }
-            } else if (limits != null) {
-                if (!INTEGER_TYPES.contains(type) || limits.minLength() >= 0 || limits.maxLength() >= 0
-                        || !limits.pattern().isEmpty()) {
+            } else if (annotation != null) {
+                if (!INTEGER_TYPES.contains(type) || annotation.minLength() >= 0 || annotation.maxLength() >= 0
+                        || !annotation.pattern().isEmpty() || !annotation.contractPattern().isEmpty()) {
                     throw new IllegalStateException("@ArgumentLimits on " + where + ": text limits only on text "
                             + "arguments, minimum/maximum only on integers (schema type: " + type + ")");
                 }
-                if (limits.minimum() != Long.MIN_VALUE) {
-                    property.put("minimum", limits.minimum());
+                if (annotation.minimum() != Long.MIN_VALUE) {
+                    property.put("minimum", annotation.minimum());
                 }
-                if (limits.maximum() != Long.MAX_VALUE) {
-                    property.put("maximum", limits.maximum());
+                if (annotation.maximum() != Long.MAX_VALUE) {
+                    property.put("maximum", annotation.maximum());
                 }
             }
         }
         return JSON.writeValueAsString(schema);
     }
 
-    private static void requireNoNumericLimits(ArgumentLimits limits, String where) {
+    private record Limits(int minLength, int maxLength, String pattern) {
+    }
+
+    /** The limits of a text argument; {@code maxLength} is mandatory, directly or from the contract's definition. */
+    private static Limits textLimits(ArgumentLimits limits, String where) {
+        if (limits == null) {
+            throw new IllegalStateException("@Tool " + where + ": a text argument needs "
+                    + "@ArgumentLimits(maxLength = ...), otherwise the model may send any amount of text");
+        }
         if (limits.minimum() != Long.MIN_VALUE || limits.maximum() != Long.MAX_VALUE) {
             throw new IllegalStateException("@ArgumentLimits on " + where + ": minimum/maximum on a text argument");
+        }
+        String pattern = limits.pattern().isEmpty() ? null : limits.pattern();
+        int maxLength = limits.maxLength();
+        if (!limits.contractPattern().isEmpty()) {
+            if (pattern != null) {
+                throw new IllegalStateException("@ArgumentLimits on " + where + ": pattern and contractPattern together");
+            }
+            JsonNode definition = CONTRACT_DEFINITIONS.path(limits.contractPattern());
+            pattern = definition.path("pattern").asString(null);
+            if (pattern == null || !"string".equals(definition.path("type").asString(null))) {
+                throw new IllegalStateException("@ArgumentLimits on " + where + ": '" + limits.contractPattern()
+                        + "' is not a string definition with a pattern in common.schema.json");
+            }
+            if (maxLength < 0) {
+                maxLength = definition.path("maxLength").asInt(-1);
+            }
+        }
+        if (maxLength < 0) {
+            throw new IllegalStateException("@Tool " + where + ": a text argument needs "
+                    + "@ArgumentLimits(maxLength = ...), otherwise the model may send any amount of text");
+        }
+        return new Limits(limits.minLength(), maxLength, pattern);
+    }
+
+    private static JsonNode contractDefinitions() {
+        String resource = "/mcp-contracts/schemas/common.schema.json";
+        try (java.io.InputStream in = SchemaLimitedToolCallbacks.class.getResourceAsStream(resource)) {
+            if (in == null) {
+                throw new IllegalStateException(resource + " is missing: mcp-contracts must be on the classpath");
+            }
+            return JSON.readTree(in).path("$defs");
+        } catch (java.io.IOException ex) {
+            throw new java.io.UncheckedIOException(ex);
         }
     }
 }

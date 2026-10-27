@@ -53,6 +53,43 @@ class SchemaLimitedToolCallbacksTest {
         }
     }
 
+    static class FromContract {
+        enum State { OPEN, CLOSED }
+
+        @Tool(name = "c", description = "d")
+        @ToolRisk(RiskLevel.READ_ONLY)
+        public String c(@ArgumentLimits(maxLength = 20, contractPattern = "JiraIssueKey") String issue,
+                        @ArgumentLimits(contractPattern = "GitLabProjectPath") String project, State state) {
+            return issue;
+        }
+    }
+
+    static class UnknownContractPattern {
+        @Tool(name = "c", description = "d")
+        @ToolRisk(RiskLevel.READ_ONLY)
+        public String c(@ArgumentLimits(maxLength = 20, contractPattern = "NoSuchDefinition") String issue) {
+            return issue;
+        }
+    }
+
+    @Test
+    void aContractPatternIsPublishedInsteadOfACopy() {
+        ToolCallback callback = SchemaLimitedToolCallbacks.of(new FromContract()).getToolCallbacks()[0];
+        JsonNode properties = JsonMapper.builder().build().readTree(callback.getToolDefinition().inputSchema())
+                .path("properties");
+
+        assertThat(properties.path("issue").path("pattern").asString()).isEqualTo("^[A-Z][A-Z0-9_]{1,9}-[1-9][0-9]{0,9}$");
+        assertThat(properties.path("issue").path("maxLength").asInt()).isEqualTo(20);
+        assertThat(properties.path("project").path("maxLength").asInt()).as("from the definition").isEqualTo(1024);
+        assertThat(properties.path("state").has("maxLength")).as("enums need no length").isFalse();
+    }
+
+    @Test
+    void anUnknownContractDefinitionStopsTheServer() {
+        assertThatThrownBy(() -> SchemaLimitedToolCallbacks.of(new UnknownContractPattern()))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("NoSuchDefinition");
+    }
+
     @Test
     void limitsAndAClosedObjectEndUpInTheSchemaAndToolsStayMethodCallbacks() {
         ToolCallback[] callbacks = SchemaLimitedToolCallbacks.of(new Good()).getToolCallbacks();

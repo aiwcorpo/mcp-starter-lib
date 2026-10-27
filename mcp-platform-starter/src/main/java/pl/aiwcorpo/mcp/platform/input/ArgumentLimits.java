@@ -13,8 +13,8 @@ import java.lang.annotation.Target;
  * should still validate what it relies on, with the same constants.
  *
  * <ul>
- *   <li>text ({@code String}): {@link #maxLength()} is required; {@link #minLength()} and {@link #pattern()} are
- *       optional;</li>
+ *   <li>text ({@code String}): {@link #maxLength()} is required (or comes from {@link #contractPattern()});
+ *       {@link #minLength()} and {@link #pattern()} are optional;</li>
  *   <li>integers: {@link #minimum()} and {@link #maximum()}.</li>
  * </ul>
  */
@@ -34,6 +34,14 @@ public @interface ArgumentLimits {
      * anchor it); empty = none.
      */
     String pattern() default "";
+
+    /**
+     * Name of a string definition in the contracts' {@code common.schema.json} ({@code $defs}), for example
+     * {@code JiraIssueKey} or {@code GitLabProjectPath}: its {@code pattern} (and its {@code maxLength}, when
+     * {@link #maxLength()} is not given) is published instead of a copy typed into the server. Cannot be combined
+     * with {@link #pattern()}. An unknown name, or a definition without a pattern, stops the server.
+     */
+    String contractPattern() default "";
 
     /** JSON Schema {@code minimum}; {@link Long#MIN_VALUE} = none. */
     long minimum() default Long.MIN_VALUE;
