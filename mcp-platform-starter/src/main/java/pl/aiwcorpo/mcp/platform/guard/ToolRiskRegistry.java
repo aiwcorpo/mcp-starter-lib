@@ -14,19 +14,19 @@ import org.springframework.ai.tool.method.MethodToolCallback;
 import org.springframework.core.annotation.AnnotatedElementUtils;
 
 /**
- * Knows the {@link RiskLevel} of every tool. Purely deterministic: the answer comes from the
- * {@link ToolRisk} annotation in code (or {@link RiskClassifiedTool}), optionally raised by the
- * policy file. Nothing is inferred from a description and no model is consulted.
+ * Knows the {@link RiskLevel} of every tool the server exposes. Purely deterministic: the answer comes from
+ * the {@link ToolRisk} annotation in code (or {@link RiskClassifiedTool}); nothing is inferred from a
+ * description and no model is consulted.
  *
- * <h2>Two checks made at startup</h2>
+ * <h2>Checks made when a tool is registered (at startup)</h2>
  * <ol>
  *   <li><b>Every tool must be flagged.</b> What happens to an unflagged one is decided by
- *       {@link Unclassified}; the default refuses to start, because a forgotten flag on a tool that
- *       deletes things is precisely the mistake this exists to catch.</li>
+ *       {@link Unclassified}; the default refuses to start.</li>
  *   <li><b>The name must not contradict the flag.</b> A tool called {@code repo_delete} flagged
- *       {@code READ_ONLY} is a bug or a lie; either way the server does not start. This is a
- *       tripwire on whole words in the name, not a control: {@code deleteuser} written as one
- *       word is not caught.</li>
+ *       {@code READ_ONLY} is a bug or a lie; either way the server does not start. A tripwire on whole
+ *       words in the name, not a control.</li>
+ *   <li><b>Names are unique.</b> Two tools with one name would make the gateway's approval, the audit and
+ *       the internal JWT's {@code tool} claim ambiguous.</li>
  * </ol>
  */
 public class ToolRiskRegistry {
@@ -37,48 +37,68 @@ public class ToolRiskRegistry {
     public enum Unclassified {
         /** Refuse to start (default). */
         FAIL,
-        /** Start, and treat the tool as destructive: privileged callers only, human confirmation. */
+        /** Start, and treat the tool as destructive. */
         DESTRUCTIVE
     }
 
-    /** Name fragments that only make sense on an irreversible operation. */
     private static final Set<String> DESTRUCTIVE_WORDS =
             Set.of("delete", "drop", "remove", "purge", "truncate", "destroy", "wipe", "erase");
 
     private final Unclassified unclassified;
-    /** Unflagged tools that were let in as destructive, by name. */
-    private final Map<String, RiskLevel> programmatic = new ConcurrentHashMap<>();
-    /** Identity-keyed on purpose: the flag belongs to this callback object, not to its name. */
-    private final Map<ToolCallback, Optional<RiskLevel>> declaredOnMethod =
-            java.util.Collections.synchronizedMap(new java.util.IdentityHashMap<>());
+    private final Map<String, Registered> registered = new ConcurrentHashMap<>();
+
+    private record Registered(ToolCallback tool, RiskLevel risk) {
+    }
 
     public ToolRiskRegistry(Unclassified unclassified) {
         this.unclassified = unclassified;
     }
 
     /**
-     * Startup validation of one tool: returns its declared risk or throws, stopping the server.
+     * Validates a tool and records it under its name. Idempotent for the same callback; throws, and so stops
+     * the server, for an unflagged tool, a contradicting name or a second tool with the same name.
      */
-    public RiskLevel classify(ToolCallback callback) {
+    public RiskLevel register(ToolCallback callback) {
+        String name = callback.getToolDefinition().name();
+        Registered existing = registered.get(name);
+        if (existing != null) {
+            if (existing.tool() == callback) {
+                return existing.risk();
+            }
+            throw new IllegalStateException("Two tools are named '" + name + "'. Tool names must be unique.");
+        }
+        RiskLevel risk = classify(callback);
+        Registered previous = registered.putIfAbsent(name, new Registered(callback, risk));
+        if (previous != null && previous.tool() != callback) {
+            throw new IllegalStateException("Two tools are named '" + name + "'. Tool names must be unique.");
+        }
+        return risk;
+    }
+
+    public boolean isRegistered(String toolName) {
+        return registered.containsKey(toolName);
+    }
+
+    public Optional<RiskLevel> riskOf(String toolName) {
+        Registered entry = registered.get(toolName);
+        return entry == null ? Optional.empty() : Optional.of(entry.risk());
+    }
+
+    private RiskLevel classify(ToolCallback callback) {
         String name = callback.getToolDefinition().name();
         Optional<RiskLevel> declared = declared(callback);
         RiskLevel risk;
         if (declared.isPresent()) {
             risk = declared.get();
+        } else if (unclassified == Unclassified.DESTRUCTIVE) {
+            LOG.warn("event=tool_unclassified tool=\"{}\" action=treated_as_destructive", name);
+            risk = RiskLevel.DESTRUCTIVE;
         } else {
-            // The policy file is not consulted here: classifying a tool is a code change that goes
-            // through review. A config file may restrict a tool further, never vouch for it.
-            if (unclassified == Unclassified.DESTRUCTIVE) {
-                LOG.warn("event=tool_unclassified tool=\"{}\" action=treated_as_destructive", name);
-                risk = RiskLevel.DESTRUCTIVE;
-            } else {
-                throw new IllegalStateException("Tool '" + name + "' has no risk flag. Annotate its @Tool method "
-                        + "with @ToolRisk(RiskLevel.READ_ONLY | UPDATE | DESTRUCTIVE) (or implement "
-                        + "RiskClassifiedTool on a hand-written ToolCallback), or set "
-                        + "aiwcorpo.mcp.platform.guard.unclassified=destructive to start anyway and treat "
-                        + "unflagged tools as destructive.");
-            }
-            programmatic.put(name, risk);
+            throw new IllegalStateException("Tool '" + name + "' has no risk flag. Annotate its @Tool method "
+                    + "with @ToolRisk(RiskLevel.READ_ONLY | UPDATE | DESTRUCTIVE) (or implement "
+                    + "RiskClassifiedTool on a hand-written ToolCallback), or set "
+                    + "aiwcorpo.mcp.platform.tools.unclassified=destructive to start anyway and treat "
+                    + "unflagged tools as destructive.");
         }
         if (risk != RiskLevel.DESTRUCTIVE) {
             destructiveWordIn(name).ifPresent(word -> {
@@ -90,37 +110,18 @@ public class ToolRiskRegistry {
     }
 
     /**
-     * The risk to enforce for a call right now: the declared one, raised by the policy if the policy
-     * says so. A policy can make a tool MORE restricted at runtime, never less — lowering the risk of
-     * a destructive tool is a code change that goes through review, not an edit to a config file.
+     * The flag declared in code for exactly this tool: on the callback itself, or on the {@code @Tool} method
+     * behind it. Not looked up by name: a tool must never inherit another one's flag.
      */
-    public RiskLevel effective(ToolCallback callback, GuardPolicy policy) {
-        String name = callback.getToolDefinition().name();
-        // Never classified (should not happen: every tool is classified at startup) -> destructive.
-        RiskLevel declared = declared(callback).orElseGet(() -> programmatic.getOrDefault(name, RiskLevel.DESTRUCTIVE));
-        RiskLevel override = policy.rule(name).map(GuardPolicy.ToolRule::risk).orElse(null);
-        return override != null && override.atLeast(declared) ? override : declared;
-    }
-
-    /**
-     * The flag declared in code for exactly this tool: on the callback itself, or on the
-     * {@code @Tool} method behind it. Deliberately NOT looked up by tool name — two classes may
-     * declare tools with the same name, and a tool must never inherit another one's flag.
-     */
-    private Optional<RiskLevel> declared(ToolCallback callback) {
+    private static Optional<RiskLevel> declared(ToolCallback callback) {
         if (callback instanceof RiskClassifiedTool classified) {
             return Optional.ofNullable(classified.riskLevel());
         }
-        return declaredOnMethod.computeIfAbsent(callback, ToolRiskRegistry::readMethodFlag);
-    }
-
-    private static Optional<RiskLevel> readMethodFlag(ToolCallback callback) {
         if (!(callback instanceof MethodToolCallback)) {
             return Optional.empty();
         }
-        // Spring AI keeps the reflective Method private and offers no accessor. Find it by type
-        // rather than by field name, so a rename upstream does not silently unflag every tool; if
-        // it cannot be read at all, the tool counts as unflagged and startup fails — closed.
+        // Spring AI keeps the reflective Method private and offers no accessor. Found by type rather than by
+        // field name, so a rename upstream fails startup (tool counts as unflagged) instead of unflagging.
         for (Field field : MethodToolCallback.class.getDeclaredFields()) {
             if (field.getType() != Method.class) {
                 continue;
@@ -140,14 +141,13 @@ public class ToolRiskRegistry {
     }
 
     private static Optional<String> destructiveWordIn(String toolName) {
-        // Split snake_case, kebab-case, camelCase, ACRONYMCase and digits into words.
         String spaced = toolName
                 .replaceAll("([a-z0-9])([A-Z])", "$1 $2")
                 .replaceAll("([A-Z]+)([A-Z][a-z])", "$1 $2")
                 .replaceAll("([A-Za-z])([0-9])", "$1 $2")
                 .toLowerCase(Locale.ROOT);
         for (String word : spaced.split("[^a-z]+")) {
-            // "deletes" as well as "delete" — but not "deleted", which names a state, not an action.
+            // "deletes" as well as "delete", but not "deleted", which names a state, not an action.
             String singular = word.endsWith("s") ? word.substring(0, word.length() - 1) : word;
             if (DESTRUCTIVE_WORDS.contains(word) || DESTRUCTIVE_WORDS.contains(singular)) {
                 return Optional.of(word);

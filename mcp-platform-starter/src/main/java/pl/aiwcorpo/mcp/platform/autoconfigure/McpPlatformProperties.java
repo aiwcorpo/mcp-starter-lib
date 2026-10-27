@@ -4,108 +4,297 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.util.unit.DataSize;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 
 /**
- * Configuration properties for the platform, bound from {@code aiwcorpo.mcp.platform.*}.
+ * Configuration of the platform, bound from {@code aiwcorpo.mcp.platform.*}.
  *
  * <pre>
  * aiwcorpo:
  *   mcp:
  *     platform:
- *       auth-mode: oauth                 # oauth | pat — one choice for the whole server
- *       pat-header-prefix: X-PAT-        # pat mode: inbound header prefix carrying backend PATs
- *       audit-logger-name: pl.aiwcorpo.mcp.audit
- *       guard:
- *         enabled: true                   # identity + privilege + confirmation in front of every tool
- *         policy-file: file:/etc/mcp/guard-policy.yml   # hot-reloaded; unset = built-in default policy
- *         unclassified: fail              # tool without @ToolRisk: fail | destructive
- *         reload-interval: 1s
- *         whoami-tool: true               # expose the built-in platform_whoami tool
- *         oidc:                           # identity provider; unset = every caller is anonymous
- *           issuer-uri: https://login.example.com/realms/corp
- *           audiences: [mcp-server]
+ *       server-id: mcp-jira                  # required: aud of the internal JWT, componentId in audit
+ *       auth-mode: gateway                   # gateway | dev-pat (dev profile only)
+ *       internal-jwt:
+ *         issuer: https://mcp-gateway.internal
+ *         jwks-uri: https://mcp-gateway.internal:8443/.well-known/jwks.json
+ *         jwks-ssl-bundle: mcp-internal-ca   # Spring SSL bundle that trusts the internal CA
+ *         replay-store: redis                # redis | memory (dev profile only); Redis: spring.data.redis.*
+ *       mtls:
+ *         required: true                     # false only in the dev profile
+ *         allowed-client-names: [mcp-gateway]
+ *       credential:
+ *         connect-url: http://localhost:18090/connections?system={system}   # portal in mcp-platform-dev
  * </pre>
  */
 @ConfigurationProperties("aiwcorpo.mcp.platform")
 public class McpPlatformProperties {
 
-    /** Header prefix carrying per-request backend PATs, e.g. {@code X-PAT-Jira} -> system "jira". */
-    private String patHeaderPrefix = "X-PAT-";
+    /** Id of this server ({@code mcp-<system>}): expected {@code aud}, Redis key prefix, audit componentId. */
+    private String serverId;
 
-    /** Logger name the {@code AuditLogger} writes to (route to a dedicated appender -> SIEM). */
+    /** Source of the backend credential. The internal JWT is required in every mode. */
+    private AuthMode authMode = AuthMode.GATEWAY;
+
+    /** Logger the C8 audit events are written to (route it to the SIEM appender). */
     private String auditLoggerName = "pl.aiwcorpo.mcp.audit";
 
     /**
-     * Refuse to start when the MCP transport is asynchronous, because per-request credentials cannot
-     * survive the thread hop. Turn off ONLY for a server that talks to no credentialed backend —
-     * see {@code CredentialTransportGuard}.
+     * Refuse to start when the MCP transport is asynchronous: the caller and the credential live in
+     * ThreadLocals filled on the servlet thread. See {@code CredentialTransportGuard}.
      */
     private boolean requireSyncTransport = true;
 
-    /**
-     * How callers authenticate, for the whole server: {@code oauth} (access token from an identity
-     * provider) or {@code pat} (the caller's own backend token in {@code X-PAT-<system>}).
-     */
-    private AuthMode authMode = AuthMode.OAUTH;
+    private final InternalJwt internalJwt = new InternalJwt();
+    private final Mtls mtls = new Mtls();
+    private final Credential credential = new Credential();
+    private final DevPat devPat = new DevPat();
+    private final Tools tools = new Tools();
 
-    public AuthMode getAuthMode() {
-        return authMode;
+    /** The backend system this server serves: {@code server-id} without the {@code mcp-} prefix. */
+    public String system() {
+        return serverId == null || !serverId.startsWith("mcp-") ? null : serverId.substring("mcp-".length());
     }
 
-    public void setAuthMode(AuthMode authMode) {
-        this.authMode = authMode;
-    }
+    /** {@code aiwcorpo.mcp.platform.internal-jwt.*}: verification of the gateway's internal JWT (C2). */
+    public static class InternalJwt {
 
-    private final Guard guard = new Guard();
+        /** Expected {@code iss}. */
+        private String issuer = "https://mcp-gateway.internal";
 
-    public Guard getGuard() {
-        return guard;
-    }
+        /** The gateway's JWKS, {@code https://<gateway-internal>/.well-known/jwks.json}. Required. */
+        private String jwksUri;
 
-    /** {@code aiwcorpo.mcp.platform.guard.*} — see {@code PlatformGuardAutoConfiguration}. */
-    public static class Guard {
+        /** Name of a Spring SSL bundle used to trust the gateway's internal endpoint; JVM default when unset. */
+        private String jwksSslBundle;
 
-        /** Master switch. Off = 1.x behaviour: no inbound identity, no privilege check, no confirmation. */
-        private boolean enabled = true;
+        /** How long a fetched JWKS is used before it is fetched again. */
+        private Duration jwksCacheTtl = Duration.ofMinutes(10);
 
         /**
-         * Spring resource location of the policy file ({@code file:/etc/...}, {@code classpath:...}).
-         * A real file is re-read when it changes. Unset = built-in default: anonymous callers are
-         * read-only and destructive tools need confirmation.
+         * How long the last fetched JWKS may still be used while the gateway cannot be reached. After that,
+         * every request is refused with 503 until a fetch succeeds.
          */
-        private String policyFile;
+        private Duration jwksMaxStale = Duration.ofHours(1);
 
-        /** What to do at startup with a tool that has no risk flag. */
+        /** Minimum time between two fetches triggered by an unknown {@code kid}. */
+        private Duration jwksRefreshMinInterval = Duration.ofSeconds(30);
+
+        private Duration jwksConnectTimeout = Duration.ofSeconds(2);
+        private Duration jwksReadTimeout = Duration.ofSeconds(5);
+
+        /** Tolerance for {@code exp} and {@code iat}; the contract allows at most 30 s. */
+        private Duration clockSkew = Duration.ofSeconds(30);
+
+        /** Maximum {@code exp - iat}; the contract allows at most 60 s. */
+        private Duration maxLifetime = Duration.ofSeconds(60);
+
+        /**
+         * Accept keys whose {@code kid} starts with {@code test-} and the keys published in mcp-contracts
+         * test vectors. Allowed only with the {@code dev} profile (CC-044).
+         */
+        private boolean allowTestKeys = false;
+
+        /** Where used {@code jti} values are kept. {@code memory} only with the {@code dev} profile. */
+        private ReplayStore replayStore = ReplayStore.REDIS;
+
+        /** Largest request body read to bind the token to the JSON-RPC method; larger requests get 413. */
+        private DataSize maxRequestBody = DataSize.ofMegabytes(4);
+
+        /**
+         * Exact paths (relative to the context path, no patterns) served without the internal JWT. A request is
+         * exempt only when its raw URI is literally one of them; see {@code InternalJwtFilter}.
+         */
+        private List<String> unauthenticatedPaths = new ArrayList<>(
+                List.of("/actuator/health", "/actuator/health/liveness", "/actuator/health/readiness"));
+
+        public String getIssuer() {
+            return issuer;
+        }
+
+        public void setIssuer(String issuer) {
+            this.issuer = issuer;
+        }
+
+        public String getJwksUri() {
+            return jwksUri;
+        }
+
+        public void setJwksUri(String jwksUri) {
+            this.jwksUri = jwksUri;
+        }
+
+        public String getJwksSslBundle() {
+            return jwksSslBundle;
+        }
+
+        public void setJwksSslBundle(String jwksSslBundle) {
+            this.jwksSslBundle = jwksSslBundle;
+        }
+
+        public Duration getJwksCacheTtl() {
+            return jwksCacheTtl;
+        }
+
+        public void setJwksCacheTtl(Duration jwksCacheTtl) {
+            this.jwksCacheTtl = jwksCacheTtl;
+        }
+
+        public Duration getJwksMaxStale() {
+            return jwksMaxStale;
+        }
+
+        public void setJwksMaxStale(Duration jwksMaxStale) {
+            this.jwksMaxStale = jwksMaxStale;
+        }
+
+        public Duration getJwksRefreshMinInterval() {
+            return jwksRefreshMinInterval;
+        }
+
+        public void setJwksRefreshMinInterval(Duration jwksRefreshMinInterval) {
+            this.jwksRefreshMinInterval = jwksRefreshMinInterval;
+        }
+
+        public Duration getJwksConnectTimeout() {
+            return jwksConnectTimeout;
+        }
+
+        public void setJwksConnectTimeout(Duration jwksConnectTimeout) {
+            this.jwksConnectTimeout = jwksConnectTimeout;
+        }
+
+        public Duration getJwksReadTimeout() {
+            return jwksReadTimeout;
+        }
+
+        public void setJwksReadTimeout(Duration jwksReadTimeout) {
+            this.jwksReadTimeout = jwksReadTimeout;
+        }
+
+        public Duration getClockSkew() {
+            return clockSkew;
+        }
+
+        public void setClockSkew(Duration clockSkew) {
+            this.clockSkew = clockSkew;
+        }
+
+        public Duration getMaxLifetime() {
+            return maxLifetime;
+        }
+
+        public void setMaxLifetime(Duration maxLifetime) {
+            this.maxLifetime = maxLifetime;
+        }
+
+        public boolean isAllowTestKeys() {
+            return allowTestKeys;
+        }
+
+        public void setAllowTestKeys(boolean allowTestKeys) {
+            this.allowTestKeys = allowTestKeys;
+        }
+
+        public ReplayStore getReplayStore() {
+            return replayStore;
+        }
+
+        public void setReplayStore(ReplayStore replayStore) {
+            this.replayStore = replayStore;
+        }
+
+        public DataSize getMaxRequestBody() {
+            return maxRequestBody;
+        }
+
+        public void setMaxRequestBody(DataSize maxRequestBody) {
+            this.maxRequestBody = maxRequestBody;
+        }
+
+        public List<String> getUnauthenticatedPaths() {
+            return unauthenticatedPaths;
+        }
+
+        public void setUnauthenticatedPaths(List<String> unauthenticatedPaths) {
+            this.unauthenticatedPaths = unauthenticatedPaths;
+        }
+    }
+
+    public enum ReplayStore {
+        REDIS,
+        MEMORY
+    }
+
+    /** {@code aiwcorpo.mcp.platform.mtls.*}: the client certificate of the gateway (C3). */
+    public static class Mtls {
+
+        /**
+         * Require a client certificate on every request that needs the internal JWT. TLS itself and
+         * {@code server.ssl.client-auth=need} are configured by the server; this checks who presented it.
+         * May be false only with the {@code dev} profile.
+         */
+        private boolean required = true;
+
+        /** Accepted subject CN of the client certificate. */
+        private List<String> allowedClientNames = new ArrayList<>(List.of("mcp-gateway"));
+
+        public boolean isRequired() {
+            return required;
+        }
+
+        public void setRequired(boolean required) {
+            this.required = required;
+        }
+
+        public List<String> getAllowedClientNames() {
+            return allowedClientNames;
+        }
+
+        public void setAllowedClientNames(List<String> allowedClientNames) {
+            this.allowedClientNames = allowedClientNames;
+        }
+    }
+
+    /** {@code aiwcorpo.mcp.platform.credential.*}. */
+    public static class Credential {
+
+        /**
+         * Portal page where the user connects an account, with {@code {system}} as a placeholder. Sent in
+         * {@code credential_required} (C10). Required.
+         */
+        private String connectUrl;
+
+        public String getConnectUrl() {
+            return connectUrl;
+        }
+
+        public void setConnectUrl(String connectUrl) {
+            this.connectUrl = connectUrl;
+        }
+    }
+
+    /** {@code aiwcorpo.mcp.platform.dev-pat.*}: only read in {@code auth-mode=dev-pat}. */
+    public static class DevPat {
+
+        /** Header prefix; {@code X-PAT-Jira} carries the token for system {@code jira}. */
+        private String headerPrefix = "X-PAT-";
+
+        public String getHeaderPrefix() {
+            return headerPrefix;
+        }
+
+        public void setHeaderPrefix(String headerPrefix) {
+            this.headerPrefix = headerPrefix;
+        }
+    }
+
+    /** {@code aiwcorpo.mcp.platform.tools.*}. */
+    public static class Tools {
+
+        /** What to do at startup with a tool that has no {@code @ToolRisk}. */
         private ToolRiskRegistry.Unclassified unclassified = ToolRiskRegistry.Unclassified.FAIL;
-
-        /** How often, at most, the policy file is checked for changes. */
-        private Duration reloadInterval = Duration.ofSeconds(1);
-
-        /** Whether to expose the built-in {@code platform_whoami} tool. */
-        private boolean whoamiTool = true;
-
-        private final Oidc oidc = new Oidc();
-
-        public Oidc getOidc() {
-            return oidc;
-        }
-
-        public boolean isEnabled() {
-            return enabled;
-        }
-
-        public void setEnabled(boolean enabled) {
-            this.enabled = enabled;
-        }
-
-        public String getPolicyFile() {
-            return policyFile;
-        }
-
-        public void setPolicyFile(String policyFile) {
-            this.policyFile = policyFile;
-        }
 
         public ToolRiskRegistry.Unclassified getUnclassified() {
             return unclassified;
@@ -114,133 +303,22 @@ public class McpPlatformProperties {
         public void setUnclassified(ToolRiskRegistry.Unclassified unclassified) {
             this.unclassified = unclassified;
         }
-
-        public Duration getReloadInterval() {
-            return reloadInterval;
-        }
-
-        public void setReloadInterval(Duration reloadInterval) {
-            this.reloadInterval = reloadInterval;
-        }
-
-        public boolean isWhoamiTool() {
-            return whoamiTool;
-        }
-
-        public void setWhoamiTool(boolean whoamiTool) {
-            this.whoamiTool = whoamiTool;
-        }
     }
 
-    /**
-     * {@code aiwcorpo.mcp.platform.guard.oidc.*} — the identity provider whose access tokens this
-     * server accepts. Leave both URIs unset and the server has no identity provider: every caller
-     * is anonymous.
-     */
-    public static class Oidc {
-
-        /**
-         * The provider's issuer, e.g. {@code https://login.example.com/realms/corp}. Tokens must carry
-         * exactly this {@code iss}; the signing keys are found through the provider's discovery document.
-         */
-        private String issuerUri;
-
-        /** Where the signing keys are, if they should not be discovered from the issuer. */
-        private String jwkSetUri;
-
-        /**
-         * Accepted {@code aud} values — the identifier this server is registered under at the provider.
-         * Set it: without it, a token issued for any other application of the same provider is accepted.
-         */
-        private List<String> audiences = new ArrayList<>();
-
-        /** Claim written to the audit log as the caller's name; {@code sub} is used when it is absent. */
-        private String subjectClaim = "sub";
-
-        /**
-         * Claims to read roles from (a dot walks into nested objects). The defaults cover Keycloak,
-         * Entra ID, Okta and Auth0; anything found is matched against {@code roles} in the policy file.
-         */
-        private List<String> roleClaims = new ArrayList<>(
-                List.of("roles", "groups", "realm_access.roles", "permissions", "scope", "scp"));
-
-        /** Signature algorithms accepted when {@code jwk-set-uri} is given explicitly. */
-        private List<String> jwsAlgorithms = new ArrayList<>(List.of("RS256"));
-
-        /** Public URL of this server's MCP endpoint, for the resource metadata; derived from the request if unset. */
-        private String resourceUri;
-
-        public boolean isConfigured() {
-            return hasText(issuerUri) || hasText(jwkSetUri);
-        }
-
-        private static boolean hasText(String value) {
-            return value != null && !value.isBlank();
-        }
-
-        public String getIssuerUri() {
-            return issuerUri;
-        }
-
-        public void setIssuerUri(String issuerUri) {
-            this.issuerUri = issuerUri;
-        }
-
-        public String getJwkSetUri() {
-            return jwkSetUri;
-        }
-
-        public void setJwkSetUri(String jwkSetUri) {
-            this.jwkSetUri = jwkSetUri;
-        }
-
-        public List<String> getAudiences() {
-            return audiences;
-        }
-
-        public void setAudiences(List<String> audiences) {
-            this.audiences = audiences;
-        }
-
-        public String getSubjectClaim() {
-            return subjectClaim;
-        }
-
-        public void setSubjectClaim(String subjectClaim) {
-            this.subjectClaim = subjectClaim;
-        }
-
-        public List<String> getRoleClaims() {
-            return roleClaims;
-        }
-
-        public void setRoleClaims(List<String> roleClaims) {
-            this.roleClaims = roleClaims;
-        }
-
-        public List<String> getJwsAlgorithms() {
-            return jwsAlgorithms;
-        }
-
-        public void setJwsAlgorithms(List<String> jwsAlgorithms) {
-            this.jwsAlgorithms = jwsAlgorithms;
-        }
-
-        public String getResourceUri() {
-            return resourceUri;
-        }
-
-        public void setResourceUri(String resourceUri) {
-            this.resourceUri = resourceUri;
-        }
+    public String getServerId() {
+        return serverId;
     }
 
-    public String getPatHeaderPrefix() {
-        return patHeaderPrefix;
+    public void setServerId(String serverId) {
+        this.serverId = serverId;
     }
 
-    public void setPatHeaderPrefix(String patHeaderPrefix) {
-        this.patHeaderPrefix = patHeaderPrefix;
+    public AuthMode getAuthMode() {
+        return authMode;
+    }
+
+    public void setAuthMode(AuthMode authMode) {
+        this.authMode = authMode;
     }
 
     public String getAuditLoggerName() {
@@ -257,5 +335,25 @@ public class McpPlatformProperties {
 
     public void setRequireSyncTransport(boolean requireSyncTransport) {
         this.requireSyncTransport = requireSyncTransport;
+    }
+
+    public InternalJwt getInternalJwt() {
+        return internalJwt;
+    }
+
+    public Mtls getMtls() {
+        return mtls;
+    }
+
+    public Credential getCredential() {
+        return credential;
+    }
+
+    public DevPat getDevPat() {
+        return devPat;
+    }
+
+    public Tools getTools() {
+        return tools;
     }
 }

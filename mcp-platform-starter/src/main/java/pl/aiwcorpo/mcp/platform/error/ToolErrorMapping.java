@@ -3,26 +3,22 @@ package pl.aiwcorpo.mcp.platform.error;
 import java.util.Optional;
 
 /**
- * Server-supplied mapping from a domain exception to a safe MCP error, consulted by
- * {@link McpErrorMapper} before its built-in rules.
- *
- * <p>Exists so a server can surface useful, self-authored failure messages ("resource not found",
- * "rate limit reached") without either (a) flattening them into the generic {@code internal_error},
- * or (b) making its {@code mcp-core} domain depend on this platform. Register the bean in the
- * server's bootstrap module, which already depends on the starter:
+ * Server-supplied mapping from a domain exception to a C10 error, consulted by {@link McpErrorMapper}
+ * before its built-in rules.
  *
  * <pre>{@code
  * @Bean
- * ToolErrorMapping gitLabErrors() {
- *     return ex -> ex instanceof GitLabApiException e
- *             ? Optional.of(new SafeError(codeFor(e.status()), e.getMessage()))
+ * ToolErrorMapping jiraErrors() {
+ *     return ex -> ex instanceof IssueNotVisibleException
+ *             ? Optional.of(new SafeError("not_found_or_denied", "The issue does not exist or is not visible."))
  *             : Optional.empty();
  * }
  * }</pre>
  *
- * <p><b>Contract:</b> a message returned here is handed verbatim to the AI client. It must be authored
- * by you and must never embed an upstream response body, headers, a stack trace or a secret.
- * Return {@link Optional#empty()} to fall through to the next mapping and then the defaults.
+ * <p><b>Contract:</b> the code must be a C10 code ({@link ToolErrorCode}), otherwise the client gets
+ * {@code internal_error}. The message is handed verbatim to the AI client: author it yourself, never embed
+ * an upstream response body, headers, a stack trace or a secret. Return {@link Optional#empty()} to fall
+ * through to the next mapping and then the defaults.
  */
 @FunctionalInterface
 public interface ToolErrorMapping {

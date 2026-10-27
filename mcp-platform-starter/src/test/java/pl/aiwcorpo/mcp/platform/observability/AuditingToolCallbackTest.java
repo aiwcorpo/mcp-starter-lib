@@ -3,112 +3,148 @@ package pl.aiwcorpo.mcp.platform.observability;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import java.util.List;
 import java.util.function.Supplier;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.DefaultToolDefinition;
 import org.springframework.ai.tool.definition.ToolDefinition;
-import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.client.HttpClientErrorException;
+import pl.aiwcorpo.mcp.platform.ContractSchemas;
+import pl.aiwcorpo.mcp.platform.auth.TestCallers;
 import pl.aiwcorpo.mcp.platform.error.McpErrorMapper;
 import pl.aiwcorpo.mcp.platform.error.SanitizedToolException;
-import pl.aiwcorpo.mcp.platform.security.MissingPatException;
+import pl.aiwcorpo.mcp.platform.guard.RiskClassifiedTool;
+import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
+import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
+import pl.aiwcorpo.mcp.platform.security.CredentialRequiredException;
 
-/**
- * The contract that matters: nothing an upstream backend said may reach the AI client, while
- * messages we authored ourselves (validation, missing credential) must survive so the model can fix
- * its call.
- */
 class AuditingToolCallbackTest {
 
-    private final AuditLogger audit = new AuditLogger("test.audit");
-    private final McpErrorMapper errors = new McpErrorMapper();
+    private final ListAppender<ILoggingEvent> auditLines = new ListAppender<>();
+    private final AuditLogger audit = new AuditLogger("test.audit.callback", "mcp-jira");
+    private final McpErrorMapper errors = new McpErrorMapper(List.of(), "http://localhost:18090/connections?system={system}");
 
-    private ToolCallback decorate(Supplier<String> behaviour) {
-        ToolCallback delegate = new ToolCallback() {
-            @Override
-            public ToolDefinition getToolDefinition() {
-                return DefaultToolDefinition.builder()
-                        .name("pve_vm_status").description("test").inputSchema("{}").build();
-            }
+    AuditingToolCallbackTest() {
+        auditLines.start();
+        ((Logger) LoggerFactory.getLogger("test.audit.callback")).addAppender(auditLines);
+    }
 
-            @Override
-            public String call(String toolInput) {
-                return behaviour.get();
-            }
-        };
-        return new AuditingToolCallback(delegate, audit, errors);
+    private record Tool(String name, Supplier<String> behaviour) implements ToolCallback, RiskClassifiedTool {
+        @Override
+        public ToolDefinition getToolDefinition() {
+            return DefaultToolDefinition.builder().name(name).description("test").inputSchema("{}").build();
+        }
+
+        @Override
+        public String call(String toolInput) {
+            return behaviour.get();
+        }
+
+        @Override
+        public RiskLevel riskLevel() {
+            return RiskLevel.READ_ONLY;
+        }
+    }
+
+    private ToolCallback decorate(Supplier<String> behaviour, ToolCallInterceptor... interceptors) {
+        return new AuditingToolCallback(new Tool("get_issue", behaviour), audit, errors,
+                new ToolRiskRegistry(ToolRiskRegistry.Unclassified.FAIL), List.of(interceptors));
+    }
+
+    private String lastAudit() {
+        String line = auditLines.list.getLast().getFormattedMessage();
+        assertThat(ContractSchemas.violations(ContractSchemas.AUDIT_EVENT, line)).as(line).isEmpty();
+        return line;
     }
 
     @Test
-    void passesThroughResultAndDefinitionOnSuccess() {
-        ToolCallback callback = decorate(() -> "{\"status\":\"running\"}");
+    void aBoundCallRunsAndIsAudited() {
+        ToolCallback callback = decorate(() -> "{\"key\":\"ABC-1\"}");
 
-        assertThat(callback.getToolDefinition().name()).isEqualTo("pve_vm_status");
-        assertThat(callback.call("{}")).isEqualTo("{\"status\":\"running\"}");
+        String result = TestCallers.as(TestCallers.user("get_issue"), () -> callback.call("{\"issueKey\":\"ABC-1\"}"));
+
+        assertThat(result).isEqualTo("{\"key\":\"ABC-1\"}");
+        assertThat(lastAudit()).contains("\"outcome\":\"ok\"", "\"argsLength\":20", "\"risk\":\"READ_ONLY\"")
+                .doesNotContain("ABC-1");
     }
 
     @Test
-    void backendErrorNeverReachesTheModel() {
-        // Exactly what RestClient throws: the message carries the upstream status AND response body.
+    void withoutACallerTheToolDoesNotRun() {
+        ToolCallback callback = decorate(() -> {
+            throw new AssertionError("must not run");
+        });
+
+        assertThatThrownBy(() -> callback.call("{}")).isInstanceOf(SanitizedToolException.class)
+                .hasMessageContaining("\"error\":\"unauthenticated\"");
+        assertThat(lastAudit()).contains("\"outcome\":\"denied\"");
+    }
+
+    @Test
+    void aTokenForAnotherToolOrTheServiceVariantDoesNotRunIt() {
+        ToolCallback callback = decorate(() -> {
+            throw new AssertionError("must not run");
+        });
+
+        assertThatThrownBy(() -> TestCallers.as(TestCallers.user("delete_issue"), () -> callback.call("{}")))
+                .hasMessageContaining("unauthenticated");
+        assertThatThrownBy(() -> TestCallers.as(TestCallers.service(), () -> callback.call("{}")))
+                .hasMessageContaining("unauthenticated");
+    }
+
+    @Test
+    void backendErrorsLeaveAsSafeC10Json() {
         ToolCallback callback = decorate(() -> {
             throw HttpClientErrorException.create(HttpStatus.INTERNAL_SERVER_ERROR, "Internal Server Error",
-                    null, "{\"errors\":\"root@pam auth failed at https://pve.internal:8006\"}".getBytes(), null);
+                    null, "{\"errors\":\"auth failed at https://jira.internal:8443\"}".getBytes(), null);
         });
 
-        assertThatThrownBy(() -> callback.call("{}"))
+        assertThatThrownBy(() -> TestCallers.as(TestCallers.user("get_issue"), () -> callback.call("{}")))
                 .isInstanceOf(SanitizedToolException.class)
-                .hasMessage("internal_error: The tool could not complete the request.")
                 .satisfies(ex -> {
-                    assertThat(ex.getMessage()).doesNotContain("pve.internal");
-                    assertThat(ex.getMessage()).doesNotContain("root@pam");
-                    assertThat(ex.getCause()).isNull();   // no cause -> nothing to unwrap and print
+                    assertThat(ex.getMessage()).isEqualTo(
+                            "{\"error\":\"internal_error\",\"message\":\"The tool could not complete the request.\"}");
+                    assertThat(ex.getCause()).isNull();
                 });
+        assertThat(lastAudit()).contains("\"outcome\":\"error\"", "\"errorCode\":\"internal_error\"");
     }
 
     @Test
-    void validationMessageIsEchoedSoTheModelCanCorrectItself() {
+    void credentialRequiredReachesTheClient() {
         ToolCallback callback = decorate(() -> {
-            throw new IllegalArgumentException("vmid must be in 100..999999999");
+            throw new CredentialRequiredException("jira");
         });
 
-        assertThatThrownBy(() -> callback.call("{}"))
-                .isInstanceOf(SanitizedToolException.class)
-                .hasMessage("invalid_argument: vmid must be in 100..999999999");
+        assertThatThrownBy(() -> TestCallers.as(TestCallers.user("get_issue"), () -> callback.call("{}")))
+                .hasMessageContaining("\"error\":\"credential_required\"")
+                .hasMessageContaining("\"connectUrl\":\"http://localhost:18090/connections?system=jira\"");
     }
 
     @Test
-    void missingPatTellsTheCallerWhichHeaderToSend() {
-        ToolCallback callback = decorate(() -> {
-            throw new MissingPatException("pve");
-        });
+    void interceptorsRunInOrderAndCanRefuse() {
+        ToolCallInterceptor rewrite = (invocation, next) -> next.proceed("{\"rewritten\":true}") + "|first";
+        ToolCallInterceptor observe = (invocation, next) -> {
+            assertThat(invocation.arguments()).isEqualTo("{\"rewritten\":true}");
+            assertThat(invocation.caller().username()).isEqualTo("jkowalski");
+            return next.proceed(invocation.arguments()) + "|second";
+        };
+        ToolCallback callback = decorate(() -> "tool", rewrite, observe);
 
-        assertThatThrownBy(() -> callback.call("{}"))
-                .isInstanceOf(SanitizedToolException.class)
-                .hasMessage("missing_credential: Missing PAT header X-PAT-Pve");
-    }
+        assertThat(TestCallers.as(TestCallers.user("get_issue"), () -> callback.call("{}"))).isEqualTo("tool|second|first");
 
-    @Test
-    void genericSecurityExceptionStaysOpaque() {
-        ToolCallback callback = decorate(() -> {
-            throw new SecurityException("keystore /etc/mcp/tls/keystore.p12 unreadable");
-        });
-
-        assertThatThrownBy(() -> callback.call("{}"))
-                .isInstanceOf(SanitizedToolException.class)
-                .hasMessage("forbidden: Not authorized for this operation.")
-                .satisfies(ex -> assertThat(ex.getMessage()).doesNotContain("keystore.p12"));
-    }
-
-    @Test
-    void oversizedValidationMessageIsTruncated() {
-        String huge = "x".repeat(2_000);
-        ToolCallback callback = decorate(() -> {
-            throw new IllegalArgumentException(huge);
-        });
-
-        assertThatThrownBy(() -> callback.call("{}"))
-                .isInstanceOf(SanitizedToolException.class)
-                .satisfies(ex -> assertThat(ex.getMessage().length()).isLessThan(600));
+        ToolCallInterceptor deny = (invocation, next) -> {
+            throw new SanitizedToolException(new McpErrorMapper.SafeError("not_found_or_denied", "Not found."));
+        };
+        ToolCallback denied = decorate(() -> {
+            throw new AssertionError("must not run");
+        }, deny);
+        assertThatThrownBy(() -> TestCallers.as(TestCallers.user("get_issue"), () -> denied.call("{}")))
+                .hasMessageContaining("not_found_or_denied");
+        assertThat(lastAudit()).contains("\"outcome\":\"denied\"");
     }
 }

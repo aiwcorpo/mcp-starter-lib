@@ -1,101 +1,103 @@
 package pl.aiwcorpo.mcp.platform.error;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import pl.aiwcorpo.mcp.platform.security.MissingPatException;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientResponseException;
+import pl.aiwcorpo.mcp.platform.security.CredentialRequiredException;
+import pl.aiwcorpo.mcp.platform.security.SecretRedactor;
 
 /**
- * Shared mapping of exceptions to SAFE MCP tool errors.
+ * Maps whatever a tool threw to a C10 error the AI client may see, and logs the detail for operators.
  *
- * <p>Returns a sanitized message + stable code to the AI client while the full detail (with the
- * correlation id from MDC) is logged internally. Never exposes stack traces, SQL, internal
- * hostnames or upstream error bodies to the caller.
- *
- * <p>Applied automatically to every tool call by {@code AuditingToolCallback} — see
- * {@link SanitizedToolException} for why that matters.
- *
- * <h2>Which messages are echoed back</h2>
- * Generic by default. Three cases have their own message surfaced verbatim, because all three are
- * authored by us and carry no upstream data:
+ * <h2>What the client sees</h2>
+ * Generic by default ({@code internal_error}). Walking the cause chain (Spring AI wraps every exception of a
+ * {@code @Tool} method in its own), at each level: the server's {@link ToolErrorMapping}s first, then
  * <ul>
- *   <li>Any {@link ToolErrorMapping} a server registered (checked first).</li>
- *   <li>{@link MissingPatException} — names the missing header so the client can retry correctly.</li>
- *   <li>{@link IllegalArgumentException} — thrown by tool-argument validation and by domain record
- *       invariants. Echoing it lets the model correct its own call instead of guessing.</li>
+ *   <li>{@link SanitizedToolException}: kept as it is;</li>
+ *   <li>{@link CredentialRequiredException}: {@code credential_required} with {@code system} and the portal's
+ *       {@code connectUrl};</li>
+ *   <li>{@link IllegalArgumentException}: {@code invalid_argument} with its own message, so the model can
+ *       correct the call. <b>Invariant:</b> never thrown with text from a backend response;</li>
+ *   <li>{@link SecurityException}: {@code access_denied}, fixed text;</li>
+ *   <li>backend unreachable ({@link ResourceAccessException}) or answering 502/503/504:
+ *       {@code upstream_unavailable}, fixed text.</li>
  * </ul>
- * <b>Invariant that makes this safe:</b> {@code IllegalArgumentException} must never be thrown with a
- * message built from a backend response. Outbound adapters must let client exceptions
- * (e.g. {@code RestClientException}) propagate unchanged; they map to the generic
- * {@code internal_error}.
+ * A code outside C10 becomes {@code internal_error}; fields C10 does not define for the code are dropped;
+ * the message is cut to 500 characters. The current request's credential is removed from every message.
  *
- * <h2>Why the cause chain is walked</h2>
- * Since 1.0.2. The three cases above are decided on the exception ACTUALLY THROWN, and by the time
- * this mapper runs, that is never the exception a tool threw: Spring AI wraps whatever escapes a
- * {@code @Tool} method in a {@code ToolExecutionException} before {@code AuditingToolCallback}
- * catches it. Every one of those branches was therefore dead code in practice, and a caller who
- * simply forgot a header was told {@code internal_error} — accurate about nothing and actionable in
- * no way. Servers papered over it by registering a {@link ToolErrorMapping} that walked the chain
- * itself; that workaround is now redundant (and harmless: server mappings still win).
- *
- * <p>The consequence to keep in mind: the invariant above now actually bites. Before, a message
- * built from a backend response and wrapped in an {@code IllegalArgumentException} was hidden by
- * accident, because the wrapper stopped the mapper from ever looking at it. It no longer is. An
- * {@code IllegalArgumentException} carrying upstream text — {@code URI.create()} on a
- * backend-supplied link is the classic way to produce one — will now reach the model.
+ * <h2>What the log gets</h2>
+ * One line per failure with the exception classes and messages of the chain (credential removed) and the
+ * top frames of the innermost exception. Bodies of backend error responses are not logged: they are the
+ * place where backends echo request headers.
  */
 public class McpErrorMapper {
 
     private static final Logger LOG = LoggerFactory.getLogger(McpErrorMapper.class);
 
-    /** Upper bound on an echoed message, so a pathological mapping cannot flood the model. */
-    private static final int MAX_ECHOED_MESSAGE = 500;
+    /** C10 {@code Message}: 1..500 characters. */
+    static final int MAX_MESSAGE = 500;
+
+    private static final int MAX_CAUSE_DEPTH = 10;
+    private static final int LOGGED_FRAMES = 8;
+    private static final String GENERIC = "The tool could not complete the request.";
+
+    /** Code-specific fields allowed by {@code tool-error.schema.json}. */
+    private static final Map<String, Set<String>> DETAILS_BY_CODE = Map.of(
+            "access_denied", Set.of("requiredEntitlements"),
+            "confirmation_required", Set.of("confirmationId", "confirmUrl"),
+            "credential_required", Set.of("system", "connectUrl"),
+            "rate_limited", Set.of("retryAfterSeconds"),
+            "step_up_required", Set.of("stepUpUrl"));
+
+    /** A C10 error: code, safe text and the code-specific fields. */
+    public record SafeError(String code, String message, Map<String, Object> details) {
+
+        public SafeError {
+            details = details == null ? Map.of() : Map.copyOf(details);
+        }
+
+        public SafeError(String code, String message) {
+            this(code, message, Map.of());
+        }
+    }
 
     private final List<ToolErrorMapping> mappings;
+    private final String connectUrlTemplate;
 
     public McpErrorMapper() {
-        this(List.of());
+        this(List.of(), null);
     }
 
-    public McpErrorMapper(List<ToolErrorMapping> mappings) {
+    /**
+     * @param connectUrlTemplate portal URL for {@code credential_required}, {@code {system}} replaced by the
+     *                           system id; {@code null} leaves {@code connectUrl} out
+     */
+    public McpErrorMapper(List<ToolErrorMapping> mappings, String connectUrlTemplate) {
         this.mappings = List.copyOf(mappings);
+        this.connectUrlTemplate = connectUrlTemplate;
     }
-
-    /** Sanitized error surfaced to the MCP client. */
-    public record SafeError(String code, String message) {
-    }
-
-    /** Cap on how far the cause chain is followed; also the guard against a cyclic one. */
-    private static final int MAX_CAUSE_DEPTH = 10;
 
     public SafeError map(Throwable ex) {
-        // Full detail stays internal; MDC correlationId ties it back to the request.
-        LOG.error("Tool invocation failed: {}", ex.toString(), ex);
-
+        LOG.error("event=tool_failed chain=\"{}\" at=\"{}\"", describeChain(ex), innermostFrames(ex));
         Throwable current = ex;
         for (int depth = 0; current != null && depth < MAX_CAUSE_DEPTH; depth++) {
             Optional<SafeError> mapped = classify(current);
             if (mapped.isPresent()) {
-                SafeError error = mapped.get();
-                return new SafeError(error.code(), truncate(error.message()));
+                return normalize(mapped.get());
             }
             Throwable cause = current.getCause();
-            // A self-referencing cause would loop for ever; the depth cap catches longer cycles.
             current = cause == current ? null : cause;
         }
-        return new SafeError("internal_error", "The tool could not complete the request.");
+        return new SafeError(ToolErrorCode.INTERNAL_ERROR.code(), GENERIC);
     }
 
-    /**
-     * One level of the cause chain: the server's own mappings first, then the platform's defaults.
-     *
-     * <p>Order matters twice over. Server mappings are consulted before the built-ins at the SAME
-     * level, so a domain exception that also happens to be an {@link IllegalArgumentException} still
-     * gets the server's code rather than {@code invalid_argument}. And the whole level is decided
-     * before moving outward-to-inward, so a specific exception wrapped in a generic one is answered
-     * by the generic one only when nothing recognises the specific.
-     */
     private Optional<SafeError> classify(Throwable ex) {
         for (ToolErrorMapping mapping : mappings) {
             Optional<SafeError> mapped = mapping.map(ex);
@@ -104,35 +106,89 @@ public class McpErrorMapper {
             }
         }
         if (ex instanceof SanitizedToolException sanitized) {
-            // Already mapped by an inner decorator. Re-mapping it would wrap "forbidden: …" inside
-            // "internal_error: …" and lose both the code and the reason.
-            return Optional.of(new SafeError(sanitized.getCode(), sanitized.getSafeMessage()));
+            return Optional.of(sanitized.toSafeError());
         }
-        if (ex instanceof MissingPatException) {
-            return Optional.of(new SafeError("missing_credential",
-                    echo(ex, "A required credential header is missing.")));
+        if (ex instanceof CredentialRequiredException missing) {
+            Map<String, Object> details = new LinkedHashMap<>();
+            details.put("system", missing.getSystem());
+            if (connectUrlTemplate != null) {
+                details.put("connectUrl", connectUrlTemplate.replace("{system}", missing.getSystem()));
+            }
+            return Optional.of(new SafeError(ToolErrorCode.CREDENTIAL_REQUIRED.code(),
+                    "Connect your " + missing.getSystem() + " account in the portal, then try again.", details));
         }
         if (ex instanceof IllegalArgumentException) {
-            return Optional.of(new SafeError("invalid_argument", echo(ex, "The request was invalid.")));
+            return Optional.of(new SafeError(ToolErrorCode.INVALID_ARGUMENT.code(),
+                    echo(ex, "The request was invalid.")));
         }
         if (ex instanceof SecurityException) {
-            return Optional.of(new SafeError("forbidden", "Not authorized for this operation."));
+            return Optional.of(new SafeError(ToolErrorCode.ACCESS_DENIED.code(), "Not authorized for this operation."));
+        }
+        if (ex instanceof ResourceAccessException || (ex instanceof RestClientResponseException response
+                && response.getStatusCode().value() >= 502 && response.getStatusCode().value() <= 504)) {
+            return Optional.of(new SafeError(ToolErrorCode.UPSTREAM_UNAVAILABLE.code(),
+                    "The backend system is not available right now. Try again later."));
         }
         return Optional.empty();
     }
 
-    /** Echo an author-written message, falling back when absent. */
+    private static SafeError normalize(SafeError error) {
+        if (ToolErrorCode.of(error.code()).isEmpty()) {
+            LOG.warn("event=tool_error_code_unknown code=\"{}\" detail=\"not a C10 code; sent as internal_error\"",
+                    error.code());
+            return new SafeError(ToolErrorCode.INTERNAL_ERROR.code(), GENERIC);
+        }
+        Set<String> allowed = DETAILS_BY_CODE.getOrDefault(error.code(), Set.of());
+        Map<String, Object> details = new LinkedHashMap<>();
+        error.details().forEach((key, value) -> {
+            if (allowed.contains(key) && value != null) {
+                details.put(key, value instanceof String text ? SecretRedactor.redact(text) : value);
+            }
+        });
+        return new SafeError(error.code(), truncate(SecretRedactor.redact(error.message())), details);
+    }
+
     private static String echo(Throwable ex, String fallback) {
         String message = ex.getMessage();
-        return (message == null || message.isBlank()) ? fallback : truncate(message);
+        return message == null || message.isBlank() ? fallback : message;
     }
 
     private static String truncate(String message) {
         if (message == null || message.isBlank()) {
-            return "The tool could not complete the request.";
+            return GENERIC;
         }
-        return message.length() <= MAX_ECHOED_MESSAGE
-                ? message
-                : message.substring(0, MAX_ECHOED_MESSAGE) + "…";
+        return message.length() <= MAX_MESSAGE ? message : message.substring(0, MAX_MESSAGE - 3) + "...";
+    }
+
+    /** {@code Outer: message <- Inner: message}, without response bodies and without the credential. */
+    static String describeChain(Throwable ex) {
+        List<String> levels = new ArrayList<>();
+        Throwable current = ex;
+        for (int depth = 0; current != null && depth < MAX_CAUSE_DEPTH; depth++) {
+            String text;
+            if (current instanceof RestClientResponseException response) {
+                text = current.getClass().getName() + ": HTTP " + response.getStatusCode().value() + " (body not logged)";
+            } else {
+                String message = current.getMessage();
+                text = current.getClass().getName() + (message == null ? "" : ": " + SecretRedactor.redact(message));
+            }
+            levels.add(text.replace('"', '\'').replace('\n', ' ').replace('\r', ' '));
+            current = current.getCause() == current ? null : current.getCause();
+        }
+        return String.join(" <- ", levels);
+    }
+
+    private static String innermostFrames(Throwable ex) {
+        Throwable innermost = ex;
+        for (int depth = 0; innermost.getCause() != null && innermost.getCause() != innermost
+                && depth < MAX_CAUSE_DEPTH; depth++) {
+            innermost = innermost.getCause();
+        }
+        StackTraceElement[] frames = innermost.getStackTrace();
+        List<String> shown = new ArrayList<>();
+        for (int i = 0; i < Math.min(LOGGED_FRAMES, frames.length); i++) {
+            shown.add(frames[i].toString());
+        }
+        return String.join(" | ", shown);
     }
 }

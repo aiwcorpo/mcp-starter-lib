@@ -1,102 +1,69 @@
 package pl.aiwcorpo.mcp.platform.observability;
 
-import java.util.Map;
-import java.util.function.Function;
-import org.slf4j.MDC;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.function.UnaryOperator;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.definition.DefaultToolDefinition;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.metadata.ToolMetadata;
+import pl.aiwcorpo.mcp.platform.auth.CallerContext;
 import pl.aiwcorpo.mcp.platform.error.McpErrorMapper;
 import pl.aiwcorpo.mcp.platform.error.SanitizedToolException;
-import pl.aiwcorpo.mcp.platform.guard.CallerContext;
-import pl.aiwcorpo.mcp.platform.guard.CallerIdentity;
+import pl.aiwcorpo.mcp.platform.error.ToolErrorCode;
 import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
-import pl.aiwcorpo.mcp.platform.guard.ToolGuard;
-import pl.aiwcorpo.mcp.platform.guard.ToolRejectedException;
+import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
+import pl.aiwcorpo.mcp.platform.security.BackendCredential;
 import pl.aiwcorpo.mcp.platform.security.CredentialContext;
 
 /**
- * Decorates a {@link ToolCallback} so that every tool invocation is guarded, audited and every failure
- * is sanitized before it can reach the AI client. Applied automatically to all tools by
- * {@link ToolCallbackAuditPostProcessor} — servers do not wire this themselves.
- *
- * <p>This is the seam the platform was missing: {@code AuditLogger} and {@code McpErrorMapper} are
- * only useful if something calls them on the tool-invocation path, and Spring AI's MCP server offers
- * no such hook. It wraps the callback instead.
- *
- * <h2>Why sanitizing here is load-bearing</h2>
- * Spring AI's {@code McpToolUtils} catches {@link Exception} around {@code call(...)} and returns
- * {@code e.getMessage()} to the model as error content. An un-decorated tool that lets a
- * {@code RestClientException} escape therefore hands the model the backend URL and a slice of the
- * upstream response body. Here, only a {@link SanitizedToolException} ever escapes.
- *
- * <h2>What is recorded</h2>
- * Tool name, correlation id, outcome, latency, the number of argument characters and the set of
- * backend systems the caller supplied a PAT for. <b>Never the argument values and never a PAT.</b>
- * Arguments are model-authored free text (issue bodies, snapshot descriptions) and are not worth the
- * disclosure risk in a log that ships to a SIEM.
- *
- * <h2>The guard runs first</h2>
- * Since 2.0.0 a {@link ToolGuard}, when present, decides each call before the tool sees it: is the
- * tool enabled, may this caller use a tool of this risk, and has a human confirmed a destructive
- * call. A refusal is audited ({@code outcome=denied} or {@code confirmation_pending}) and the tool
- * is never invoked.
- *
- * <h2>Subject attribution</h2>
- * With the guard on, the subject is the caller resolved by the {@code IdentityFilter}
- * ({@code anonymous} when no credentials were presented). With the guard off it is
- * {@value #SUBJECT_UNAUTHENTICATED}: the server is then a pure bring-your-own-token passthrough and
- * does not know who the caller is; identity lives in the <em>backend's</em> audit log — join the two
- * on the correlation id.
+ * Wraps every tool the server exposes (applied by {@link ToolCallbackAuditPostProcessor}, servers do not wire
+ * it). Per call:
+ * <ol>
+ *   <li><b>Binding.</b> The call runs only for a verified user caller whose internal JWT names this tool
+ *       ({@code tool} claim). {@code InternalJwtFilter} already compared it with {@code params.name}; this
+ *       repeats the check where the tool actually runs, so a transport path the filter did not classify, or
+ *       a tool invoked without a request, is refused ({@code unauthenticated}) instead of running.</li>
+ *   <li><b>Interceptors</b> ({@link ToolCallInterceptor}), then the tool.</li>
+ *   <li><b>Errors.</b> Whatever escapes is mapped by {@link McpErrorMapper}; only a
+ *       {@link SanitizedToolException} carrying a C10 error object leaves this class. Spring AI puts an
+ *       exception's message verbatim into the tool result, so an unmapped {@code RestClientException} would
+ *       hand the model the backend URL and response body.</li>
+ *   <li><b>Audit.</b> One {@code tool_call} event (C8) per call, refused calls included.</li>
+ * </ol>
+ * Registering the tool here also validates its risk flag, so an unflagged tool stops the server at startup.
  */
 public class AuditingToolCallback implements ToolCallback {
 
-    /** Guard off: no inbound authn exists; the backend's audit log holds the real identity. */
-    public static final String SUBJECT_UNAUTHENTICATED = "-";
+    private static final Set<String> DENIAL_CODES = Set.of(ToolErrorCode.UNAUTHENTICATED.code(),
+            ToolErrorCode.ACCESS_DENIED.code(), ToolErrorCode.NOT_FOUND_OR_DENIED.code(),
+            ToolErrorCode.TOOL_DISABLED.code());
 
     private final ToolCallback delegate;
     private final AuditLogger auditLogger;
     private final McpErrorMapper errorMapper;
-    private final ToolGuard guard;              // null = guard disabled
-    private final ToolDefinition definition;
+    private final List<ToolCallInterceptor> interceptors;
+    private final RiskLevel risk;
 
-    public AuditingToolCallback(ToolCallback delegate, AuditLogger auditLogger, McpErrorMapper errorMapper) {
-        this(delegate, auditLogger, errorMapper, null);
-    }
-
-    /**
-     * @param guard the policy enforcement point, or {@code null} to audit and sanitize only. Passing a
-     *              guard validates the tool immediately: an unflagged tool throws here, at startup.
-     */
     public AuditingToolCallback(ToolCallback delegate, AuditLogger auditLogger, McpErrorMapper errorMapper,
-                                ToolGuard guard) {
+                                ToolRiskRegistry registry, List<ToolCallInterceptor> interceptors) {
         this.delegate = delegate;
         this.auditLogger = auditLogger;
         this.errorMapper = errorMapper;
-        this.guard = guard;
-        if (guard == null) {
-            this.definition = delegate.getToolDefinition();
-        } else {
-            guard.register(delegate);
-            ToolDefinition original = delegate.getToolDefinition();
-            this.definition = DefaultToolDefinition.builder()
-                    .name(original.name())
-                    .description(original.description())
-                    .inputSchema(guard.publishedSchema(delegate))
-                    .build();
-        }
+        this.interceptors = List.copyOf(interceptors);
+        this.risk = registry.register(delegate);
     }
 
-    /** The undecorated tool, for platform code that needs to look past the decorator. */
+    /** The undecorated tool. */
     public ToolCallback getDelegate() {
         return delegate;
     }
 
     @Override
     public ToolDefinition getToolDefinition() {
-        return definition;
+        return delegate.getToolDefinition();
     }
 
     @Override
@@ -106,75 +73,53 @@ public class AuditingToolCallback implements ToolCallback {
 
     @Override
     public String call(String toolInput) {
-        return invoke(delegate::call, toolInput, null);
+        return invoke(toolInput, delegate::call);
     }
 
     @Override
     public String call(String toolInput, ToolContext toolContext) {
-        return invoke(input -> delegate.call(input, toolContext), toolInput, toolContext);
+        return invoke(toolInput, input -> delegate.call(input, toolContext));
     }
 
-    private String invoke(Function<String, String> action, String toolInput, ToolContext toolContext) {
-        String tool = definition.name();
-        long startNanos = System.nanoTime();
-
-        String subject = SUBJECT_UNAUTHENTICATED;
-        String risk = AuditLogger.NONE;
-        String admittedInput = toolInput;
-        String okReason = AuditLogger.NONE;
-        if (guard != null) {
-            try {
-                ToolGuard.Admission admission = guard.admit(delegate, toolInput, toolContext);
-                subject = admission.identity().subject();
-                risk = admission.risk().label();
-                admittedInput = admission.toolInput();
-                okReason = admission.confirmed() ? "user_confirmed" : AuditLogger.NONE;
-            } catch (ToolRejectedException rejected) {
-                audit(tool, subjectOf(rejected.getIdentity()), labelOf(rejected.getRisk()), toolInput,
-                        "confirmation_required".equals(rejected.getCode()) ? "confirmation_pending" : "denied",
-                        rejected.getCode(), startNanos);
-                throw rejected;
-            } catch (RuntimeException ex) {
-                // The guard itself failed. Fail closed: the tool does not run on an undecided call.
-                audit(tool, currentSubject(), risk, toolInput, "error", "guard_error", startNanos);
-                throw new SanitizedToolException(errorMapper.map(ex));
-            }
+    private String invoke(String toolInput, UnaryOperator<String> tool) {
+        String name = delegate.getToolDefinition().name();
+        long start = System.nanoTime();
+        Optional<CallerContext> bound = CallerContext.current()
+                .filter(caller -> !caller.isService() && name.equals(caller.tool()));
+        if (bound.isEmpty()) {
+            SanitizedToolException refused = new SanitizedToolException(new McpErrorMapper.SafeError(
+                    ToolErrorCode.UNAUTHENTICATED.code(), "The call was not authorized for this tool by the platform gateway."));
+            audit(CallerContext.current().orElse(null), name, toolInput, refused.getCode(), start);
+            throw refused;
         }
-
+        CallerContext caller = bound.get();
         try {
-            String result = action.apply(admittedInput);
-            audit(tool, subject, risk, toolInput, "ok", okReason, startNanos);
+            String result = chain(0, new ToolCallInterceptor.Invocation(name, risk, toolInput, caller), tool)
+                    .proceed(toolInput);
+            audit(caller, name, toolInput, null, start);
             return result;
-        } catch (SanitizedToolException alreadySafe) {
-            // A nested decorator already mapped and audited nothing; record the outcome and rethrow as-is.
-            audit(tool, subject, risk, toolInput, "error", alreadySafe.getCode(), startNanos);
-            throw alreadySafe;
         } catch (Exception ex) {
-            McpErrorMapper.SafeError error = errorMapper.map(ex);   // maps AND logs full detail
-            audit(tool, subject, risk, toolInput, "error", error.code(), startNanos);
+            McpErrorMapper.SafeError error = errorMapper.map(ex);
+            audit(caller, name, toolInput, error.code(), start);
             throw new SanitizedToolException(error);
         }
     }
 
-    private void audit(String tool, String subject, String risk, String toolInput, String outcome,
-                       String reason, long startNanos) {
-        long latencyMs = (System.nanoTime() - startNanos) / 1_000_000L;
-        Map<String, Object> redactedArgs = Map.of(
-                "argsChars", toolInput == null ? 0 : toolInput.length(),
-                "patSystems", CredentialContext.systems());
-        auditLogger.toolInvoked(tool, subject, MDC.get(CorrelationIdFilter.MDC_KEY), risk,
-                redactedArgs, outcome, reason, latencyMs);
+    private ToolCallInterceptor.Next chain(int index, ToolCallInterceptor.Invocation invocation,
+                                           UnaryOperator<String> tool) {
+        if (index == interceptors.size()) {
+            return tool::apply;
+        }
+        return arguments -> interceptors.get(index).intercept(
+                new ToolCallInterceptor.Invocation(invocation.tool(), invocation.risk(), arguments, invocation.caller()),
+                chain(index + 1, invocation, tool));
     }
 
-    private static String currentSubject() {
-        return CallerContext.current().map(CallerIdentity::subject).orElse(CallerIdentity.ANONYMOUS_SUBJECT);
-    }
-
-    private static String subjectOf(CallerIdentity identity) {
-        return identity == null ? CallerIdentity.ANONYMOUS_SUBJECT : identity.subject();
-    }
-
-    private static String labelOf(RiskLevel risk) {
-        return risk == null ? AuditLogger.NONE : risk.label();
+    private void audit(CallerContext caller, String tool, String toolInput, String errorCode, long start) {
+        String outcome = errorCode == null ? "ok" : DENIAL_CODES.contains(errorCode) ? "denied" : "error";
+        long latencyMs = (System.nanoTime() - start) / 1_000_000L;
+        long argsLength = toolInput == null ? 0 : toolInput.getBytes(StandardCharsets.UTF_8).length;
+        String credentialType = CredentialContext.type().map(BackendCredential.Type::wireName).orElse(null);
+        auditLogger.toolCall(caller, tool, risk, credentialType, outcome, errorCode, latencyMs, argsLength);
     }
 }

@@ -1,92 +1,89 @@
 package pl.aiwcorpo.mcp.platform.observability;
 
 import java.util.Arrays;
+import java.util.List;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.BeanPostProcessor;
 import pl.aiwcorpo.mcp.platform.error.McpErrorMapper;
-import pl.aiwcorpo.mcp.platform.guard.ToolGuard;
+import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 
 /**
- * Wraps every {@link ToolCallbackProvider} bean (and every stand-alone {@link ToolCallback} bean) so
- * the tools are guarded, audited and their failures sanitized. This is what turns {@link AuditLogger} and {@link McpErrorMapper} from injectable beans
- * into behaviour that actually runs on the tool-invocation path.
+ * Wraps every {@link ToolCallbackProvider} bean (and every stand-alone {@link ToolCallback} bean) in
+ * {@link AuditingToolCallback}. A post-processor rather than a base class: servers keep declaring an ordinary
+ * {@code ToolCallbackProvider} and nothing in a server has to remember to opt in.
  *
- * <p>A post-processor rather than a required base class: servers keep declaring an ordinary
- * {@code ToolCallbackProvider} (an explicit, reviewed allow-list of tools) and get the baseline for
- * free, exactly like the servlet filters. Nothing in a server has to remember to opt in.
- *
- * <p>Dependencies are resolved lazily through {@link ObjectProvider} so registering this
- * post-processor does not force early instantiation of the beans it needs.
+ * <p>Dependencies are resolved lazily through {@link ObjectProvider} so registering this post-processor does
+ * not force early instantiation of the beans it needs.
  */
 public class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
 
     private final ObjectProvider<AuditLogger> auditLogger;
     private final ObjectProvider<McpErrorMapper> errorMapper;
-    private final ObjectProvider<ToolGuard> guard;   // null or empty = guard disabled
-
-    public ToolCallbackAuditPostProcessor(ObjectProvider<AuditLogger> auditLogger,
-                                          ObjectProvider<McpErrorMapper> errorMapper) {
-        this(auditLogger, errorMapper, null);
-    }
+    private final ObjectProvider<ToolRiskRegistry> registry;
+    private final ObjectProvider<ToolCallInterceptor> interceptors;
 
     public ToolCallbackAuditPostProcessor(ObjectProvider<AuditLogger> auditLogger,
                                           ObjectProvider<McpErrorMapper> errorMapper,
-                                          ObjectProvider<ToolGuard> guard) {
+                                          ObjectProvider<ToolRiskRegistry> registry,
+                                          ObjectProvider<ToolCallInterceptor> interceptors) {
         this.auditLogger = auditLogger;
         this.errorMapper = errorMapper;
-        this.guard = guard;
+        this.registry = registry;
+        this.interceptors = interceptors;
     }
 
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) {
         if (bean instanceof ToolCallbackProvider provider) {
-            return bean instanceof AuditedToolCallbackProvider
-                    ? bean
-                    : new AuditedToolCallbackProvider(provider, auditLogger, errorMapper, guard);
+            return bean instanceof AuditedToolCallbackProvider ? bean : new AuditedToolCallbackProvider(provider, this);
         }
-        // Spring AI also exposes tools declared as plain ToolCallback beans. Since 2.0.0 those get the
-        // same treatment; before, a tool declared that way was neither audited nor sanitized.
         if (bean instanceof ToolCallback callback && !(bean instanceof AuditingToolCallback)) {
-            return new AuditingToolCallback(callback, auditLogger.getObject(), errorMapper.getObject(),
-                    guard == null ? null : guard.getIfAvailable());
+            return decorate(callback);
         }
         return bean;
+    }
+
+    ToolCallback decorate(ToolCallback callback) {
+        if (callback instanceof AuditingToolCallback) {
+            return callback;
+        }
+        List<ToolCallInterceptor> chain = interceptors.orderedStream().toList();
+        return new AuditingToolCallback(callback, auditLogger.getObject(), errorMapper.getObject(),
+                registry.getObject(), chain);
     }
 
     /** Marker + decorator; the marker keeps a second post-processing pass from double-wrapping. */
     static final class AuditedToolCallbackProvider implements ToolCallbackProvider {
 
         private final ToolCallbackProvider delegate;
-        private final ObjectProvider<AuditLogger> auditLogger;
-        private final ObjectProvider<McpErrorMapper> errorMapper;
-        private final ObjectProvider<ToolGuard> guard;
+        private final ToolCallbackAuditPostProcessor processor;
+        private volatile ToolCallback[] decorated;
 
-        AuditedToolCallbackProvider(ToolCallbackProvider delegate,
-                                    ObjectProvider<AuditLogger> auditLogger,
-                                    ObjectProvider<McpErrorMapper> errorMapper,
-                                    ObjectProvider<ToolGuard> guard) {
+        AuditedToolCallbackProvider(ToolCallbackProvider delegate, ToolCallbackAuditPostProcessor processor) {
             this.delegate = delegate;
-            this.auditLogger = auditLogger;
-            this.errorMapper = errorMapper;
-            this.guard = guard;
+            this.processor = processor;
         }
 
         /**
-         * Decorating a tool also validates it against the guard, so a tool without a risk flag
-         * surfaces here — while the server is starting — as an exception that stops it.
+         * Decorated once: decorating registers each tool, and a provider asked twice must not look like two
+         * tools with the same name. Decorating also validates the risk flag, so a tool without one stops the
+         * server here, while it is starting.
          */
         @Override
         public ToolCallback[] getToolCallbacks() {
-            AuditLogger audit = auditLogger.getObject();
-            McpErrorMapper errors = errorMapper.getObject();
-            ToolGuard toolGuard = guard == null ? null : guard.getIfAvailable();
-            return Arrays.stream(delegate.getToolCallbacks())
-                    .map(callback -> callback instanceof AuditingToolCallback
-                            ? callback
-                            : new AuditingToolCallback(callback, audit, errors, toolGuard))
-                    .toArray(ToolCallback[]::new);
+            ToolCallback[] result = decorated;
+            if (result == null) {
+                synchronized (this) {
+                    if (decorated == null) {
+                        decorated = Arrays.stream(delegate.getToolCallbacks()).map(processor::decorate)
+                                .toArray(ToolCallback[]::new);
+                    }
+                    result = decorated;
+                }
+            }
+            return result.clone();
         }
     }
 }

@@ -9,14 +9,14 @@ import org.springframework.core.Ordered;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 /**
- * Baseline HTTP hardening headers (HSTS, nosniff, frame-deny). A plain servlet filter, so the
- * platform needs no Spring Security once OAuth was removed. HTTPS itself is enforced by the server
+ * Baseline HTTP hardening headers (HSTS, nosniff, frame-deny). A plain servlet filter; the platform does
+ * not use Spring Security. HTTPS itself is enforced by the server
  * connector ({@code server.ssl}); this just tells clients not to downgrade or frame the responses.
  */
 public class SecurityHeadersFilter extends OncePerRequestFilter implements Ordered {
 
-    /** Last of the platform filters; it only decorates the response. */
-    public static final int ORDER = Ordered.HIGHEST_PRECEDENCE + 30;
+    /** First, so that refusals of the later platform filters (401, 400) carry the headers too. */
+    public static final int ORDER = Ordered.HIGHEST_PRECEDENCE + 5;
 
     @Override
     public int getOrder() {

@@ -7,35 +7,25 @@ import io.modelcontextprotocol.server.McpServerFeatures.SyncToolSpecification;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.util.List;
 import java.util.Map;
+import org.assertj.core.api.InstanceOfAssertFactories;
+import org.assertj.core.groups.Tuple;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.DefaultToolDefinition;
 import org.springframework.ai.tool.definition.ToolDefinition;
-import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.support.DefaultListableBeanFactory;
 
-/**
- * The last line of defence at startup: a tool that reached the MCP server without going through the
- * guard (Spring AI's {@code @McpTool} is the practical way to do that) must stop the server.
- */
+/** A tool that reached the MCP server without the platform decorator (Spring AI's {@code @McpTool}) stops the server. */
 class ToolHintsPostProcessorTest {
 
-    private final ToolGuard guard = new ToolGuard(
-            new GuardPolicyStore(null, 1_000),
-            new ToolRiskRegistry(ToolRiskRegistry.Unclassified.FAIL),
-            new ConfirmationService((identity, tool, summary, code, expiresAt) -> { }),
-            (context, message) -> java.util.Optional.empty());
+    private final ToolRiskRegistry registry = new ToolRiskRegistry(ToolRiskRegistry.Unclassified.FAIL);
+    private final ToolHintsPostProcessor processor;
 
-    private final ToolHintsPostProcessor processor = new ToolHintsPostProcessor(new ObjectProvider<>() {
-        @Override
-        public ToolGuard getObject() {
-            return guard;
-        }
-
-        @Override
-        public ToolGuard getIfAvailable() {
-            return guard;
-        }
-    });
+    ToolHintsPostProcessorTest() {
+        DefaultListableBeanFactory beans = new DefaultListableBeanFactory();
+        beans.registerSingleton("registry", registry);
+        processor = new ToolHintsPostProcessor(beans.getBeanProvider(ToolRiskRegistry.class));
+    }
 
     private static SyncToolSpecification specification(String name) {
         McpSchema.Tool tool = McpSchema.Tool.builder(name, Map.of("type", "object")).description("d").build();
@@ -43,36 +33,39 @@ class ToolHintsPostProcessorTest {
     }
 
     @Test
-    void aToolThatBypassedTheGuardStopsTheServer() {
+    void aToolThatBypassedTheDecoratorStopsTheServer() {
         assertThatThrownBy(() -> processor.postProcessAfterInitialization(
                 List.of(specification("wipe_everything")), "mcpAnnotatedTools"))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("'wipe_everything'")
-                .hasMessageContaining("not protected by the platform guard");
+                .hasMessageContaining("'wipe_everything'");
     }
 
     @Test
-    void guardedToolsGetTheirHints() {
-        guard.register(new Guarded("vault_destroy", RiskLevel.DESTRUCTIVE));
-        guard.register(new Guarded("vault_list", RiskLevel.READ_ONLY));
+    void registeredToolsGetTheirHints() {
+        registry.register(new Flagged("vault_destroy", RiskLevel.DESTRUCTIVE));
+        registry.register(new Flagged("vault_list", RiskLevel.READ_ONLY));
 
         Object processed = processor.postProcessAfterInitialization(
                 List.of(specification("vault_destroy"), specification("vault_list")), "syncTools");
 
-        assertThat(processed).asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.list(SyncToolSpecification.class))
+        assertThat(processed).asInstanceOf(InstanceOfAssertFactories.list(SyncToolSpecification.class))
                 .extracting(spec -> spec.tool().annotations().destructiveHint(), spec -> spec.tool().annotations().readOnlyHint())
-                .containsExactly(org.assertj.core.groups.Tuple.tuple(true, false), org.assertj.core.groups.Tuple.tuple(false, true));
+                .containsExactly(Tuple.tuple(true, false), Tuple.tuple(false, true));
+    }
+
+    @Test
+    void aNameThatContradictsTheFlagStopsTheServer() {
+        assertThatThrownBy(() -> registry.register(new Flagged("delete_issue", RiskLevel.UPDATE)))
+                .hasMessageContaining("'delete'");
     }
 
     @Test
     void otherListsAreLeftAlone() {
         List<String> unrelated = List.of("a", "b");
         assertThat(processor.postProcessAfterInitialization(unrelated, "names")).isSameAs(unrelated);
-        assertThat(processor.postProcessAfterInitialization(List.of(), "empty")).isEqualTo(List.of());
     }
 
-    private record Guarded(String name, RiskLevel riskLevel) implements ToolCallback, RiskClassifiedTool {
-
+    private record Flagged(String name, RiskLevel riskLevel) implements ToolCallback, RiskClassifiedTool {
         @Override
         public ToolDefinition getToolDefinition() {
             return DefaultToolDefinition.builder().name(name).description("d").inputSchema("{}").build();

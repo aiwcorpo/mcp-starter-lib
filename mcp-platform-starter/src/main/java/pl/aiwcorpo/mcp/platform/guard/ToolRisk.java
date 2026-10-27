@@ -8,7 +8,7 @@ import java.lang.annotation.Target;
 
 /**
  * Declares how dangerous a {@code @Tool} method is. Mandatory: a server whose tool carries no flag
- * does not start (see {@code aiwcorpo.mcp.platform.guard.unclassified}).
+ * does not start (see {@code aiwcorpo.mcp.platform.tools.unclassified}).
  *
  * <pre>{@code
  * @Tool(name = "order_cancel", description = "Cancel an order.")
@@ -16,9 +16,9 @@ import java.lang.annotation.Target;
  * public Order cancel(String id) { ... }
  * }</pre>
  *
- * <p>The flag is set by the developer in code and reviewed like code. It is the deterministic input
- * to everything else: who may call the tool, whether a human must confirm the call, and the
- * {@code readOnlyHint}/{@code destructiveHint} the MCP client is shown. No model is asked.
+ * <p>The flag is set by the developer in code and reviewed like code. It goes to the manifest ({@code risk},
+ * C6), on which the gateway decides who may call the tool and whether a human must confirm it, to the audit
+ * (C8), and to the {@code readOnlyHint}/{@code destructiveHint} the MCP client is shown. No model is asked.
  */
 @Target(ElementType.METHOD)
 @Retention(RetentionPolicy.RUNTIME)

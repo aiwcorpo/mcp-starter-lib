@@ -16,17 +16,17 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
  *
  * <p>Spring AI builds the MCP tool list from {@code ToolCallback}s and has no place for these
  * annotations, so this rewrites the finished list. The hints are advice to the client and nothing
- * more: enforcement is {@link ToolGuard}'s job and does not depend on the client honouring them.
+ * more: enforcement does not depend on the client honouring them.
  *
  * <p>Because it sees every finished tool list, this is also where a tool that reached the MCP server
- * without passing through the guard is caught, and the server stopped.
+ * without passing through the platform decorator is caught, and the server stopped.
  */
 public class ToolHintsPostProcessor implements BeanPostProcessor {
 
-    private final ObjectProvider<ToolGuard> guard;
+    private final ObjectProvider<ToolRiskRegistry> registry;
 
-    public ToolHintsPostProcessor(ObjectProvider<ToolGuard> guard) {
-        this.guard = guard;
+    public ToolHintsPostProcessor(ObjectProvider<ToolRiskRegistry> registry) {
+        this.registry = registry;
     }
 
     @Override
@@ -34,8 +34,8 @@ public class ToolHintsPostProcessor implements BeanPostProcessor {
         if (!(bean instanceof List<?> list) || list.isEmpty()) {
             return bean;
         }
-        ToolGuard toolGuard = guard.getIfAvailable();
-        if (toolGuard == null) {
+        ToolRiskRegistry toolRegistry = registry.getIfAvailable();
+        if (toolRegistry == null) {
             return bean;
         }
         boolean allSync = true;
@@ -44,24 +44,23 @@ public class ToolHintsPostProcessor implements BeanPostProcessor {
             if (name == null) {
                 return bean;                      // not a list of MCP tool specifications
             }
-            if (!toolGuard.isRegistered(name)) {
+            if (!toolRegistry.isRegistered(name)) {
                 // By the time Spring AI has built a tool list, every tool that came through a
-                // ToolCallback has been validated by the guard. One that has not took another road —
-                // in practice Spring AI's own @McpTool — and would be callable by anyone, unflagged,
-                // unaudited. There is no safe way to let that start.
-                throw new IllegalStateException("MCP tool '" + name + "' (bean '" + beanName + "') is not "
-                        + "protected by the platform guard. Declare tools with @Tool + @ToolRisk and expose them "
-                        + "through a ToolCallbackProvider; @McpTool-annotated tools bypass the guard and are "
-                        + "not supported while aiwcorpo.mcp.platform.guard.enabled=true.");
+                // ToolCallback has been registered by the audit decorator. One that has not took another
+                // road (in practice Spring AI's own @McpTool) and would run unflagged, unaudited and without
+                // the tool binding check. There is no safe way to let that start.
+                throw new IllegalStateException("MCP tool '" + name + "' (bean '" + beanName + "') does not go "
+                        + "through the platform's tool decorator. Declare tools with @Tool + @ToolRisk and expose "
+                        + "them through a ToolCallbackProvider; @McpTool-annotated tools are not supported.");
             }
             allSync &= item instanceof SyncToolSpecification;
         }
         if (!allSync) {
-            return bean;                          // guarded, but a spec type we do not add hints to
+            return bean;                          // registered, but a spec type we do not add hints to
         }
         List<SyncToolSpecification> result = new ArrayList<>(list.size());
         for (Object item : list) {
-            result.add(withHints((SyncToolSpecification) item, toolGuard));
+            result.add(withHints((SyncToolSpecification) item, toolRegistry));
         }
         return result;
     }
@@ -83,10 +82,9 @@ public class ToolHintsPostProcessor implements BeanPostProcessor {
         return null;
     }
 
-    private static SyncToolSpecification withHints(SyncToolSpecification specification, ToolGuard toolGuard) {
+    private static SyncToolSpecification withHints(SyncToolSpecification specification, ToolRiskRegistry toolRegistry) {
         McpSchema.Tool tool = specification.tool();
-        // By the time Spring AI has built this list, the decorator has validated every tool in it.
-        RiskLevel risk = toolGuard.registeredRisk(tool.name()).orElse(null);
+                RiskLevel risk = toolRegistry.riskOf(tool.name()).orElse(null);
         if (risk == null) {
             return specification;   // not one of ours (e.g. declared with Spring AI's own @McpTool)
         }

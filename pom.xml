@@ -1,15 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  mcp-platform (TEMPLATE) — AGGREGATOR for the shared platform library.
-  Build and install this first (./mvnw install), or publish it to your Maven repository.
-  Every MCP server then depends on the BOM + starter produced here.
+  Aggregator of the shared library for MCP servers behind the platform gateway.
 
   Modules:
-    - mcp-platform-bom     : dependency & version management (importable BOM)
-    - mcp-platform-starter : Spring Boot auto-configuration (security, TLS, observability, error)
-                             that also brings the Spring AI MCP server starter transitively.
+    - mcp-platform-bom     : versions for servers (starter, test support, mcp-contracts, Spring AI)
+    - mcp-platform-starter : Spring Boot auto-configuration: internal JWT (C2), backend credential (C3),
+                             audit (C8), tool errors (C10); brings the Spring AI MCP server starter
+    - mcp-platform-test    : test support for servers (test gateway: JWKS + C2 tokens from the
+                             published test keys of mcp-contracts); test scope only
 
-  Versioning: SemVer. A security/TLS fix = patch/minor bump; servers upgrade by bumping the BOM.
+  Versioning: SemVer, one version for all modules. This line (mcp-platform 3.x) is independent of the
+  mcp-contracts version (2.x).
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -17,7 +18,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>pl.aiwcorpo.mcp</groupId>
     <artifactId>mcp-platform</artifactId>
-    <version>2.0.0</version>       <!-- the platform release line -->
+    <version>3.0.0-alpha-1-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>Aiwcorpo MCP Platform :: Aggregator</name>
 
