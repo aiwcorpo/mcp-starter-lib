@@ -76,6 +76,26 @@ public class AuditLogger {
         write(event);
     }
 
+    /**
+     * {@code event: authentication} (C8, CC-071): a request refused before any caller was established. The
+     * schema allows only the fields written here: nothing taken from the unverified token (not even
+     * {@code sub}) and no part of the token itself.
+     *
+     * @param reason    wire code of the refusal ({@code InternalJwtRejection#code()}), a snake case word
+     * @param errorCode C10 code of the HTTP answer: {@code unauthenticated} (401) or {@code upstream_unavailable}
+     *                  (503, the token could not be judged)
+     */
+    public void authenticationDenied(String reason, String errorCode, long latencyMs) {
+        Map<String, Object> event = base("authentication", null);
+        event.put("server", componentId);
+        event.put("decision", "deny");
+        event.put("reason", reason);
+        event.put("outcome", "denied");
+        event.put("errorCode", errorCode);
+        event.put("latencyMs", Math.max(0, latencyMs));
+        write(event);
+    }
+
     /** The fields every event has, plus the caller's identity when there is one. */
     protected Map<String, Object> base(String eventType, CallerContext caller) {
         Map<String, Object> event = new LinkedHashMap<>();

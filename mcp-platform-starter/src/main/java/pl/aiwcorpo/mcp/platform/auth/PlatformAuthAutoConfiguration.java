@@ -12,6 +12,7 @@ import org.springframework.boot.ssl.SslBundles;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
+import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
 
 /**
  * The internal JWT (C2): gateway keys, {@code jti} store, verifier and {@link InternalJwtFilter}. Always on;
@@ -60,9 +61,9 @@ public class PlatformAuthAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    InternalJwtFilter internalJwtFilter(McpPlatformProperties props, InternalJwtVerifier verifier) {
+    InternalJwtFilter internalJwtFilter(McpPlatformProperties props, InternalJwtVerifier verifier, AuditLogger audit) {
         return new InternalJwtFilter(verifier, props.getInternalJwt().getUnauthenticatedPaths(),
                 props.getInternalJwt().getMaxRequestBody().toBytes(), props.getMtls().isRequired(),
-                Set.copyOf(props.getMtls().getAllowedClientNames()));
+                Set.copyOf(props.getMtls().getAllowedClientNames()), audit);
     }
 }

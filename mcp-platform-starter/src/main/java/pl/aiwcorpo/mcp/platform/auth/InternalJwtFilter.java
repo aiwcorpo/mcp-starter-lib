@@ -19,6 +19,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
 import org.springframework.web.filter.OncePerRequestFilter;
+import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
 import pl.aiwcorpo.mcp.platform.observability.CorrelationIdFilter;
 
 /**
@@ -54,9 +55,18 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
     private final long maxRequestBody;
     private final boolean clientCertificateRequired;
     private final Set<String> allowedClientNames;
+    private final AuditLogger audit;
 
+    /** Without an audit logger the refusals reach only the application log; for tests of the check itself. */
     public InternalJwtFilter(InternalJwtVerifier verifier, List<String> unauthenticatedPaths, long maxRequestBody,
                              boolean clientCertificateRequired, Set<String> allowedClientNames) {
+        this(verifier, unauthenticatedPaths, maxRequestBody, clientCertificateRequired, allowedClientNames, null);
+    }
+
+    /** @param audit receives an {@code authentication} event (C8) for every refused request; may be {@code null} */
+    public InternalJwtFilter(InternalJwtVerifier verifier, List<String> unauthenticatedPaths, long maxRequestBody,
+                             boolean clientCertificateRequired, Set<String> allowedClientNames, AuditLogger audit) {
+        this.audit = audit;
         this.verifier = verifier;
         for (String path : unauthenticatedPaths) {
             if (!path.startsWith("/") || SUSPICIOUS.matcher(path).find() || path.contains("*")) {
@@ -99,18 +109,19 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
+        long start = System.nanoTime();
         if (clientCertificateRequired && !clientCertificateAccepted(request)) {
-            reject(request, response, InternalJwtRejection.CLIENT_CERTIFICATE_REJECTED, null);
+            reject(request, response, InternalJwtRejection.CLIENT_CERTIFICATE_REJECTED, null, start);
             return;
         }
         List<String> authorization = Collections.list(request.getHeaders("Authorization"));
         if (authorization.isEmpty()) {
-            reject(request, response, InternalJwtRejection.MISSING_TOKEN, null);
+            reject(request, response, InternalJwtRejection.MISSING_TOKEN, null, start);
             return;
         }
         String token = authorization.size() == 1 ? bearerToken(authorization.getFirst()) : null;
         if (token == null) {
-            reject(request, response, InternalJwtRejection.MALFORMED, null);
+            reject(request, response, InternalJwtRejection.MALFORMED, null, start);
             return;
         }
 
@@ -138,7 +149,7 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
         try {
             caller = verifier.verify(token, binding);
         } catch (InternalJwtRejectedException ex) {
-            reject(request, response, ex.reason(), binding);
+            reject(request, response, ex.reason(), binding, start);
             return;
         }
         CallerContext.bind(caller);
@@ -179,22 +190,30 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
     }
 
     private void reject(HttpServletRequest request, HttpServletResponse response, InternalJwtRejection reason,
-                        RequestBinding binding) throws IOException {
+                        RequestBinding binding, long start) throws IOException {
         String kind = binding == null ? "-" : binding.kind().name().toLowerCase(Locale.ROOT);
         if (reason.infrastructure()) {
             LOG.error("event=internal_jwt_unverifiable reason={} method={} path=\"{}\" kind={}", reason.code(),
                     request.getMethod(), normalizedPath(request), kind);
             response.setHeader("Retry-After", "5");
+            audit(reason, "upstream_unavailable", start);
             writeError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "upstream_unavailable",
                     "The request could not be authenticated right now. Try again later.");
             return;
         }
         LOG.warn("event=internal_jwt_rejected reason={} method={} path=\"{}\" kind={}", reason.code(),
                 request.getMethod(), normalizedPath(request), kind);
+        audit(reason, "unauthenticated", start);
         response.setHeader("WWW-Authenticate",
                 reason == InternalJwtRejection.MISSING_TOKEN ? "Bearer" : "Bearer error=\"invalid_token\"");
         writeError(response, HttpServletResponse.SC_UNAUTHORIZED, "unauthenticated",
                 "The request was not authenticated by the platform gateway.");
+    }
+
+    private void audit(InternalJwtRejection reason, String errorCode, long start) {
+        if (audit != null) {
+            audit.authenticationDenied(reason.code(), errorCode, (System.nanoTime() - start) / 1_000_000L);
+        }
     }
 
     private static void writeError(HttpServletResponse response, int status, String code, String message)

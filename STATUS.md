@@ -26,6 +26,10 @@ poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i
    żądaniem protokołu (wariant serwisowy dozwolony, CC-069); `subscriptions/listen`, `notifications/*`, GET/DELETE
    już wymagały wariantu użytkownika (CC-070). Wektory JWT 51 (było 43). Schemat Cedar bajtowo bez zmian w 2.x.
    `./mvnw clean install`: 250 testów (starter 192, mcp-platform-test 58).
+2. Zdarzenie audytu `authentication` (C8, CC-071, zamknięta lista pól z 2.1.1): `AuditLogger.authenticationDenied`,
+   wołane z `InternalJwtFilter` przy każdym odrzuceniu (401 z `reason` = kod odrzucenia, 503 z `errorCode`
+   `upstream_unavailable`); bez `sub`, `username`, `client`, `tool`, bez treści tokenu. Testy: `InternalJwtAuditTest`,
+   `GatewayTransportTest.withoutJwt401` (zdarzenie w audycie po żądaniu bez JWT). Razem 255 testów (starter 197).
 
 3.0.0-alpha-6: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-6`,
 tag `v3.0.0-alpha-6`. API bez usunięć; zgłoszenia pięciu serwerów ws-04 i template'u. Instrukcja dla serwerów
@@ -168,7 +172,7 @@ opisane w README i `MIGRATION-3.0.md`.
 
 - Walidacja wejścia w MCP SDK 2.0.x była przed audytem (tekst spoza C10, bez C8): od alpha-6 wyłączona, walidację
   robi starter (patrz alpha-6).
-- Odrzucenia uwierzytelnienia są w logu aplikacji, nie w audycie C8 (brak typu zdarzenia, CC zgłoszone).
+- Odrzucenia uwierzytelnienia: od alpha-7 zdarzenie C8 `authentication` (wcześniej tylko log aplikacji).
 - Wariant serwisowy tylko dla czterech żądań z C2 (dosłownie): `notifications/initialized` i `GET`/`DELETE` sesji
   wymagają wariantu użytkownika (CC zgłoszone; ws-05 i tak wysyła wariant użytkownika).
 - Brak powiązania sesji MCP z `sub` po stronie serwera (C2 nakłada to na gateway).

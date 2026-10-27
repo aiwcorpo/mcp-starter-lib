@@ -1,0 +1,136 @@
+package pl.aiwcorpo.mcp.platform.auth;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
+import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.List;
+import java.util.Set;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
+import org.springframework.mock.web.MockFilterChain;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
+import pl.aiwcorpo.mcp.platform.ContractSchemas;
+import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+
+/** A refused request leaves an {@code authentication} event (C8, CC-071) with the closed field list of 2.1.1. */
+class InternalJwtAuditTest {
+
+    private static final JsonMapper JSON = JsonMapper.builder().build();
+    private static final String GET_ISSUE =
+            "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"get_issue\",\"arguments\":{}}}";
+
+    private final JsonNode vector = JSON.readTree(InternalJwtFilterTest.read("jwt/valid.json"));
+    private final String token = vector.get("token").asString();
+    private final Clock clock = Clock.fixed(Instant.parse(vector.get("verifier").get("now").asString()), ZoneOffset.UTC);
+    private final Logger logger = (Logger) LoggerFactory.getLogger("test.audit.authentication");
+    private final ListAppender<ILoggingEvent> lines = new ListAppender<>();
+
+    InternalJwtAuditTest() {
+        lines.start();
+        logger.addAppender(lines);
+    }
+
+    @AfterEach
+    void detach() {
+        logger.detachAppender(lines);
+    }
+
+    private InternalJwtFilter filter(JtiReplayStore store, boolean mtls) {
+        InternalJwtVerifier verifier = new InternalJwtVerifier(new InternalJwtVerifier.Settings(
+                "https://mcp-gateway.internal", "mcp-jira", Duration.ofSeconds(30), Duration.ofSeconds(60), true),
+                JwksGatewayKeys.of(InternalJwtFilterTest.read("keys/test-gateway-jwks.json")), store, clock);
+        return new InternalJwtFilter(verifier, List.of("/actuator/health"), 1024, mtls, Set.of("mcp-gateway"),
+                new AuditLogger("test.audit.authentication", "mcp-jira"));
+    }
+
+    private MockHttpServletRequest toolCall(String authorization) {
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp");
+        request.setServletPath("/mcp");
+        request.setContent(GET_ISSUE.getBytes(StandardCharsets.UTF_8));
+        request.setContentType("application/json");
+        request.addHeader("X-Request-Id", vector.get("request").get("xRequestId").asString());
+        if (authorization != null) {
+            request.addHeader("Authorization", authorization);
+        }
+        return request;
+    }
+
+    private JsonNode onlyEvent() {
+        assertThat(lines.list).hasSize(1);
+        String line = lines.list.getFirst().getFormattedMessage();
+        assertThat(ContractSchemas.violations(ContractSchemas.AUDIT_EVENT, line)).as(line).isEmpty();
+        JsonNode event = JSON.readTree(line);
+        assertThat(event.get("event").asString()).isEqualTo("authentication");
+        assertThat(event.get("component").asString()).isEqualTo("server");
+        assertThat(event.get("outcome").asString()).isEqualTo("denied");
+        assertThat(event.get("decision").asString()).isEqualTo("deny");
+        assertThat(line).doesNotContain(token).doesNotContain("\"sub\"").doesNotContain("\"tool\"")
+                .doesNotContain("\"client\"").doesNotContain("\"username\"");
+        return event;
+    }
+
+    @Test
+    void aMissingTokenIsAudited() throws Exception {
+        filter(new InMemoryJtiReplayStore(clock), false).doFilter(toolCall(null), new MockHttpServletResponse(),
+                new MockFilterChain());
+
+        JsonNode event = onlyEvent();
+        assertThat(event.get("reason").asString()).isEqualTo("missing_token");
+        assertThat(event.get("errorCode").asString()).isEqualTo("unauthenticated");
+    }
+
+    @Test
+    void aReplayedTokenIsAuditedWithoutTheIdentityItClaims() throws Exception {
+        InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock), false);
+        filter.doFilter(toolCall("Bearer " + token), new MockHttpServletResponse(), new MockFilterChain());
+        assertThat(lines.list).isEmpty();
+
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter.doFilter(toolCall("Bearer " + token), response, new MockFilterChain());
+
+        assertThat(response.getStatus()).isEqualTo(401);
+        assertThat(onlyEvent().get("reason").asString()).isEqualTo("replayed_jti");
+    }
+
+    @Test
+    void aWrongClientCertificateIsAudited() throws Exception {
+        filter(new InMemoryJtiReplayStore(clock), true).doFilter(toolCall("Bearer " + token),
+                new MockHttpServletResponse(), new MockFilterChain());
+
+        assertThat(onlyEvent().get("reason").asString()).isEqualTo("client_certificate_rejected");
+    }
+
+    @Test
+    void aTokenThatCouldNotBeJudgedIsAuditedAsUnavailable() throws Exception {
+        JtiReplayStore down = (jti, until) -> {
+            throw new JtiReplayStore.StoreUnavailableException("down", null);
+        };
+
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filter(down, false).doFilter(toolCall("Bearer " + token), response, new MockFilterChain());
+
+        assertThat(response.getStatus()).isEqualTo(503);
+        JsonNode event = onlyEvent();
+        assertThat(event.get("reason").asString()).isEqualTo("replay_store_unavailable");
+        assertThat(event.get("errorCode").asString()).isEqualTo("upstream_unavailable");
+    }
+
+    @Test
+    void aBrokenSignatureIsAudited() throws Exception {
+        filter(new InMemoryJtiReplayStore(clock), false).doFilter(toolCall("Bearer " + token.substring(0, token.length() - 4) + "AAAA"),
+                new MockHttpServletResponse(), new MockFilterChain());
+
+        assertThat(onlyEvent().get("reason").asString()).isEqualTo("bad_signature");
+    }
+}

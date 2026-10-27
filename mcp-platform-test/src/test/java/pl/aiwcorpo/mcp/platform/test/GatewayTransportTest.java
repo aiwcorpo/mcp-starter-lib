@@ -110,10 +110,25 @@ class GatewayTransportTest {
     }
 
     @Test
-    @DisplayName("without a JWT: 401, never anonymous")
+    @DisplayName("without a JWT: 401, never anonymous, and an authentication event in the audit")
     void withoutJwt401() throws Exception {
+        ch.qos.logback.classic.Logger audit =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("pl.aiwcorpo.mcp.audit");
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> lines =
+                new ch.qos.logback.core.read.ListAppender<>();
+        lines.start();
+        audit.addAppender(lines);
         RawMcp raw = new RawMcp(port);
-        HttpResponse<String> response = raw.post(RawMcp.toolCall("probe_caller"), Map.of(), null);
+        HttpResponse<String> response;
+        try {
+            response = raw.post(RawMcp.toolCall("probe_caller"), Map.of(), null);
+            assertThat(lines.list).anySatisfy(line -> assertThat(line.getFormattedMessage())
+                    .contains("\"event\":\"authentication\"", "\"reason\":\"missing_token\"",
+                            "\"outcome\":\"denied\"", "\"errorCode\":\"unauthenticated\"")
+                    .doesNotContain("\"tool\""));
+        } finally {
+            audit.detachAppender(lines);
+        }
 
         assertThat(response.statusCode()).isEqualTo(401);
         assertThat(response.body()).contains("\"error\":\"unauthenticated\"");
