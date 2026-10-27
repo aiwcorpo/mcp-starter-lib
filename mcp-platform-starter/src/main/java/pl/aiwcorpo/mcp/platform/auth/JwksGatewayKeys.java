@@ -14,6 +14,7 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.locks.ReentrantLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -50,6 +51,7 @@ public final class JwksGatewayKeys implements GatewayKeys {
     private final Duration maxStale;
     private final Duration refreshMinInterval;
 
+    private final ReentrantLock refreshing = new ReentrantLock();
     private volatile Snapshot snapshot;
     private Instant lastAttempt;
 
@@ -88,24 +90,40 @@ public final class JwksGatewayKeys implements GatewayKeys {
         return Optional.ofNullable(key);
     }
 
-    private synchronized Snapshot refresh(Snapshot seen) {
-        if (snapshot != seen) {
-            return snapshot;
+    /**
+     * One fetch at a time. While it runs, other requests that already have a copy go on with it (still bounded
+     * by {@code maxStale} in {@link #find}) instead of queueing behind a slow gateway; only a request with no
+     * copy at all waits.
+     */
+    private Snapshot refresh(Snapshot seen) {
+        if (seen != null) {
+            if (!refreshing.tryLock()) {
+                return seen;
+            }
+        } else {
+            refreshing.lock();
         }
-        Instant now = clock.instant();
-        if (lastAttempt != null && now.isBefore(lastAttempt.plus(refreshMinInterval))) {
-            return snapshot;
-        }
-        lastAttempt = now;
         try {
-            snapshot = new Snapshot(signingKeys(fetcher.fetch()), now);
-            LOG.info("event=gateway_jwks_fetched kids={}", snapshot.keys().keySet());
-        } catch (Exception ex) {
-            // The exception text may quote a response body; the class name says enough to diagnose.
-            LOG.warn("event=gateway_jwks_fetch_failed error={} cachedAgeSeconds={}", ex.getClass().getName(),
-                    snapshot == null ? "none" : Duration.between(snapshot.fetchedAt(), now).toSeconds());
+            if (snapshot != seen) {
+                return snapshot;
+            }
+            Instant now = clock.instant();
+            if (lastAttempt != null && now.isBefore(lastAttempt.plus(refreshMinInterval))) {
+                return snapshot;
+            }
+            lastAttempt = now;
+            try {
+                snapshot = new Snapshot(signingKeys(fetcher.fetch()), now);
+                LOG.info("event=gateway_jwks_fetched kids={}", snapshot.keys().keySet());
+            } catch (Exception ex) {
+                // The exception text may quote a response body; the class name says enough to diagnose.
+                LOG.warn("event=gateway_jwks_fetch_failed error={} cachedAgeSeconds={}", ex.getClass().getName(),
+                        snapshot == null ? "none" : Duration.between(snapshot.fetchedAt(), now).toSeconds());
+            }
+            return snapshot;
+        } finally {
+            refreshing.unlock();
         }
-        return snapshot;
     }
 
     private static Map<String, ECKey> signingKeys(String jwksJson) throws java.text.ParseException {

@@ -1,6 +1,6 @@
 # Migracja z 2.x na 3.0
 
-Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-2**.
+Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-3**.
 
 ## Zmiana modelu
 
@@ -58,6 +58,18 @@ ma trybu "anonimowego".
 
 Od 3.0.0-alpha-2 starter ustawia domyślnie `spring.ai.mcp.server.protocol=STREAMABLE`, `type=SYNC` i
 `streamable-http.mcp-endpoint=/mcp` (serwer może nadpisać). Serwer na 3.0.0-alpha-1 musi je ustawić sam.
+
+## Zmiany w 3.0.0-alpha-3 (po recenzji alpha-1)
+
+- Komunikat do klienta jako `invalid_argument` tylko z `InvalidToolArgumentException` (nowa klasa, podklasa
+  `IllegalArgumentException`). Zwykły `IllegalArgumentException` daje `invalid_argument` ze stałym tekstem:
+  walidację argumentów, której komunikat ma zobaczyć model, rzucaj jako `InvalidToolArgumentException`.
+- Profil `dev` daje relaksacje tylko jako jedyny aktywny profil; `dev` z innym profilem zatrzymuje start.
+- Poza `dev`: `jwks-uri` tylko `https`, wymagane `server.ssl.client-auth=need`, brak osobnego
+  `management.server.port`.
+- `unauthenticated-paths` tylko z listy zdrowia; protokół MCP tylko `STREAMABLE`.
+- Skaner `@McpTool` wyłączony; narzędzie spoza opakowania zatrzymuje start.
+- Domyślny `spring.data.redis.timeout=2s`.
 
 ## Wdrożenie
 

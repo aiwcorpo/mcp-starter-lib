@@ -17,6 +17,11 @@ import org.springframework.core.env.MapPropertySource;
  *       {@code streamable-http.mcp-endpoint=/mcp}: the transport the gateway speaks to (streamable HTTP) and the
  *       one the platform's ThreadLocals work with (SYNC). Spring AI's own default protocol does not mount
  *       {@code /mcp}, which left servers answering 404 on every call.</li>
+ *   <li>{@code spring.ai.mcp.server.annotation-scanner.enabled=false}: tools declared with {@code @McpTool}
+ *       would bypass the platform's decorator; {@code RegisteredToolsCheck} stops the server if one gets in
+ *       anyway.</li>
+ *   <li>{@code spring.data.redis.timeout=2s}: a hung Redis answers 503 quickly instead of holding request
+ *       threads for the client's default minute.</li>
  * </ul>
  */
 public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPostProcessor {
@@ -30,7 +35,9 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
                     Map.of("management.health.redis.enabled", "false",
                             "spring.ai.mcp.server.protocol", "STREAMABLE",
                             "spring.ai.mcp.server.type", "SYNC",
-                            "spring.ai.mcp.server.streamable-http.mcp-endpoint", "/mcp")));
+                            "spring.ai.mcp.server.streamable-http.mcp-endpoint", "/mcp",
+                            "spring.ai.mcp.server.annotation-scanner.enabled", "false",
+                            "spring.data.redis.timeout", "2s")));
         }
     }
 }

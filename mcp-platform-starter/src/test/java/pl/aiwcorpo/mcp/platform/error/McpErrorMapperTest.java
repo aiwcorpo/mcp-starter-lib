@@ -64,11 +64,40 @@ class McpErrorMapperTest {
     }
 
     @Test
-    void validationIsEchoedSoTheModelCanCorrectItself() {
-        SafeError error = mapper.map(wrapped(new IllegalArgumentException("issueKey must look like ABC-123")));
+    void theServersOwnValidationIsEchoedSoTheModelCanCorrectItself() {
+        SafeError error = mapper.map(wrapped(new InvalidToolArgumentException("issueKey must look like ABC-123")));
 
         assertThat(error).isEqualTo(new SafeError("invalid_argument", "issueKey must look like ABC-123"));
         json(error);
+    }
+
+    @Test
+    void aPlainIllegalArgumentExceptionGetsAFixedText() {
+        SafeError error = mapper.map(wrapped(new IllegalArgumentException("Illegal character in path at index 9: "
+                + "/rest/api/2/issue/{\"secret\":\"backend data\"}")));
+
+        assertThat(error).isEqualTo(new SafeError("invalid_argument", "The arguments of the call are not valid."));
+    }
+
+    @Test
+    void encodedFormsOfTheCredentialAreRemovedToo() {
+        BackendCredential credential = new BackendCredential(BackendCredential.Scheme.BEARER, "glpat/a+b=c-0000",
+                BackendCredential.Type.USER_SECRET);
+
+        SafeError error = TestCredentials.with("jira", credential, () -> mapper.map(new InvalidToolArgumentException(
+                "raw glpat/a+b=c-0000 url glpat%2Fa%2Bb%3Dc-0000 lower glpat%2fa%2bb%3dc-0000 json glpat\\/a+b=c-0000")));
+
+        assertThat(error.message()).doesNotContain("glpat").contains("[REDACTED]");
+    }
+
+    @Test
+    void anErrorMissingARequiredFieldBecomesInternalError() {
+        ToolErrorMapping incomplete = ex -> Optional.of(new SafeError("confirmation_required", "Confirm it."));
+
+        assertThat(new McpErrorMapper(List.of(incomplete), CONNECT).map(new RuntimeException()).code())
+                .isEqualTo("internal_error");
+        assertThat(new McpErrorMapper().map(new CredentialRequiredException("jira")).code())
+                .as("credential_required needs connectUrl").isEqualTo("internal_error");
     }
 
     @Test
@@ -77,7 +106,7 @@ class McpErrorMapperTest {
                 BackendCredential.Type.USER_SECRET);
 
         SafeError error = TestCredentials.with("jira", credential,
-                () -> mapper.map(new IllegalArgumentException("token jira-pat-0000secret is not valid for ABC")));
+                () -> mapper.map(new InvalidToolArgumentException("token jira-pat-0000secret is not valid for ABC")));
 
         assertThat(error.message()).doesNotContain("jira-pat-0000secret").contains("[REDACTED]");
     }

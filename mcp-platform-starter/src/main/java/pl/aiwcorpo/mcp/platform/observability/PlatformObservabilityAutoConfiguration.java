@@ -1,5 +1,6 @@
 package pl.aiwcorpo.mcp.platform.observability;
 
+import io.modelcontextprotocol.server.McpSyncServer;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -9,6 +10,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 import pl.aiwcorpo.mcp.platform.error.McpErrorMapper;
+import pl.aiwcorpo.mcp.platform.guard.RegisteredToolsCheck;
 import pl.aiwcorpo.mcp.platform.guard.ToolHintsPostProcessor;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 
@@ -46,6 +48,12 @@ public class PlatformObservabilityAutoConfiguration {
             ObjectProvider<AuditLogger> auditLogger, ObjectProvider<McpErrorMapper> errorMapper,
             ObjectProvider<ToolRiskRegistry> registry, ObjectProvider<ToolCallInterceptor> interceptors) {
         return new ToolCallbackAuditPostProcessor(auditLogger, errorMapper, registry, interceptors);
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
+    RegisteredToolsCheck registeredToolsCheck(ObjectProvider<McpSyncServer> servers, ToolRiskRegistry registry) {
+        return new RegisteredToolsCheck(servers, registry);
     }
 
     @Bean

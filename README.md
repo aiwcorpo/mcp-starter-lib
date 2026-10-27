@@ -6,7 +6,7 @@ robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadc
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
 Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 2.0.2.
-Wersja: **3.0.0-alpha-2** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+Wersja: **3.0.0-alpha-3** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
 
@@ -76,11 +76,14 @@ i filtr wyników w beta), mapuje wyjątki na błędy C10 i zapisuje jedno zdarze
 
 **Błędy narzędzi (C10).** Jedyny wyjątek, który opuszcza narzędzie, to `SanitizedToolException`; jego komunikat
 to obiekt `{"error":"<kod>","message":"...",...}` zgodny z `schemas/tool-error.schema.json`. Mapowanie:
-`CredentialRequiredException` -> `credential_required` (`system`, `connectUrl`), `IllegalArgumentException` ->
-`invalid_argument` z własnym komunikatem (nigdy z treścią odpowiedzi backendu), `SecurityException` ->
+`CredentialRequiredException` -> `credential_required` (`system`, `connectUrl`), `InvalidToolArgumentException` ->
+`invalid_argument` z własnym komunikatem (piszesz go sam, nigdy z treścią odpowiedzi backendu), każdy inny
+`IllegalArgumentException` (biblioteki, konwersje) -> `invalid_argument` ze stałym tekstem, `SecurityException` ->
 `access_denied`, backend nieosiągalny albo 502/503/504 -> `upstream_unavailable`, reszta -> `internal_error`.
-Własne mapowania: beany `ToolErrorMapping`, tylko z kodami C10. Z każdego komunikatu (do klienta i do logu)
-usuwane jest poświadczenie bieżącego żądania; ciała odpowiedzi błędów backendu nie są logowane.
+Własne mapowania: beany `ToolErrorMapping`, tylko z kodami C10; wynik niezgodny z `tool-error.schema.json`
+(np. bez wymaganego pola) klient dostaje jako `internal_error`. Z każdego komunikatu (do klienta i do logu)
+usuwane jest poświadczenie bieżącego żądania, także w postaci URL-encoded i JSON-escaped; ciała odpowiedzi błędów
+backendu nie są logowane.
 
 **Audyt (C8).** Jedna linia JSON na zdarzenie na loggerze `pl.aiwcorpo.mcp.audit` (`component: server`,
 `componentId` = `server-id`, `requestId` = `rid`, `risk`, `credentialType`, `outcome`, `errorCode`,
@@ -89,8 +92,10 @@ jest zapisywane jako escape JSON.
 
 **Flaga ryzyka.** Każde narzędzie ma `@ToolRisk(RiskLevel.READ_ONLY | UPDATE | DESTRUCTIVE)`; bez niej, z nazwą
 sprzeczną z flagą (`delete_*` jako `READ_ONLY`) albo z powtórzoną nazwą serwer nie wstaje. Flaga trafia do
-`readOnlyHint`/`destructiveHint` i do audytu (`risk`). Narzędzia `@McpTool` omijają opakowanie, więc serwer z
-nimi nie wstaje.
+`readOnlyHint`/`destructiveHint` i do audytu (`risk`). Narzędzia `@McpTool` i ręczne beany
+`SyncToolSpecification` omijałyby opakowanie: starter wyłącza skaner adnotacji Spring AI
+(`spring.ai.mcp.server.annotation-scanner.enabled=false`), a serwer, na którego liście jest narzędzie
+niezarejestrowane przez opakowanie, nie wstaje (`RegisteredToolsCheck`).
 
 **Transport SYNC.** `CallerContext` i `CredentialContext` to `ThreadLocal`; `spring.ai.mcp.server.type=ASYNC`
 zatrzymuje start (`CredentialTransportGuard`).
@@ -130,13 +135,24 @@ server.ssl:                                               # mTLS kończy serwer
   client-auth: need
 ```
 
-Serwer nie wstaje, gdy brakuje `server-id`, `jwks-uri` albo `connect-url`, gdy `clock-skew`/`max-lifetime`
-przekraczają limity C2, gdy poza profilem `dev` włączono `dev-pat`, `allow-test-keys`, `replay-store: memory`
-albo `mtls.required: false`, i gdy zostały ustawienia 2.x (`guard.*`, `pat-header-prefix`). Starter wyłącza
-domyślnie `management.health.redis.enabled`, bo sprawdzenie zdrowia Redisa używa `INFO`, którego użytkownik
-`mcp-<system>` w `mcp-platform-dev` nie może wykonać.
+Serwer nie wstaje, gdy:
+- brakuje `server-id`, `jwks-uri` albo `connect-url`, `clock-skew`/`max-lifetime` przekraczają limity C2;
+- `unauthenticated-paths` zawiera coś spoza `/actuator/health`, `/actuator/health/liveness`,
+  `/actuator/health/readiness`; protokół MCP jest inny niż `STREAMABLE`;
+- zostały ustawienia 2.x (`guard.*`, `pat-header-prefix`);
+- profil `dev` jest aktywny razem z innym profilem (także przez grupę profili). Relaksacje działają tylko, gdy
+  `dev` jest **jedynym aktywnym** profilem; `spring.profiles.default=dev` się nie liczy;
+- poza takim profilem `dev`: włączono `dev-pat`, `allow-test-keys`, `replay-store: memory` albo
+  `mtls.required: false`; `jwks-uri` nie jest absolutnym URL `https`; brak `server.ssl.client-auth=need`;
+  `management.server.port` jest ustawiony i różny od `server.port` (osobny serwer managementu nie przechodzi
+  przez filtr JWT/mTLS).
 
-**Tryb `dev-pat`** (tylko z aktywnym profilem `dev`): poza `X-MCP-Credential` serwer przyjmuje token
+Domyślne wartości startera (najniższy priorytet): `management.health.redis.enabled=false` (sprawdzenie zdrowia
+Redisa używa `INFO`, którego użytkownik `mcp-<system>` w `mcp-platform-dev` nie może wykonać),
+`spring.data.redis.timeout=2s` (zawieszony Redis daje szybko 503), transport MCP jak w "Pierwszy serwer",
+`spring.ai.mcp.server.annotation-scanner.enabled=false`.
+
+**Tryb `dev-pat`** (tylko gdy `dev` jest jedynym aktywnym profilem): poza `X-MCP-Credential` serwer przyjmuje token
 programisty w `X-PAT-<system>` (np. `X-PAT-Jira`) jako `Bearer` typu `user-secret`. Wewnętrzny JWT nadal jest
 wymagany.
 
@@ -309,7 +325,7 @@ Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera t
 ```xml
 <dependency>
   <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-  <version>3.0.0-alpha-2</version><type>pom</type><scope>import</scope>
+  <version>3.0.0-alpha-3</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
 

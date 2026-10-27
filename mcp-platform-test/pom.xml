@@ -20,7 +20,7 @@
 
     <groupId>pl.aiwcorpo.mcp</groupId>
     <artifactId>mcp-platform-test</artifactId>
-    <version>3.0.0-alpha-2</version>
+    <version>3.0.0-alpha-3</version>
     <name>Aiwcorpo MCP Platform :: Test support</name>
 
     <properties>

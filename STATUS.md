@@ -21,6 +21,26 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
 
+3.0.0-alpha-3: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-3`,
+tag `v3.0.0-alpha-3`. Poprawki po recenzji bez kontekstu alpha-1. Publiczne API bez usunięć; zmiana zachowania:
+`invalid_argument` z komunikatem tylko dla nowej `InvalidToolArgumentException` (M4), plus nowe odmowy startu
+opisane w README i `MIGRATION-3.0.md`.
+
+| Znalezisko | Status | Gdzie |
+| --- | --- | --- |
+| H1 `@McpTool` / `SyncToolSpecification` omijają opakowanie | naprawione: skaner adnotacji domyślnie wyłączony; bean specyfikacji narzędzia zatrzymuje start (`ToolHintsPostProcessor`); `RegisteredToolsCheck` zatrzymuje start, gdy `McpSyncServer.listTools()` zawiera narzędzie spoza `ToolRiskRegistry` | `ToolBypassTest`, `RegisteredToolsCheckTest` |
+| M1 `dev` obok innych profili | naprawione: relaksacje tylko, gdy `dev` jest jedynym aktywnym profilem (`getActiveProfiles()`, profil domyślny się nie liczy); `dev` z innym profilem (także z grupy) zatrzymuje start | `PlatformConfigurationGuardTest` |
+| M2 dowolne `unauthenticated-paths` | naprawione: tylko `/actuator/health`, `/liveness`, `/readiness`, inaczej odmowa startu w każdym profilu | `PlatformConfigurationGuardTest` |
+| M3 JWKS po http | naprawione: poza `dev` tylko absolutny URL `https` | `PlatformConfigurationGuardTest` |
+| M4 echo obcych `IllegalArgumentException`, redakcja postaci zakodowanych | naprawione: echo tylko `InvalidToolArgumentException`, inne IAE stały tekst; redakcja raw, URL-encoded (obie wielkości hex, `+`/`%20`) i JSON-escaped | `McpErrorMapperTest`, `CredentialLeakTest` |
+| M5 osobny port managementu | naprawione: poza `dev` `management.server.port` różny od `server.port` zatrzymuje start (filtr nie obejmuje kontekstu managementu) | `PlatformConfigurationGuardTest` |
+| L1 401 poza audytem C8 | otwarte: czeka na decyzję w CC (zgłoszone przez ws-02) | - |
+| L2 monitor przy odświeżaniu JWKS | naprawione: jedno pobranie naraz, pozostałe żądania z kopią (w granicach `max-stale`) nie czekają | `JwksGatewayKeysTest` |
+| L3 konfiguracja TLS | częściowo: poza `dev` wymagane `server.ssl.client-auth=need`; przypięcie CA wystawcy/odcisku certyfikatu nie zrobione (zależne od truststore serwera, opisane w README) | `PlatformConfigurationGuardTest` |
+| L4 buforowanie ciała przed weryfikacją JWT | otwarte: zmiana kolejności kontroli wymaga osobnego zachowania kolejności powodów z wektorów; ograniczone przez mTLS (certyfikat gateway'a) i limit 4 MB; na beta | - |
+| L5 wymagane pola C10 | naprawione: wynik mappera walidowany `tool-error.schema.json`, niezgodny -> `internal_error` (także `credential_required` bez `connectUrl`) | `McpErrorMapperTest` |
+| L6 timeout Redis | naprawione: domyślnie `spring.data.redis.timeout=2s` | `PlatformDefaultsEnvironmentPostProcessor` |
+
 ## Zrobione w 3.0.0-alpha-1 (brief: punkty 1, 2, 8 i audyt C8)
 
 - Punkt 1, `InternalJwtFilter` / `InternalJwtVerifier` (C2 z 2.0.2): JWKS gateway'a (cache, odświeżenie na
@@ -45,7 +65,7 @@ poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i
 
 ## Dowód
 
-`./mvnw clean install` (JDK 25, Docker): starter 144 testy, mcp-platform-test 43 testy (alpha-1: 39), 0 błędów.
+`./mvnw clean install` (JDK 25, Docker), 3.0.0-alpha-3: starter 154 testy, mcp-platform-test 46 testów, 0 błędów (alpha-1: 144 i 39).
 
 - `InternalJwtVectorsTest`: 43/43 wektory `test-vectors/jwt` z jara `test-vectors` 2.0.2, wynik i powód zgodne
   (weryfikator), plus 38 wektorów serwera przez filtr HTTP ze statusem z wektora; test pilnuje, że katalog ma 43

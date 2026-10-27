@@ -31,6 +31,16 @@ public class ToolHintsPostProcessor implements BeanPostProcessor {
 
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) {
+        String single = toolNameOf(bean);
+        if (single != null) {
+            ToolRiskRegistry toolRegistry = registry.getIfAvailable();
+            if (toolRegistry == null || !toolRegistry.isRegistered(single)) {
+                throw new IllegalStateException("MCP tool '" + single + "' (bean '" + beanName + "') is a tool "
+                        + "specification bean and does not go through the platform's tool decorator. Declare tools "
+                        + "with @Tool + @ToolRisk and expose them through a ToolCallbackProvider.");
+            }
+            return bean;
+        }
         if (!(bean instanceof List<?> list) || list.isEmpty()) {
             return bean;
         }

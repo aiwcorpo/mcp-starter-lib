@@ -6,12 +6,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import com.networknt.schema.Schema;
+import com.networknt.schema.SchemaLocation;
+import com.networknt.schema.SchemaRegistry;
+import com.networknt.schema.SpecificationVersion;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClientResponseException;
 import pl.aiwcorpo.mcp.platform.security.CredentialRequiredException;
 import pl.aiwcorpo.mcp.platform.security.SecretRedactor;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Maps whatever a tool threw to a C10 error the AI client may see, and logs the detail for operators.
@@ -23,14 +28,17 @@ import pl.aiwcorpo.mcp.platform.security.SecretRedactor;
  *   <li>{@link SanitizedToolException}: kept as it is;</li>
  *   <li>{@link CredentialRequiredException}: {@code credential_required} with {@code system} and the portal's
  *       {@code connectUrl};</li>
- *   <li>{@link IllegalArgumentException}: {@code invalid_argument} with its own message, so the model can
+ *   <li>{@link InvalidToolArgumentException}: {@code invalid_argument} with its own message, so the model can
  *       correct the call. <b>Invariant:</b> never thrown with text from a backend response;</li>
+ *   <li>any other {@link IllegalArgumentException} (libraries, conversions): {@code invalid_argument}, fixed
+ *       text;</li>
  *   <li>{@link SecurityException}: {@code access_denied}, fixed text;</li>
  *   <li>backend unreachable ({@link ResourceAccessException}) or answering 502/503/504:
  *       {@code upstream_unavailable}, fixed text.</li>
  * </ul>
  * A code outside C10 becomes {@code internal_error}; fields C10 does not define for the code are dropped;
- * the message is cut to 500 characters. The current request's credential is removed from every message.
+ * the message is cut to 500 characters; a result that still does not match {@code tool-error.schema.json}
+ * (e.g. a required field missing) becomes {@code internal_error}. The current request's credential is removed from every message.
  *
  * <h2>What the log gets</h2>
  * One line per failure with the exception classes and messages of the chain (credential removed) and the
@@ -47,6 +55,11 @@ public class McpErrorMapper {
     private static final int MAX_CAUSE_DEPTH = 10;
     private static final int LOGGED_FRAMES = 8;
     private static final String GENERIC = "The tool could not complete the request.";
+    private static final String INVALID_ARGUMENT_TEXT = "The arguments of the call are not valid.";
+    private static final Schema TOOL_ERROR_SCHEMA = SchemaRegistry
+            .withDefaultDialect(SpecificationVersion.DRAFT_2020_12)
+            .getSchema(SchemaLocation.of("classpath:mcp-contracts/schemas/tool-error.schema.json"));
+    private static final JsonMapper JSON = JsonMapper.builder().build();
 
     /** Code-specific fields allowed by {@code tool-error.schema.json}. */
     private static final Map<String, Set<String>> DETAILS_BY_CODE = Map.of(
@@ -117,9 +130,12 @@ public class McpErrorMapper {
             return Optional.of(new SafeError(ToolErrorCode.CREDENTIAL_REQUIRED.code(),
                     "Connect your " + missing.getSystem() + " account in the portal, then try again.", details));
         }
-        if (ex instanceof IllegalArgumentException) {
+        if (ex instanceof InvalidToolArgumentException) {
             return Optional.of(new SafeError(ToolErrorCode.INVALID_ARGUMENT.code(),
-                    echo(ex, "The request was invalid.")));
+                    echo(ex, INVALID_ARGUMENT_TEXT)));
+        }
+        if (ex instanceof IllegalArgumentException) {
+            return Optional.of(new SafeError(ToolErrorCode.INVALID_ARGUMENT.code(), INVALID_ARGUMENT_TEXT));
         }
         if (ex instanceof SecurityException) {
             return Optional.of(new SafeError(ToolErrorCode.ACCESS_DENIED.code(), "Not authorized for this operation."));
@@ -145,7 +161,21 @@ public class McpErrorMapper {
                 details.put(key, value instanceof String text ? SecretRedactor.redact(text) : value);
             }
         });
-        return new SafeError(error.code(), truncate(SecretRedactor.redact(error.message())), details);
+        SafeError normalized = new SafeError(error.code(), truncate(SecretRedactor.redact(error.message())), details);
+        if (!TOOL_ERROR_SCHEMA.validate(JSON.valueToTree(asObject(normalized))).isEmpty()) {
+            LOG.warn("event=tool_error_invalid code=\"{}\" detail=\"does not match tool-error.schema.json; sent as "
+                    + "internal_error\"", error.code());
+            return new SafeError(ToolErrorCode.INTERNAL_ERROR.code(), GENERIC);
+        }
+        return normalized;
+    }
+
+    private static Map<String, Object> asObject(SafeError error) {
+        Map<String, Object> object = new LinkedHashMap<>();
+        object.put("error", error.code());
+        object.put("message", error.message());
+        object.putAll(error.details());
+        return object;
     }
 
     private static String echo(Throwable ex, String fallback) {

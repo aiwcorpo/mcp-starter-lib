@@ -4,6 +4,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Pattern;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.boot.context.properties.bind.Bindable;
@@ -16,8 +17,12 @@ import org.springframework.core.env.Environment;
  * <ul>
  *   <li>{@code server-id}, {@code internal-jwt.jwks-uri} and {@code credential.connect-url} are set.</li>
  *   <li>The development relaxations ({@code auth-mode=dev-pat}, {@code internal-jwt.allow-test-keys},
- *       {@code internal-jwt.replay-store=memory}, {@code mtls.required=false}) only with the {@code dev}
- *       profile active.</li>
+ *       {@code internal-jwt.replay-store=memory}, {@code mtls.required=false}, plain-http JWKS, a separate
+ *       management port) only when {@code dev} is the one and only active profile; {@code dev} next to another
+ *       profile, through a profile group or as a default profile does not count and, when active with others,
+ *       stops the server.</li>
+ *   <li>Outside {@code dev}: {@code server.ssl.client-auth=need}, https JWKS, no separate management port.</li>
+ *   <li>Unauthenticated paths only from {@link #ALLOWED_UNAUTHENTICATED_PATHS}; MCP transport STREAMABLE.</li>
  *   <li>Clock skew at most 30 s and token lifetime at most 60 s (C2).</li>
  *   <li>No 2.x settings ({@code guard.*}, {@code pat-header-prefix}): left in place they would be ignored
  *       while the operator believes they still protect the server.</li>
@@ -27,6 +32,10 @@ public class PlatformConfigurationGuard implements InitializingBean {
 
     /** The profile under which development relaxations are allowed. */
     public static final String DEV_PROFILE = "dev";
+
+    /** The only paths that may be served without the internal JWT (health probes of the orchestrator). */
+    public static final Set<String> ALLOWED_UNAUTHENTICATED_PATHS =
+            Set.of("/actuator/health", "/actuator/health/liveness", "/actuator/health/readiness");
 
     /** {@code common.schema.json#/$defs/ComponentId}. */
     private static final Pattern COMPONENT_ID = Pattern.compile("^mcp-[a-z0-9]+(-[a-z0-9]+)*$");
@@ -48,8 +57,33 @@ public class PlatformConfigurationGuard implements InitializingBean {
         if (serverId == null || !COMPONENT_ID.matcher(serverId).matches()) {
             problems.add("aiwcorpo.mcp.platform.server-id must be set to mcp-<system> (the aud of the internal JWT)");
         }
+        List<String> active = List.of(environment.getActiveProfiles());
+        boolean dev = active.equals(List.of(DEV_PROFILE));
+        if (active.contains(DEV_PROFILE) && !dev) {
+            problems.add("the 'dev' profile must be the only active profile (active: " + active + "): its relaxations "
+                    + "must not ride along with another profile");
+        }
+
         if (isBlank(jwt.getJwksUri())) {
             problems.add("aiwcorpo.mcp.platform.internal-jwt.jwks-uri must point at the gateway's JWKS");
+        } else if (!dev && !absoluteUrl(jwt.getJwksUri(), Set.of("https"))) {
+            problems.add("aiwcorpo.mcp.platform.internal-jwt.jwks-uri must be an absolute https URL outside the 'dev' profile");
+        }
+        for (String path : jwt.getUnauthenticatedPaths()) {
+            if (!ALLOWED_UNAUTHENTICATED_PATHS.contains(path)) {
+                problems.add("aiwcorpo.mcp.platform.internal-jwt.unauthenticated-paths may contain only "
+                        + ALLOWED_UNAUTHENTICATED_PATHS + ", not '" + path + "'");
+            }
+        }
+        String protocol = environment.getProperty("spring.ai.mcp.server.protocol", "STREAMABLE");
+        if (!"STREAMABLE".equalsIgnoreCase(protocol.trim())) {
+            problems.add("spring.ai.mcp.server.protocol must be STREAMABLE (the transport the gateway uses and the "
+                    + "platform's checks are built for), not " + protocol);
+        }
+        String managementPort = environment.getProperty("management.server.port");
+        if (!dev && managementPort != null && !managementPort.equals(environment.getProperty("server.port", "8080"))) {
+            problems.add("management.server.port must be unset or equal to server.port outside the 'dev' profile: "
+                    + "the internal JWT and mTLS checks do not cover a separate management server");
         }
         if (isBlank(jwt.getIssuer())) {
             problems.add("aiwcorpo.mcp.platform.internal-jwt.issuer must not be empty");
@@ -61,12 +95,17 @@ public class PlatformConfigurationGuard implements InitializingBean {
             problems.add("aiwcorpo.mcp.platform.internal-jwt.max-lifetime must be between 1s and 60s (C2)");
         }
         String connectUrl = properties.getCredential().getConnectUrl();
-        if (isBlank(connectUrl) || !absoluteHttpUrl(connectUrl.replace("{system}", "jira"))) {
+        if (isBlank(connectUrl) || !absoluteUrl(connectUrl.replace("{system}", "jira"), Set.of("http", "https"))) {
             problems.add("aiwcorpo.mcp.platform.credential.connect-url must be the portal URL for connecting an "
                     + "account, with {system} as placeholder (sent in credential_required)");
         }
 
-        if (!environment.matchesProfiles(DEV_PROFILE)) {
+        if (!dev) {
+            if (properties.getMtls().isRequired()
+                    && !"need".equalsIgnoreCase(environment.getProperty("server.ssl.client-auth", "").trim())) {
+                problems.add("server.ssl.client-auth=need is required outside the 'dev' profile: the gateway's client "
+                        + "certificate is verified by the server's TLS (truststore with the internal CA)");
+            }
             if (properties.getAuthMode() == AuthMode.DEV_PAT) {
                 problems.add("aiwcorpo.mcp.platform.auth-mode=dev-pat is allowed only with the 'dev' profile");
             }
@@ -100,11 +139,10 @@ public class PlatformConfigurationGuard implements InitializingBean {
         return value == null || value.isBlank();
     }
 
-    private static boolean absoluteHttpUrl(String value) {
+    private static boolean absoluteUrl(String value, Set<String> schemes) {
         try {
             URI uri = new URI(value);
-            return uri.isAbsolute() && uri.getHost() != null
-                    && ("https".equals(uri.getScheme()) || "http".equals(uri.getScheme()));
+            return uri.isAbsolute() && uri.getHost() != null && schemes.contains(uri.getScheme());
         } catch (Exception ex) {
             return false;
         }

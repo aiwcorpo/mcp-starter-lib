@@ -88,4 +88,34 @@ class JwksGatewayKeysTest {
         assertThat(keys.find("rsa")).isEmpty();
         assertThat(keys.find("p384")).isEmpty();
     }
+
+    @Test
+    void whileOneFetchIsSlowOthersKeepUsingTheirCopy() throws Exception {
+        java.util.concurrent.CountDownLatch inFetch = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        AtomicInteger fetches = new AtomicInteger();
+        JwksGatewayKeys keys = new JwksGatewayKeys(() -> {
+            if (fetches.incrementAndGet() > 1) {
+                inFetch.countDown();
+                release.await();
+            }
+            return jwks;
+        }, clock, Duration.ofMinutes(10), Duration.ofHours(1), Duration.ofSeconds(30));
+        assertThat(keys.find("test-gw-2026-10-a")).isPresent();
+
+        now.set(now.get().plus(Duration.ofMinutes(11)));
+        Thread slow = Thread.ofVirtual().start(() -> {
+            try {
+                keys.find("test-gw-2026-10-a");
+            } catch (GatewayKeys.KeysUnavailableException ex) {
+                throw new IllegalStateException(ex);
+            }
+        });
+        inFetch.await();
+        long start = System.nanoTime();
+        assertThat(keys.find("test-gw-2026-10-b")).isPresent();
+        assertThat(Duration.ofNanos(System.nanoTime() - start)).isLessThan(Duration.ofSeconds(1));
+        release.countDown();
+        slow.join();
+    }
 }

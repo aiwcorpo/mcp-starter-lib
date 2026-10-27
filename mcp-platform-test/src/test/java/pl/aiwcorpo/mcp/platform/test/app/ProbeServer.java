@@ -8,6 +8,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import org.springframework.web.client.RestClient;
 import pl.aiwcorpo.mcp.platform.auth.CallerContext;
+import pl.aiwcorpo.mcp.platform.error.InvalidToolArgumentException;
 import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
 import pl.aiwcorpo.mcp.platform.guard.ToolRisk;
 import pl.aiwcorpo.mcp.platform.security.BackendCredential;
@@ -60,7 +61,7 @@ public class ProbeServer {
         @Tool(name = "leaky_tool", description = "Puts the credential into an exception message, as careless code would.")
         @ToolRisk(RiskLevel.READ_ONLY)
         public String leakyTool() {
-            throw new IllegalArgumentException("token " + CredentialContext.require("jira").value() + " rejected");
+            throw new InvalidToolArgumentException("token " + CredentialContext.require("jira").value() + " rejected");
         }
     }
 }
