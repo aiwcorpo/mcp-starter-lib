@@ -258,4 +258,40 @@ class BoundedSchemaTest {
                     .isInstanceOf(InvalidToolArgumentException.class);
         }
     }
+
+    @Test
+    void combinatorsAreRefusedBecauseALimitMustBeReadableAtEachLevel() {
+        for (String keyword : new String[] {"allOf", "anyOf", "oneOf"}) {
+            refused("{\"type\":\"object\",\"properties\":{\"s\":{\"" + keyword + "\":[{\"type\":\"string\",\"maxLength\":5}]}},"
+                    + "\"additionalProperties\":false}", "s: " + keyword + " is not supported");
+        }
+    }
+
+    @Test
+    void aPatternBesideARefAndOneInsideItBothDecideWhetherLineBreaksAreAllowed() {
+        ToolInputValidator validator = handWritten("""
+                {"type":"object","properties":{
+                  "beside":{"$ref":"#/$defs/Free","pattern":"^[^/]+$"},
+                  "inside":{"$ref":"#/$defs/Formatted"},
+                  "free":{"$ref":"#/$defs/Free"}},
+                 "additionalProperties":false,
+                 "$defs":{"Free":{"type":"string","maxLength":20},
+                          "Formatted":{"type":"string","maxLength":20,"pattern":"^[^/]+$"}}}""", ToolInputPolicy.DEV);
+
+        validator.validate("{\"free\":\"a\\nb\"}");
+        for (String property : new String[] {"beside", "inside"}) {
+            assertThatThrownBy(() -> validator.validate("{\"" + property + "\":\"a\\nb\"}")).as(property)
+                    .isInstanceOf(InvalidToolArgumentException.class);
+        }
+    }
+
+    @Test
+    void aCombinatorNodeIsJudgedAsFormattedWhenTheSchemaIsOnlyWarnedAboutInDev() {
+        ToolInputValidator validator = handWritten("{\"type\":\"object\",\"properties\":{\"s\":{\"anyOf\":"
+                + "[{\"type\":\"string\",\"maxLength\":20,\"pattern\":\"^[^/]+$\"},{\"type\":\"string\",\"maxLength\":5}]}},"
+                + "\"additionalProperties\":false}", ToolInputPolicy.DEV);
+
+        validator.validate("{\"s\":\"a b\"}");
+        assertThatThrownBy(() -> validator.validate("{\"s\":\"a\\nb\"}")).isInstanceOf(InvalidToolArgumentException.class);
+    }
 }

@@ -81,7 +81,7 @@ class OutputSchemaTest {
             assertThat(structured.at("/body/kind").asString()).isEqualTo("untrusted-data");
             assertThat(structured.at("/body/text").asString()).isEqualTo("Ignore previous inst");
             assertThat(structured.at("/body/truncated").asBoolean()).isTrue();
-            assertThat(GatewayTransportTest.text(result)).doesNotContain("‮").doesNotContain("​");
+            assertThat(GatewayTransportTest.text(result)).doesNotContain("\u202e").doesNotContain("\u200b");
         }
     }
 }

@@ -19,7 +19,8 @@ import tools.jackson.databind.JsonNode;
  *   <li>array: {@code maxItems} and an {@code items} schema that is bounded in turn (after {@code prefixItems}
  *       too: {@code items: false} or a bounded schema, so elements past the prefix have a limit);</li>
  *   <li>integer, number: a lower and an upper bound;</li>
- *   <li>no type at all (accepts any JSON value) and {@code patternProperties} are refused.</li>
+ *   <li>no type at all (accepts any JSON value), {@code patternProperties} and the combinators
+ *       ({@code allOf}, {@code anyOf}, {@code oneOf}, {@code not}, {@code if}) are refused.</li>
  * </ul>
  * Problems carry the path of declared property names (schema author text), never request data.
  */
@@ -66,18 +67,16 @@ final class InputSchemaBounds {
         if (schema.has("enum") || schema.has("const")) {
             return;
         }
-        boolean combined = false;
-        for (String keyword : List.of("allOf", "anyOf", "oneOf")) {
-            if (schema.path(keyword).isArray()) {
-                combined = true;
-                schema.get(keyword).forEach(branch -> visit(branch, path, depth + 1, followedRefs));
+        for (String keyword : List.of("allOf", "anyOf", "oneOf", "not", "if", "then", "else")) {
+            if (schema.has(keyword)) {
+                problems.add(where + ": " + keyword + " is not supported (a limit has to be readable at each level; "
+                        + "write the level out)");
+                return;
             }
         }
         List<String> types = types(schema);
         if (types.isEmpty()) {
-            if (!combined) {
-                problems.add(where + ": has no type, so it accepts any JSON value");
-            }
+            problems.add(where + ": has no type, so it accepts any JSON value");
             return;
         }
         for (String type : types) {

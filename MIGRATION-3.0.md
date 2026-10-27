@@ -1,6 +1,6 @@
 # Migracja z 2.x na 3.0
 
-Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-6**.
+Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-7**.
 
 ## Zmiana modelu
 
@@ -130,6 +130,73 @@ spoza schematu ani wartości.
 
 Testy serwera: do sprawdzenia, że zły argument daje C10 i C8, wystarczy wywołanie przez `TestGateway` (wzór:
 `InputValidationTest` w `mcp-platform-test`).
+
+## Zmiany w 3.0.0-alpha-7
+
+Podbicie BOM wymaga poprawek w serwerach, które mają parametry bez limitów (patrz niżej). Kontrakty: BOM zarządza
+`mcp-contracts` 2.1.1 (schemat Cedar bajtowo bez zmian w 2.x; zmieniły się wzorce `OpenSearchIndexName` i
+`OpenSearchIndexPrefix` bez wiodącej kropki, więc serwer opensearch może usunąć własny filtr kropki, oraz `UntrustedText`,
+zdarzenie `authentication` i whoami Confluence po stronie brokera). Serwery nie dodają zależności; test gateway'a
+(`mcp-platform-test`) czyta wektory 2.1.1.
+
+### Start zatrzymuje się, gdy któryś poziom parametru nie ma limitu (S-M1)
+
+Reguła z alpha-6 (tekst z `maxLength`) obejmuje teraz każdy poziom: pola rekordów, listy, liczby, mapy. Przed
+podbiciem sprawdź wszystkie `@Tool`:
+
+| Parametr | Co zrobić |
+| --- | --- |
+| `Integer`, `Long`, `int`, `Double`... | `@ArgumentLimits(minimum = ..., maximum = ...)`, oba obowiązkowe (opcjonalny `limit` w jira, gitlab, opensearch, servicedesk) |
+| `List<String>`, `String[]` | `@ArgumentLimits(maxItems = ..., maxLength = ..., pattern = ...)`: `maxItems` obowiązkowe, reszta opisuje elementy |
+| rekord (filtr, np. `JqlFilter`) | `@ArgumentLimits` na każdym komponencie rekordu; komponent opcjonalny z `@Nullable`; nic na samym parametrze |
+| `List<Rekord>` | `@ArgumentLimits(maxItems = ...)` na parametrze, limity na komponentach rekordu |
+| `Map<String, String>` | zastąpić rekordem z nazwanymi polami albo listą rekordów `{name, value}` (mapa nie daje się ograniczyć, start zatrzymany) |
+| `Object`, `JsonNode`, klasa niebędąca rekordem | zastąpić rekordem |
+| ręcznie pisany schemat | każdy poziom: `additionalProperties: false`, `maxLength`, `maxItems` + `items`, `minimum`/`maximum`; mapa tylko z `maxProperties`, `propertyNames.maxLength` i ograniczoną wartością; po `prefixItems` wymagane `items` (`false` albo ograniczony) |
+| `pattern` | musi zaczynać się od `^`, kończyć na `$` i nie mieć `|` poza grupą: `[0-9]+` -> `^[0-9]+$`, `^a|b$` -> `^(?:a|b)$` (confluence: `NON_BLANK_LINE`) |
+
+**jira.** `McpToolsConfiguration.boundedFilter` i `withBoundedFilter` do usunięcia: `JqlFilter` dostaje
+`@ArgumentLimits(minLength = 1, maxLength = JiraTool.MAX_NAME)` na `status` i `type`, `maxLength = MAX_USERNAME` na
+`assignee`, wszystkie trzy `@Nullable`; rejestracja `SchemaLimitedToolCallbacks.of(jiraTool)` bez pętli po callbackach.
+Starter sam zamyka obiekt, usuwa sztuczne `required` (dzięki `@Nullable`) i egzekwuje limity na każdym wywołaniu.
+Test `McpToolsConfigurationTest` na `boundedFilter` zastąpić testem wywołania z za długim `status` (C10 `invalid_argument`).
+
+**Poza `dev` nie da się już wyłączyć tej reguły beanem (S-L3).** Własny bean `ToolInputPolicy` albo
+`ToolCallbackAuditPostProcessor` zatrzymuje start; zbędny dodatek wokół narzędzi to `ToolCallInterceptor`.
+`ToolInputPolicy.requireClosedSchema()` nazywa się `requireBoundedSchema()`.
+
+### Znaki w argumentach i w tekście z systemu (S-L1)
+
+- Argumenty: tekst z U+2028/U+2029, niesparowanym surogatem, nieznakiem (U+FFFE, U+FFFF), każdym `\p{Cf}` poza U+200C..U+200F (bidi, miękki łącznik),
+  zero-width, U+2060..U+2064, BOM albo znakami tagów to `invalid_argument` (wcześniej tylko C0/C1/DEL). W wartości z
+  `pattern` także `\n`, `\r`, `\t` i każdy `\p{Cf}`; reguła `pattern` liczona jest dla węzła schematu danej wartości, nie
+  dla argumentu najwyższego poziomu.
+- Tekst z systemu (opisy, komentarze, tytuły) przez `TextHygiene.normalize(...)` albo od razu `UntrustedText.plain(...)`.
+  Serwery jira i confluence zastępują własne czyszczenie (`JiraToolViews`: `\p{Cntrl}`/`\p{Cf}`) wywołaniem helpera.
+
+### `UntrustedText` jako typ wspólny (CC-072)
+
+Zamiast własnego rekordu `body`/`summary`: `pl.aiwcorpo.mcp.platform.text.UntrustedText`. Wynik narzędzia musi być
+rekordem; starter publikuje `outputSchema` i zwraca `structuredContent`. Zmienia się `definitionHash` narzędzi
+(nowe pole `outputSchema`), więc gateway oznaczy je jako `pending_approval` do ponownego zatwierdzenia. Confluence:
+`omittedMacros` przenieść z wnętrza `body` obok `body`. Jira: `description` i komentarze dotąd z `format: text/plain`
+zawierały surowy wiki markup (J2-L2); do `UntrustedText.plain(...)` trafia tekst po usunięciu składni obrazów, linków i
+makr albo, jeśli markup zostaje, odstępstwo trzeba opisać.
+
+### Audyt i logi
+
+- Odrzucone żądanie zostawia w audycie C8 zdarzenie `authentication` (bez `sub`, `client`, `tool`); odbiorca audytu
+  musi mieć schemat 2.1.1. Nic w kodzie serwera.
+- `event=tool_failed`: INFO (kod C10 i klasa wyjątku) dla błędów oczekiwanych, w tym wyjątków domenowych z
+  `ToolErrorMapping`; WARN dla niedostępnego backendu; ERROR tylko dla `internal_error`. Serwer, który logował własny
+  wiersz na ERROR przy `not_found_or_denied` albo `invalid_argument`, może go usunąć. Alerty na ERROR liczą teraz
+  tylko niespodziewane awarie.
+- `server/discover` (MCP 2026-07-28) jest żądaniem protokołu: wariant serwisowy dozwolony. Nic w kodzie serwera.
+
+### Testy serwera
+
+`mcp-platform-test` ma test na `tool_failed` i zdarzenia `authentication` (nasłuch na loggerze `pl.aiwcorpo.mcp.audit`).
+Testy serwera sprawdzające poziom ERROR dla błędu domenowego trzeba zmienić na INFO.
 
 ## Wdrożenie
 

@@ -5,8 +5,8 @@ gateway'em: nie loguje użytkowników, nie decyduje o uprawnieniach do narzędzi
 robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadczenie do systemu docelowego,
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
-Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 2.0.2.
-Wersja: **3.0.0-alpha-6** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 2.1.1.
+Wersja: **3.0.0-alpha-7** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
 
@@ -88,7 +88,10 @@ backendu nie trafiają ani do klienta, ani do logu: gdy w łańcuchu wyjątków 
 `tools.jackson` (błąd HTTP, ciało 200, którego nie da się sparsować), log `event=tool_failed` zawiera tylko klasy
 wyjątków i status HTTP, bez komunikatów (opakowania jak `ToolExecutionException` Spring AI kopiują do nich
 fragmenty ciała). Adapter nie musi tego obchodzić własnym
-`defaultStatusHandler`.
+`defaultStatusHandler`. Poziom `event=tool_failed` zależy od znaczenia błędu: oczekiwany wynik (błąd wywołującego,
+brak poświadczenia, odmowa, `not_found_or_denied`, wyjątek domenowy z `ToolErrorMapping`) to INFO z kodem C10 i klasą
+wyjątku, bez komunikatu i bez stosu; niedostępny backend to WARN; ERROR tylko dla `internal_error`, czyli tego, czego
+serwer nie przewidział.
 
 **Audyt (C8).** Jedna linia JSON na zdarzenie na loggerze `pl.aiwcorpo.mcp.audit` (`component: server`,
 `componentId` = `server-id`, `requestId` = `rid`, `risk`, `credentialType`, `outcome`, `errorCode`,
@@ -214,14 +217,19 @@ public class JiraServer {
 Spring AI generuje z `@Tool` tylko typy i opisy; nie wpisuje do `inputSchema` `maxLength`, `pattern` ani
 zakresów. Starter ma na to jedno API (zastępuje własne wersje w template i serwerach):
 
-- `@ArgumentLimits` na parametrze: `maxLength` (obowiązkowe dla tekstu), `minLength`, `pattern`,
-  `contractPattern`, `minimum`, `maximum` (liczby całkowite). `contractPattern = "JiraIssueKey"` bierze wzorzec
+- `@ArgumentLimits` na parametrze i na komponencie rekordu: `maxLength` (obowiązkowe dla tekstu), `minLength`,
+  `pattern`, `contractPattern`, `minimum` i `maximum` (obowiązkowe oba dla liczb), `maxItems` (obowiązkowe dla listy
+  i tablicy; pozostałe limity opisują wtedy elementy), `minItems`. `contractPattern = "JiraIssueKey"` bierze wzorzec
   (i `maxLength`, gdy nie podano) z definicji `$defs` w `common.schema.json` jara kontraktów, więc serwer nie
   przepisuje wzorców identyfikatorów (`JiraProjectKey`, `JiraIssueKey`, `ConfluenceSpaceKey`, `ConfluencePageId`,
-  `GitLabProjectPath`, `OpenSearchIndexName`, `ServiceDeskTicketId`, ...). `pattern` zawsze z `^` i `$`.
+  `GitLabProjectPath`, `OpenSearchIndexName`, `ServiceDeskTicketId`, ...). `pattern` zawsze z `^` i `$`, bez `|`
+  poza grupą (`^(?:a|b)$`).
+- Filtr to rekord: limity na jego komponentach, pole opcjonalne z `@Nullable` (Spring AI nie daje wtedy `required`);
+  obiekt jest zamykany (`additionalProperties: false`). Lista rekordów: `maxItems` na parametrze, limity na
+  komponentach. `Map`, obiekt niebędący rekordem i lista list nie dają się ograniczyć i zatrzymują start.
 - `SchemaLimitedToolCallbacks.of(toolObject...)` zamiast `MethodToolCallbackProvider`: buduje te same
-  `MethodToolCallback`, dopisuje limity i `additionalProperties: false`. Tekst bez `maxLength`, limity na
-  parametrze nieodpowiedniego typu albo nieznany `contractPattern` zatrzymują start.
+  `MethodToolCallback`, dopisuje limity na każdym poziomie i `additionalProperties: false`. Brak limitu na którymkolwiek
+  poziomie, limity nieodpowiedniego typu albo nieznany `contractPattern` zatrzymują start.
 
 **Walidacja jest w starterze.** MCP SDK 2.0.x waliduje argumenty przed opakowaniem audytu i odpowiada własnym
 tekstem (`Tool (x) input validation failed`), bez C10 i bez zdarzenia C8. Starter wyłącza walidację SDK
@@ -233,15 +241,30 @@ interceptory, narzędzie. Naruszenie to `invalid_argument` (C10) z komunikatem w
 `Invalid arguments: issueKey does not match the required format ^...$; limit is above the maximum 100.` i
 zdarzenie C8 (`outcome=error`, `errorCode=invalid_argument`). Komunikat powstaje ze schematu: nie zawiera wartości
 argumentu ani nazw argumentów spoza schematu (`unknown arguments are not allowed`). `pattern` jest wykonywany tak, jak
-znaczy w ECMA 262: `$` oznacza koniec wejścia (`"ABC-1\n"` nie pasuje do `^[A-Z]+-[0-9]+$`). Znaki sterujące
-(C0, DEL, C1) w tekście argumentu to `invalid_argument`; `\t`, `\n`, `\r` są dozwolone w tekście bez `pattern`.
+znaczy w ECMA 262: `$` oznacza koniec wejścia (`"ABC-1\n"` nie pasuje do `^[A-Z]+-[0-9]+$`). Tekst
+każdego napisu w argumentach (także zagnieżdżonego, według reguły jego własnego węzła schematu) przechodzi
+`TextHygiene`: znaki sterujące (C0, DEL, C1), U+2028/U+2029, niesparowane surogaty i nieznaki, bidi override i
+isolate, zero-width, U+2060..U+2064, BOM, znaki tagów i każdy inny `\p{Cf}` poza U+200C..U+200F to `invalid_argument`; `\t`, `\n`, `\r` są dozwolone w tekście
+swobodnym, a w wartości z `pattern` (klucz, ścieżka) odrzucane razem z każdym znakiem formatującym `\p{Cf}`.
 Narzędzie nadal powinno sprawdzać to, na czym polega, tymi samymi stałymi.
 
-**Fail-closed.** Narzędzie bez `inputSchema` albo ze schematem bez `type: object` i `additionalProperties: false`
-zatrzymuje start (`ToolInputPolicy.STRICT`). W profilu `dev` (jedyny aktywny) jest ostrzeżenie
-`event=tool_schema_open` i egzekwowane jest to, co schemat mówi. Zagnieżdżone obiekty w schemacie nie są
-sprawdzane na `additionalProperties`; to odpowiedzialność autora narzędzia. Wzorce z `pattern` pisze serwer, więc
-unikaj wyrażeń o wykładniczym czasie dopasowania.
+**Fail-closed.** Poza `dev` start zatrzymuje narzędzie bez `inputSchema`, ze schematem bez `type: object` i
+`additionalProperties: false` albo z poziomem bez limitu na dowolnej głębokości (`InputSchemaBounds`): obiekt otwarty,
+tekst bez `maxLength`, lista bez `maxItems` lub bez `items`, liczba bez `minimum` i `maximum`, wartość bez typu,
+`pattern` bez kotwic. W profilu `dev` (jedyny aktywny) jest ostrzeżenie `event=tool_schema_open` i egzekwowane jest to,
+co schemat mówi. Polityki nie da się wyłączyć beanem: `ToolInputPolicy` i `ToolCallbackAuditPostProcessor` nie są
+punktami rozszerzenia, a bean tych typów w serwerze zatrzymuje start poza `dev`. Własne zachowanie wokół narzędzi dodaje
+się przez `ToolCallInterceptor`. Wzorce z `pattern` pisze serwer, więc unikaj wyrażeń o wykładniczym czasie dopasowania.
+
+**Treść z systemu.** Wynik narzędzia z tekstem z systemu (opis, komentarz, tytuł, wiersz logu) zawiera
+`pl.aiwcorpo.mcp.platform.text.UntrustedText` (`UntrustedText.plain(raw, maxLength)` albo `markdown(...)`: normalizuje
+tekst przez `TextHygiene.normalize` i tnie do limitu). Wynik musi być rekordem; starter publikuje wtedy `outputSchema`
+z definicją `UntrustedText` z kontraktów (wchodzi do `definitionHash`) i zwraca wynik także jako `structuredContent`.
+Pola dodatkowe systemu idą obok `UntrustedText` w rekordzie wyniku.
+
+**Audyt odrzuceń.** Odrzucone żądanie (brak/zły JWT, certyfikat, niedostępny JWKS albo Redis) zostawia w audycie C8
+zdarzenie `authentication` (`outcome=denied`, `reason` = kod odrzucenia) tylko z pól dozwolonych w kontraktach 2.1.1,
+bez `sub`, `client`, `tool` z niezweryfikowanego tokenu.
 
 Gateway usuwa `confirmation_code` z argumentów przed wywołaniem serwera (C11), więc schemat serwera go nie
 deklaruje.
@@ -397,7 +420,7 @@ Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera t
 ```xml
 <dependency>
   <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-  <version>3.0.0-alpha-6</version><type>pom</type><scope>import</scope>
+  <version>3.0.0-alpha-7</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
 

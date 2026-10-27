@@ -222,8 +222,7 @@ public final class ToolInputValidator {
     private void textProblems(JsonNode value, JsonNode node, String top, List<String> found, int depth) {
         JsonNode rule = resolve(node);
         if (value.isString()) {
-            boolean formatted = rule == null
-                    || (rule.has("pattern") && !allowsWhitespaceControls(rule.get("pattern").asString()));
+            boolean formatted = !allowsLineBreaks(node);
             TextHygiene.Problem problem = TextHygiene.firstProblem(value.asString(), formatted);
             if (problem != null) {
                 found.add(top + " contains " + problem.description());
@@ -242,6 +241,37 @@ public final class ToolInputValidator {
         } else if (value.isObject() || value.isArray()) {
             found.add(top + " is nested too deeply");
         }
+    }
+
+    /**
+     * Whether the value may hold tab, newline and carriage return: only when the node is plain free text, or its
+     * pattern (on the node and on every {@code $ref} target in the chain) names them itself. Anything unclear
+     * (node missing, unresolvable {@code $ref}, a combinator) counts as formatted, the strictest reading.
+     */
+    private boolean allowsLineBreaks(JsonNode node) {
+        JsonNode current = node;
+        for (int hops = 0; hops < 8; hops++) {
+            if (current == null || !current.isObject()) {
+                return false;
+            }
+            for (String keyword : List.of("allOf", "anyOf", "oneOf", "not", "if")) {
+                if (current.has(keyword)) {
+                    return false;
+                }
+            }
+            if (current.has("pattern")) {
+                if (!allowsWhitespaceControls(current.get("pattern").asString())) {
+                    return false;
+                }
+            }
+            String ref = current.path("$ref").asString(null);
+            if (ref == null) {
+                return true;
+            }
+            JsonNode target = ref.startsWith("#") ? root.at(ref.substring(1)) : null;
+            current = target == null || target.isMissingNode() ? null : target;
+        }
+        return false;
     }
 
     /** Follows local {@code $ref}s; {@code null} when the node is absent, not an object or cannot be resolved. */

@@ -49,8 +49,9 @@ poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i
    systemu: usuwa C0/C1/DEL, niesparowane surogaty, nieznaki, każdy `\p{Cf}` łącznie z bidi, zero-width, U+2060,
    BOM i znakami tagów; U+2028/U+2029/U+0085 i CR dają `\n`) i `TextHygiene.firstProblem` (tekst od modelu).
    `ToolInputValidator` używa go dla każdego napisu w argumentach: w tekście swobodnym odrzuca kontrolne, U+2028/9,
-   niesparowane surogaty i nieznaki, bidi override/isolate, zero-width, U+2060..2064, BOM, znaki tagów (ZWJ/ZWNJ i
-   znaczniki kierunku LRM/RLM zostają dla emoji i pisma RTL); w wartości z `pattern` także `\n \r \t` i każdy `\p{Cf}`.
+   niesparowane surogaty i nieznaki, bidi override/isolate, zero-width, U+2060..2064, BOM, znaki tagów, a ogólnie każdy
+   `\p{Cf}` poza U+200C/U+200D (pisma indyjskie, perskie, emoji) i U+200E/U+200F (znaczniki kierunku): allowlista, nie
+   denylista; miękki łącznik U+00AD, U+061C i U+FFF9..FFFB są odrzucane; w wartości z `pattern` także `\n \r \t` i każdy `\p{Cf}`.
    `UntrustedText` (record: `kind`, `format`, `text`, `truncated`; fabryki `plain`/`markdown` normalizują i tną do
    limitu bez rozcinania pary surogatów). `ToolOutputSchemas`: narzędzie, którego wynik (rekord, także zagnieżdżony
    lub w liście) zawiera `UntrustedText`, dostaje `outputSchema` z definicją z `common.schema.json` kontraktów,
@@ -60,7 +61,48 @@ poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i
    `BoundedSchemaTest` (znaki, wiersze w zagnieżdżonych wartościach), `OutputSchemaTest` (transport, klient SDK
    waliduje `structuredContent`). Poprawki z automatycznego przeglądu bezpieczeństwa (MEDIUM): `prefixItems` bez
    `items` (elementy poza prefiksem bez limitu) i reguła `\n\r\t` brana z argumentu najwyższego poziomu dla wartości
-   zagnieżdżonych; opis w tabeli poniżej. Razem 280 testów (starter 220, mcp-platform-test 60).
+   zagnieżdżonych; opis w tabeli poniżej. 5. `tool_failed` dla wyjątków domenowych: `McpErrorMapper` loguje INFO (kod C10 i klasa wyjątku, bez komunikatu i
+   stosu) dla błędów oczekiwanych, WARN dla `upstream_unavailable`, ERROR tylko dla `internal_error`. Test:
+   `ToolFailureLoggingTest`. Kombinatory (`allOf`, `anyOf`, `oneOf`, `not`, `if`) w `inputSchema` są odrzucane poza `dev`
+   (żaden serwer ich nie używa, Spring AI ich nie generuje). Razem 287 testów (starter 227, mcp-platform-test 60).
+
+Znalezisko -> status (przegląd alpha-6 i przeglądy automatyczne commitów alpha-7):
+
+| Znalezisko | Status | Gdzie |
+| --- | --- | --- |
+| S-M1 limity tylko na tekście najwyższego poziomu | naprawione: `InputSchemaBounds` na każdym poziomie, `@ArgumentLimits` na komponentach rekordów, listy (`maxItems`), liczby (`minimum`+`maximum`), `Map` odrzucona | `BoundedSchemaTest`, `SchemaLimitedToolCallbacks` |
+| S-L1 znaki poza C0/C1 | naprawione: `TextHygiene` w walidacji argumentów i `normalize` dla tekstu z systemu | `TextHygieneTest`, `BoundedSchemaTest` |
+| S-L2 wzorce bez kotwic | naprawione: `pattern` musi mieć `^`...`$` i `|` tylko w grupie; reguła znaków białych liczona dla węzła wartości | `BoundedSchemaTest` |
+| S-L3 polityka wyłączana beanem | naprawione: bez `@ConditionalOnMissingBean`, `ForeignToolPolicyCheck` zatrzymuje start poza `dev` | `ForeignToolPolicyCheckTest` |
+| W2-L1 klient backendu kopiowany per serwer | otwarte: `BackendRestClient` w starterze nie zrobiony (poza zakresem alpha-7), kandydat na beta | - |
+| W2-L2 testy 3xx w serwerach | nie dotyczy startera (testy serwerów jira i confluence) | - |
+| Review auto MEDIUM 1: `prefixItems` bez `items` | naprawione: `items` wymagane (`false` albo ograniczony) | `BoundedSchemaTest.elementsPastAPrefixNeedALimitToo` |
+| Review auto MEDIUM 2: `\n\r\t` według reguły najwyższego poziomu | naprawione: reguła wyznaczana dla węzła każdej wartości (`properties`, `items`, wartości mapy, `$ref`); brak węzła = formatted | `BoundedSchemaTest.lineBreaksAreJudgedByTheRuleOfTheValueTheySitIn` |
+| Review auto MEDIUM 3: kombinatory i `$ref` z `pattern` obok | naprawione: kombinatory odrzucane w `InputSchemaBounds`; `pattern` sprawdzany na węźle i na całym łańcuchu `$ref`, kombinator w dev = formatted | `BoundedSchemaTest.combinatorsAre...`, `aPatternBesideARef...` |
+| Review auto MEDIUM 4: denylista Cf | naprawione: allowlista U+200C..U+200F, reszta `\p{Cf}` odrzucona w tekście swobodnym | `TextHygieneTest.freeTextKeepsOnlyTheJoinersAndDirectionMarks` |
+| `1e30` w argumencie liczbowym -> `internal_error` + ERROR | naprawione: `invalid_argument` | `BoundedSchemaTest` |
+
+Znane ograniczenia alpha-7: `TextHygiene.normalize` usuwa także U+200D, więc sekwencje emoji z ZWJ rozpadają się na
+osobne emoji; `InputValidationTest.trailingLineBreaksDoNotSatisfyTheAnchoredPattern` zdarzył się raz czerwony przy
+pełnym przebiegu (`ListAppender` bez synchronizacji czytany z wątku testu, zapis z wątku Tomcata), w kolejnych
+przebiegach zielony: do uodpornienia w teście, nie w kodzie startera; `pattern` jest nadal wykonywany regexem JDK.
+
+## Propozycje CC (do przeniesienia przez ws-00 do CONTRACT_CHANGES.md; status proposed)
+
+1. C6/C10 (rozszerzenie CC-078): `inputSchema` w manifeście ma limit na każdym poziomie: obiekt `additionalProperties:
+   false`, tekst `maxLength`, lista `maxItems` i `items`, liczba `minimum` i `maximum`, wzorzec z kotwicami,
+   bez `allOf/anyOf/oneOf/not/if`, bez map otwartych. Gateway (walidujący argumenty z manifestu) i serwer wtedy
+   zgadzają się co do tego, co jest poprawne; reguła w `server-manifest.schema.json` (semantyczna) i wektory
+   odrzuconych manifestów (mapa otwarta, lista bez `maxItems`, liczba bez zakresu, `prefixItems` bez `items`).
+2. C10/C8 (higiena tekstu): wspólna definicja znaków niedozwolonych w argumentach i w tekście z systemu (C0/C1/DEL,
+   U+2028/U+2029, niesparowane surogaty, nieznaki, `\p{Cf}` poza U+200C..U+200F; w wartości z `pattern` także
+   `\n\r\t`), wektory `test-vectors/text-hygiene/` z oczekiwanym wynikiem, żeby gateway i serwery nie rozjechały się.
+3. C6/C10 (uzupełnienie CC-072): narzędzie z `outputSchema` zwraca `structuredContent` zgodny ze schematem (MCP);
+   `UntrustedText` jest rekordem wyniku, a pola systemu (`omittedMacros`) leżą obok, nie wewnątrz; dopuścić w `format`
+   wartość dla wiki markup albo zapisać, że serwer go konwertuje (J2-L2).
+4. C8 (patch): lista znanych `reason` dla `authentication` uzupełniona o `client_certificate_rejected`,
+   `jwks_unavailable`, `replay_store_unavailable`; przy kodach `jwks_unavailable` i `replay_store_unavailable`
+   `errorCode` to `upstream_unavailable` (503), nie `unauthenticated`.
 
 3.0.0-alpha-6: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-6`,
 tag `v3.0.0-alpha-6`. API bez usunięć; zgłoszenia pięciu serwerów ws-04 i template'u. Instrukcja dla serwerów
@@ -222,6 +264,6 @@ narzędzi z identyfikatorami) w 3.0.0, dokończenie `MIGRATION-3.0.md`. Usunięc
 ## Propozycje zmian kontraktu (mcp-contracts/CONTRACT_CHANGES.md, status open, zgłasza ws-02)
 
 - C2: wariant serwisowy a `notifications/*` i żądania transportu (GET/DELETE sesji).
-- C8: zdarzenie audytu dla odrzuconego uwierzytelnienia na serwerze.
+- C8: zdarzenie audytu dla odrzuconego uwierzytelnienia na serwerze (przyjęte jako CC-071, zrobione w alpha-7).
 - C6/C10: zamknięty `inputSchema` i treść `invalid_argument` przy naruszeniu schematu (CC-???, alpha-6).
 - C6: nazwy `$defs` w `common.schema.json` jako stabilne API dla serwerów (`contractPattern`) (CC-???, alpha-6).

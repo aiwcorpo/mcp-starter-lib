@@ -10,6 +10,7 @@ package pl.aiwcorpo.mcp.platform.text;
  * (invalid text, parsed differently by different consumers), and format characters ({@code \p{Cf}}): bidi
  * overrides and isolates that reorder what a reviewer reads, zero-width characters and U+2060..U+2064 that hide
  * text from a human but not from a model, tag characters U+E0000..U+E007F that carry an invisible message.
+ * Format characters are an allowlist in free text ({@link #allowedInFreeText}), not a denylist.
  */
 public final class TextHygiene {
 
@@ -79,8 +80,8 @@ public final class TextHygiene {
      * @param formatted {@code true} for a value that has a {@code pattern} (a key, a path, a name): there a
      *                  newline, tab or carriage return and every format character are a problem too; in free
      *                  text newline, carriage return and tab are normal and only the format characters that hide
-     *                  or reorder text are refused (zero-width joiners and left-to-right marks stay, because
-     *                  emoji sequences and right-to-left scripts need them)
+     *                  or reorder text are refused (only U+200C..U+200F stay, because emoji sequences and
+     *                  right-to-left scripts need them)
      */
     public static Problem firstProblem(String text, boolean formatted) {
         int length = text.length();
@@ -98,7 +99,7 @@ public final class TextHygiene {
                 return Problem.LINE_SEPARATOR;
             } else if (isInvalid(point)) {
                 return Problem.INVALID_TEXT;
-            } else if (Character.getType(point) == Character.FORMAT && (formatted || hidesText(point))) {
+            } else if (Character.getType(point) == Character.FORMAT && (formatted || !allowedInFreeText(point))) {
                 return Problem.INVISIBLE;
             }
         }
@@ -115,10 +116,15 @@ public final class TextHygiene {
                 || (point >= 0xFDD0 && point <= 0xFDEF) || (point & 0xFFFE) == 0xFFFE;
     }
 
-    /** Format characters that change what a reader sees or hide text: not the joiners and direction marks. */
-    private static boolean hidesText(int point) {
-        return point == 0x200B || (point >= 0x202A && point <= 0x202E) || (point >= 0x2060 && point <= 0x2064)
-                || (point >= 0x2066 && point <= 0x2069) || point == 0xFEFF || point == 0x180E
-                || (point >= 0xE0000 && point <= 0xE007F);
+    /**
+     * The only format characters ({@code \p{Cf}}) free text may keep: ZWNJ and ZWJ (U+200C, U+200D), which Persian,
+     * Indic scripts and emoji sequences need, and the LRM and RLM marks (U+200E, U+200F), which fix the direction of
+     * punctuation in mixed-direction text and move nothing beyond their neighbours. Everything else in the category
+     * is refused, not listed: soft hyphen U+00AD, Arabic letter mark U+061C, the other bidi controls, zero-width
+     * space U+200B, word joiner and invisible operators U+2060..U+2064, interlinear annotation U+FFF9..U+FFFB, BOM,
+     * tag characters, and whatever Unicode adds to the category later.
+     */
+    private static boolean allowedInFreeText(int point) {
+        return point == 0x200C || point == 0x200D || point == 0x200E || point == 0x200F;
     }
 }

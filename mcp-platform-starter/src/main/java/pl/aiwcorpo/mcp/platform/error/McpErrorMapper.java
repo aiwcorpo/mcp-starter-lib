@@ -41,9 +41,10 @@ import tools.jackson.databind.json.JsonMapper;
  * (e.g. a required field missing) becomes {@code internal_error}. The current request's credential is removed from every message.
  *
  * <h2>What the log gets</h2>
- * One line per failure with the exception classes and messages of the chain (credential removed) and the
- * top frames of the innermost exception. Bodies of backend error responses are not logged: they are the
- * place where backends echo request headers.
+ * One {@code event=tool_failed} line per failure, at INFO for an expected outcome (C10 code and exception class
+ * only), WARN for an unavailable backend and ERROR for {@code internal_error}; the last two carry the exception
+ * classes and messages of the chain (credential removed), ERROR also the top frames of the innermost exception.
+ * Bodies of backend error responses are not logged: they are the place where backends echo request headers.
  */
 public class McpErrorMapper {
 
@@ -98,17 +99,38 @@ public class McpErrorMapper {
     }
 
     public SafeError map(Throwable ex) {
-        LOG.error("event=tool_failed chain=\"{}\" at=\"{}\"", describeChain(ex), innermostFrames(ex));
         Throwable current = ex;
         for (int depth = 0; current != null && depth < MAX_CAUSE_DEPTH; depth++) {
             Optional<SafeError> mapped = classify(current);
             if (mapped.isPresent()) {
-                return normalize(mapped.get());
+                SafeError error = normalize(mapped.get());
+                logFailure(ex, current, error);
+                return error;
             }
             Throwable cause = current.getCause();
             current = cause == current ? null : cause;
         }
-        return new SafeError(ToolErrorCode.INTERNAL_ERROR.code(), GENERIC);
+        SafeError error = new SafeError(ToolErrorCode.INTERNAL_ERROR.code(), GENERIC);
+        logFailure(ex, ex, error);
+        return error;
+    }
+
+    /**
+     * One {@code event=tool_failed} line per failed call, at the level the failure deserves: an expected outcome
+     * (the caller's mistake, a missing credential, a refusal, a resource that is not there or not allowed) is
+     * INFO with the C10 code and the exception class only, so ordinary model errors do not page anybody and no
+     * exception text is kept; a backend that is down is WARN with the chain; only what the server did not
+     * anticipate ({@code internal_error}) is ERROR, with the chain and the top frames.
+     */
+    private static void logFailure(Throwable ex, Throwable matched, SafeError error) {
+        String code = error.code();
+        if (ToolErrorCode.INTERNAL_ERROR.code().equals(code)) {
+            LOG.error("event=tool_failed code={} chain=\"{}\" at=\"{}\"", code, describeChain(ex), innermostFrames(ex));
+        } else if (ToolErrorCode.UPSTREAM_UNAVAILABLE.code().equals(code)) {
+            LOG.warn("event=tool_failed code={} chain=\"{}\"", code, describeChain(ex));
+        } else {
+            LOG.info("event=tool_failed code={} exception={}", code, matched.getClass().getName());
+        }
     }
 
     private Optional<SafeError> classify(Throwable ex) {

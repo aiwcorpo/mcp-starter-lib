@@ -60,7 +60,7 @@ class AuditLoggerTest {
 
     @Test
     void aVirtualServerCallWithUnusualCharactersStaysOnOneEscapedLine() {
-        CallerContext caller = new CallerContext("sub-1", "zołta k\u0007", List.of(), "claude-code",
+        CallerContext caller = new CallerContext("sub-1", "zołta\u2028k\u0007", List.of(), "claude-code",
                 "team-a-dev", Map.of(), "get_issue", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f",
                 "20261026120000-a1b2c3d", 30L);
 
