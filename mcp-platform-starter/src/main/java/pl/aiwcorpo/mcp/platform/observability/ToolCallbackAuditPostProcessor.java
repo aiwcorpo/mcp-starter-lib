@@ -15,10 +15,14 @@ import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
  * {@link AuditingToolCallback}. A post-processor rather than a base class: servers keep declaring an ordinary
  * {@code ToolCallbackProvider} and nothing in a server has to remember to opt in.
  *
+ * <p>Neither this class nor {@link AuditingToolCallback} can be constructed outside the package, and the wrapper is
+ * final: an {@code AuditingToolCallback} met here was made by this post-processor, with the policy of the active
+ * profiles and the server's interceptors, so it is not wrapped again.
+ *
  * <p>Dependencies are resolved lazily through {@link ObjectProvider} so registering this post-processor does
  * not force early instantiation of the beans it needs.
  */
-public class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
+public final class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
 
     private final ObjectProvider<AuditLogger> auditLogger;
     private final ObjectProvider<McpErrorMapper> errorMapper;
@@ -26,10 +30,10 @@ public class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
     private final ObjectProvider<ToolCallInterceptor> interceptors;
     private final ToolInputPolicy inputPolicy;
 
-    public ToolCallbackAuditPostProcessor(ObjectProvider<AuditLogger> auditLogger,
-                                          ObjectProvider<McpErrorMapper> errorMapper,
-                                          ObjectProvider<ToolRiskRegistry> registry,
-                                          ObjectProvider<ToolCallInterceptor> interceptors) {
+    ToolCallbackAuditPostProcessor(ObjectProvider<AuditLogger> auditLogger,
+                                   ObjectProvider<McpErrorMapper> errorMapper,
+                                   ObjectProvider<ToolRiskRegistry> registry,
+                                   ObjectProvider<ToolCallInterceptor> interceptors) {
         this(auditLogger, errorMapper, registry, interceptors, null);
     }
 
@@ -38,11 +42,11 @@ public class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
      * post-processor is created, so no bean of a server can change what the wrapper enforces. {@code null} means
      * {@link ToolInputPolicy#STRICT}.
      */
-    public ToolCallbackAuditPostProcessor(ObjectProvider<AuditLogger> auditLogger,
-                                          ObjectProvider<McpErrorMapper> errorMapper,
-                                          ObjectProvider<ToolRiskRegistry> registry,
-                                          ObjectProvider<ToolCallInterceptor> interceptors,
-                                          ToolInputPolicy inputPolicy) {
+    ToolCallbackAuditPostProcessor(ObjectProvider<AuditLogger> auditLogger,
+                                   ObjectProvider<McpErrorMapper> errorMapper,
+                                   ObjectProvider<ToolRiskRegistry> registry,
+                                   ObjectProvider<ToolCallInterceptor> interceptors,
+                                   ToolInputPolicy inputPolicy) {
         this.inputPolicy = inputPolicy == null ? ToolInputPolicy.STRICT : inputPolicy;
         this.auditLogger = auditLogger;
         this.errorMapper = errorMapper;

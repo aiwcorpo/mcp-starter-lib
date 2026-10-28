@@ -3,6 +3,7 @@ package pl.aiwcorpo.mcp.platform.observability;
 import java.util.ArrayList;
 import java.util.List;
 import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.EnvironmentAware;
@@ -23,10 +24,13 @@ import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
  * argument validation, and a replacement check no longer noticed a tool that skipped the wrapper, all without
  * any message. They are not extension points; what a server may add are {@link ToolCallInterceptor}s.
  *
- * <p>Works on bean definitions by their declared type, so nothing is instantiated, and that is only a tripwire:
- * a bean declared as {@code Object}, a {@code BeanPostProcessor} swapping an instance or a registry
- * post-processor are not seen. The input policy therefore does not depend on it: the wrapper takes the policy
- * from the active profiles when it is created and reads no bean.
+ * <p>Works on bean definitions by their declared type, so nothing is instantiated. A definition registered under
+ * one of the platform's own bean names but not declared by {@link PlatformObservabilityAutoConfiguration} (a
+ * registry post-processor swapping it) is refused as well. It is still only a tripwire: a bean declared as
+ * {@code Object}, a {@code BeanPostProcessor} swapping an instance or a bean factory post-processor that runs after
+ * this one are not seen. The input policy therefore does not depend on it: the wrapper takes the policy from the
+ * active profiles when it is created and reads no bean, and neither the wrapper nor its post-processor can be
+ * constructed outside their package.
  */
 public class ForeignToolPolicyCheck implements BeanFactoryPostProcessor, EnvironmentAware {
 
@@ -75,11 +79,19 @@ public class ForeignToolPolicyCheck implements BeanFactoryPostProcessor, Environ
         }
     }
 
+    /** A definition under a platform bean's name that does not come from the platform's own configuration class. */
+    private static boolean declaredByThePlatform(BeanDefinition definition) {
+        String owner = PlatformObservabilityAutoConfiguration.class.getName();
+        return owner.equals(definition.getFactoryBeanName()) || owner.equals(definition.getBeanClassName());
+    }
+
     private static void collect(ConfigurableListableBeanFactory beanFactory, Class<?> type, String platformBean,
                                 List<String> foreign) {
         for (String name : beanFactory.getBeanNamesForType(type, true, false)) {
             if (!platformBean.equals(name)) {
                 foreign.add(name + " (" + type.getSimpleName() + ")");
+            } else if (!declaredByThePlatform(beanFactory.getBeanDefinition(name))) {
+                foreign.add(name + " (" + type.getSimpleName() + ", definition replaced)");
             }
         }
     }

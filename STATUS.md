@@ -38,6 +38,15 @@ sekcja "Zmiany w 3.0.0-alpha-9". Kamienie:
    rozszerzenia (`@ConditionalOnMissingBean`): `GatewayKeys`, `JtiReplayStore`, `AuditLogger`, `ToolRiskRegistry`,
    `McpErrorMapper`, filtry nagłówków. Testy: `PlatformConfigurationGuardTest` (5 nowych), `ForeignToolPolicyCheckTest` (1).
 
+2. A8-L4 (rezyduum A7-L6): wrapper i jego post-processor nie dają się zbudować spoza pakietu. `AuditingToolCallback` i
+   `ToolCallbackAuditPostProcessor` są `final` z konstruktorami pakietowymi, `ToolInputPolicy` jest enumem (`STRICT`, `DEV`),
+   więc ręczne `new AuditingToolCallback(..., ToolInputPolicy(false))` nie kompiluje się, a instancja
+   `AuditingToolCallback` widziana w post-procesorze zawsze pochodzi z niego (z polityką profilu i interceptorami serwera).
+   `ForeignToolPolicyCheck` sprawdza też źródło definicji czterech beanów (nazwa platformy, ale definicja nie z
+   `PlatformObservabilityAutoConfiguration` = odmowa). Poprawione zdanie: nadpisanie definicji przez
+   `BeanDefinitionRegistryPostProcessor` jest wykrywane; niewykrywalne zostają `BeanFactoryPostProcessor` uruchomiony po kontroli
+   i refleksja, czyli świadome hacki, nie "wygodna konfiguracja". Testy: `ForeignToolPolicyCheckTest` (2 nowe).
+
 3.0.0-alpha-8: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-8`, tag
 `v3.0.0-alpha-8` (praca na `3.0.0-alpha-8-SNAPSHOT`, alpha-7 w `~/.m2` nietknięte). Instrukcja dla serwerów:
 `MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-8". Kamienie:

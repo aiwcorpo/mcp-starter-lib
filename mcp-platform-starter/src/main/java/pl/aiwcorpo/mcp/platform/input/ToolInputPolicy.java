@@ -10,14 +10,25 @@ package pl.aiwcorpo.mcp.platform.input;
  * anything through that check, so outside the {@code dev} profile such a tool stops the server. In {@code dev}
  * it is logged and whatever the schema says is still enforced.
  *
- * <p>The policy comes from the active profiles only: a server cannot replace it with a bean (the starter refuses
- * to start outside {@code dev} when it finds one).
- *
- * @param requireBoundedSchema {@code true} = refuse to start for a tool without a schema, without
- *                             {@code additionalProperties: false}, or with an unbounded level
+ * <p>An enum, so a server cannot build a third value; the policy comes from the active profiles only, and the
+ * wrapper that uses it ({@code AuditingToolCallback}) cannot be constructed outside the starter.
  */
-public record ToolInputPolicy(boolean requireBoundedSchema) {
+public enum ToolInputPolicy {
 
-    public static final ToolInputPolicy STRICT = new ToolInputPolicy(true);
-    public static final ToolInputPolicy DEV = new ToolInputPolicy(false);
+    /** A tool without a closed and bounded {@code inputSchema} stops the server. */
+    STRICT(true),
+
+    /** Only the one-and-only {@code dev} profile: such a tool is logged and still validated as far as it declares. */
+    DEV(false);
+
+    private final boolean requireBoundedSchema;
+
+    ToolInputPolicy(boolean requireBoundedSchema) {
+        this.requireBoundedSchema = requireBoundedSchema;
+    }
+
+    /** {@code true} = refuse to start for a tool without a schema, without {@code additionalProperties: false}, or with an unbounded level. */
+    public boolean requireBoundedSchema() {
+        return requireBoundedSchema;
+    }
 }

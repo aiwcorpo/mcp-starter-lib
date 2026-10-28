@@ -44,7 +44,7 @@ import pl.aiwcorpo.mcp.platform.text.ToolResultValidator;
  * </ol>
  * Registering the tool here also validates its risk flag, so an unflagged tool stops the server at startup.
  */
-public class AuditingToolCallback implements ToolCallback {
+public final class AuditingToolCallback implements ToolCallback {
 
     private static final Set<String> DENIAL_CODES = Set.of(ToolErrorCode.UNAUTHENTICATED.code(),
             ToolErrorCode.ACCESS_DENIED.code(), ToolErrorCode.NOT_FOUND_OR_DENIED.code(),
@@ -58,15 +58,18 @@ public class AuditingToolCallback implements ToolCallback {
     private final ToolInputValidator inputValidator;
     private final ToolResultValidator resultValidator;
 
-    /** With {@link ToolInputPolicy#STRICT}: the tool must publish a closed {@code inputSchema}. */
-    public AuditingToolCallback(ToolCallback delegate, AuditLogger auditLogger, McpErrorMapper errorMapper,
-                                ToolRiskRegistry registry, List<ToolCallInterceptor> interceptors) {
+    /**
+     * Not public: a wrapper built by a server would carry its own interceptors and input policy and then be taken
+     * for the platform's. Only {@link ToolCallbackAuditPostProcessor} creates it, with the policy of the profile.
+     */
+    AuditingToolCallback(ToolCallback delegate, AuditLogger auditLogger, McpErrorMapper errorMapper,
+                         ToolRiskRegistry registry, List<ToolCallInterceptor> interceptors) {
         this(delegate, auditLogger, errorMapper, registry, interceptors, ToolInputPolicy.STRICT);
     }
 
-    public AuditingToolCallback(ToolCallback delegate, AuditLogger auditLogger, McpErrorMapper errorMapper,
-                                ToolRiskRegistry registry, List<ToolCallInterceptor> interceptors,
-                                ToolInputPolicy inputPolicy) {
+    AuditingToolCallback(ToolCallback delegate, AuditLogger auditLogger, McpErrorMapper errorMapper,
+                         ToolRiskRegistry registry, List<ToolCallInterceptor> interceptors,
+                         ToolInputPolicy inputPolicy) {
         this.delegate = delegate;
         this.auditLogger = auditLogger;
         this.errorMapper = errorMapper;

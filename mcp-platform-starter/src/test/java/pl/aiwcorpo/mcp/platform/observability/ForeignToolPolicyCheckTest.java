@@ -89,6 +89,23 @@ class ForeignToolPolicyCheckTest {
         }
     }
 
+    @Configuration
+    static class SwappedDefinition {
+        @Bean
+        static org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor swap() {
+            return new org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor() {
+                @Override
+                public void postProcessBeanDefinitionRegistry(
+                        org.springframework.beans.factory.support.BeanDefinitionRegistry registry) {
+                    registry.removeBeanDefinition("toolCallbackAuditPostProcessor");
+                    registry.registerBeanDefinition("toolCallbackAuditPostProcessor",
+                            new org.springframework.beans.factory.support.RootBeanDefinition(
+                                    ToolCallbackAuditPostProcessor.class, () -> null));
+                }
+            };
+        }
+    }
+
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(PlatformObservabilityAutoConfiguration.class,
                     PlatformErrorAutoConfiguration.class))
@@ -120,6 +137,21 @@ class ForeignToolPolicyCheckTest {
             assertThat(context).hasNotFailed();
             assertThat(context.getBean(ToolInputPolicy.class)).isEqualTo(ToolInputPolicy.STRICT);
         });
+    }
+
+    @Test
+    void aDefinitionSwappedUnderThePlatformsBeanNameStopsTheServer() {
+        runner.withUserConfiguration(SwappedDefinition.class).run(context -> assertThat(context).hasFailed()
+                .getFailure().hasMessageContaining("definition replaced"));
+    }
+
+    @Test
+    void aServerCannotConstructTheWrapperOrItsPostProcessor() {
+        for (Class<?> type : new Class<?>[] {AuditingToolCallback.class, ToolCallbackAuditPostProcessor.class}) {
+            assertThat(java.lang.reflect.Modifier.isFinal(type.getModifiers())).as(type.getSimpleName()).isTrue();
+            assertThat(type.getConstructors()).as(type.getSimpleName()).isEmpty();
+        }
+        assertThat(ToolInputPolicy.class.isEnum()).isTrue();
     }
 
     @Test
