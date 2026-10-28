@@ -96,16 +96,20 @@ class PlatformConfigurationGuardTest {
         assertThatThrownBy(() -> check(props, production())).hasMessageContaining("accepted-credential-types must list");
     }
 
-    private static MockEnvironment devstack(boolean property, boolean variable) {
+    private static MockEnvironment devstack(boolean property) {
         MockEnvironment env = production();
         env.setActiveProfiles("devstack");
         if (property) {
             env.setProperty(PlatformConfigurationGuard.DEVSTACK_ACK_PROPERTY, "true");
         }
-        if (variable) {
-            env.setProperty(PlatformConfigurationGuard.DEVSTACK_ACK_ENVIRONMENT, "true");
-        }
         return env;
+    }
+
+    /** The guard with the given variables as the environment of the process. */
+    private static void checkWithProcessEnvironment(McpPlatformProperties props, MockEnvironment env, boolean variable) {
+        new PlatformConfigurationGuard(props, env,
+                name -> variable && PlatformConfigurationGuard.DEVSTACK_ACK_ENVIRONMENT.equals(name) ? "true" : null)
+                .afterPropertiesSet();
     }
 
     @Test
@@ -114,10 +118,22 @@ class PlatformConfigurationGuardTest {
         props.getInternalJwt().setAllowTestKeys(true);
         props.getPolicy().setAllowTestKeys(true);
 
-        assertThatCode(() -> check(props, devstack(true, true))).doesNotThrowAnyException();
-        assertThatThrownBy(() -> check(props, devstack(true, false))).hasMessageContaining("two acknowledgements");
-        assertThatThrownBy(() -> check(props, devstack(false, true))).hasMessageContaining("MCP_DEVSTACK_ACKNOWLEDGED");
-        assertThatThrownBy(() -> check(props, devstack(false, false))).hasMessageContaining("two acknowledgements");
+        assertThatCode(() -> checkWithProcessEnvironment(props, devstack(true), true)).doesNotThrowAnyException();
+        assertThatThrownBy(() -> checkWithProcessEnvironment(props, devstack(true), false)).hasMessageContaining("two acknowledgements");
+        assertThatThrownBy(() -> checkWithProcessEnvironment(props, devstack(false), true)).hasMessageContaining("two acknowledgements");
+        assertThatThrownBy(() -> checkWithProcessEnvironment(props, devstack(false), false)).hasMessageContaining("MCP_DEVSTACK_ACKNOWLEDGED");
+    }
+
+    @Test
+    void theVariableCountsOnlyFromTheEnvironmentOfTheProcessNotFromAnyPropertySource() {
+        McpPlatformProperties props = valid();
+        props.getInternalJwt().setAllowTestKeys(true);
+        // application.yml, the command line, SPRING_APPLICATION_JSON and DynamicPropertySource all end up in the Spring
+        // environment under this name; none of them is the environment of the process.
+        MockEnvironment env = devstack(true).withProperty(PlatformConfigurationGuard.DEVSTACK_ACK_ENVIRONMENT, "true");
+
+        assertThatThrownBy(() -> checkWithProcessEnvironment(props, env, false)).hasMessageContaining("two acknowledgements");
+        assertThatCode(() -> checkWithProcessEnvironment(props, env, true)).doesNotThrowAnyException();
     }
 
     @Test
@@ -130,7 +146,7 @@ class PlatformConfigurationGuardTest {
         props.getPolicy().setStateDir(null);
         props.setAuthMode(AuthMode.DEV_PAT);
 
-        assertThatThrownBy(() -> check(props, devstack(true, true)))
+        assertThatThrownBy(() -> checkWithProcessEnvironment(props, devstack(true), true))
                 .hasMessageContaining("replay-store=memory").hasMessageContaining("mtls.required=false")
                 .hasMessageContaining("policy.main.url must be an absolute https").hasMessageContaining("state-dir is required")
                 .hasMessageContaining("dev-pat");
@@ -139,7 +155,7 @@ class PlatformConfigurationGuardTest {
     @Test
     void devstackIsNotCombinedWithAnotherProfileAndOtherProfilesGetNoTestKeys() {
         McpPlatformProperties props = valid();
-        MockEnvironment both = devstack(true, true);
+        MockEnvironment both = devstack(true);
         both.setActiveProfiles("devstack", "prod");
         MockEnvironment prod = production();
         prod.setActiveProfiles("prod");
@@ -147,8 +163,9 @@ class PlatformConfigurationGuardTest {
         withKeys.getInternalJwt().setAllowTestKeys(true);
         withKeys.getPolicy().setAllowTestKeys(true);
 
-        assertThatThrownBy(() -> check(props, both)).hasMessageContaining("'devstack' profile must be the only active profile");
-        assertThatThrownBy(() -> check(withKeys, prod)).hasMessageContaining("'dev' or the 'devstack' profile");
+        assertThatThrownBy(() -> checkWithProcessEnvironment(props, both, true))
+                .hasMessageContaining("'devstack' profile must be the only active profile");
+        assertThatThrownBy(() -> checkWithProcessEnvironment(withKeys, prod, true)).hasMessageContaining("'dev' or the 'devstack' profile");
         assertThatThrownBy(() -> check(withKeys, production())).hasMessageContaining("internal-jwt.allow-test-keys");
     }
 
@@ -156,10 +173,10 @@ class PlatformConfigurationGuardTest {
     void devstackMayRunInAContainerWhereDevIsRefused() {
         McpPlatformProperties props = valid();
         props.getInternalJwt().setAllowTestKeys(true);
-        MockEnvironment env = devstack(true, true).withProperty("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+        MockEnvironment env = devstack(true).withProperty("KUBERNETES_SERVICE_HOST", "10.0.0.1")
                 .withProperty("KUBERNETES_SERVICE_PORT", "443");
 
-        assertThatCode(() -> check(props, env)).doesNotThrowAnyException();
+        assertThatCode(() -> checkWithProcessEnvironment(props, env, true)).doesNotThrowAnyException();
     }
 
     @Test

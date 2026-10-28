@@ -238,7 +238,9 @@ kontenerach z kluczami podpisu `test-*`. Profil `devstack` jest dla niego: zacho
 bez `dev-pat`, `replay-store: memory`, `mtls.required: false`) poza tym, że przyjmuje klucze `test-*` i opublikowane klucze testowe
 (`internal-jwt.allow-test-keys` i `policy.allow-test-keys`). Wymaga dwóch zgód jednocześnie, żeby skopiowana konfiguracja nie trafiła na produkcję:
 właściwość `aiwcorpo.mcp.platform.devstack.acknowledged=true` **i** zmienna środowiskowa `MCP_DEVSTACK_ACKNOWLEDGED=true` (obie w konfiguracji stosu
-deweloperskiego, nie w obrazie serwera). Musi być jedynym aktywnym profilem. Każdy start loguje `WARN event=devstack_profile`, a metryka
+deweloperskiego, nie w obrazie serwera). Zmienna jest czytana wyłącznie ze środowiska procesu: właściwość o tej nazwie z `application.yml`, linii poleceń
+albo `SPRING_APPLICATION_JSON` nie wystarcza. Strażnik konfiguracji działa przed pobraniem paczki polityk i kluczy (jawne wywołanie na początku beanów, także przy
+`spring.main.lazy-initialization=true`). Musi być jedynym aktywnym profilem. Każdy start loguje `WARN event=devstack_profile`, a metryka
 `mcp_server_devstack_active` ma wartość 1 (manifest C6 nie ma pola na środowisko). Klucze `test-*` pod innym profilem niż `dev` i `devstack` są
 odrzucane jak dotąd, więc klucz produkcyjny nie może nazywać się `test-...`, a klucz stosu nie przejdzie na produkcji.
 

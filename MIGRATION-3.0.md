@@ -328,6 +328,10 @@ environment:
   AIWCORPO_MCP_PLATFORM_INTERNAL_JWT_ALLOW_TEST_KEYS: "true"       # jeśli gateway podpisuje kluczami testowymi
 ```
 
+Zmienna `MCP_DEVSTACK_ACKNOWLEDGED` jest czytana tylko ze środowiska procesu (od beta-5; property o tej nazwie, także z `application.yml` czy
+`DynamicPropertySource`, nie liczy się), a właściwość `aiwcorpo.mcp.platform.devstack.acknowledged` z dowolnego źródła konfiguracji, więc obie zgody
+pochodzą z dwóch różnych miejsc.
+
 `devstack` zdejmuje wyłącznie zakaz kluczy `test-*` i opublikowanych kluczy testowych. Reszta jest jak na produkcji i nadal wymagana: TLS i mTLS
 (`server.ssl.client-auth=need`), Redis na `jti`, https do JWKS i do repozytorium paczek, `policy.state-dir`, brak `dev-pat`. Bez obu zgód albo z drugim
 profilem start jest odrzucany z listą braków. Każdy start loguje `WARN event=devstack_profile`, a metryka `mcp_server_devstack_active` ma wartość 1;

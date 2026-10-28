@@ -11,6 +11,7 @@ import org.springframework.boot.ssl.SslBundles;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Lazy;
 import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
+import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
 import pl.aiwcorpo.mcp.platform.resource.ResourcePolicy;
@@ -26,11 +27,16 @@ import pl.aiwcorpo.mcp.platform.resource.ResourceResolvers;
 @EnableConfigurationProperties(McpPlatformProperties.class)
 public class PlatformPolicyAutoConfiguration {
 
-    /** Eager: a server without a signed policy must not finish starting. */
+    /**
+     * Eager: a server without a signed policy must not finish starting. After the configuration guard, stated here (the guard is
+     * created by the first line) and not an accident of bean order: the guard refuses test keys and plain http outside dev and devstack, and nothing may be pulled before it has.
+     */
     @Bean(destroyMethod = "close")
     @Lazy(false)
     PolicyEngine policyEngine(McpPlatformProperties props, ObjectProvider<SslBundles> sslBundles,
-                              ObjectProvider<MeterRegistry> meters) throws IOException, GeneralSecurityException {
+                              ObjectProvider<MeterRegistry> meters, ObjectProvider<PlatformConfigurationGuard> guard)
+            throws IOException, GeneralSecurityException {
+        guard.getIfAvailable();    // creates the guard first: it throws before anything is pulled
         McpPlatformProperties.Policy policy = props.getPolicy();
         SSLContext sslContext = null;
         if (policy.getSslBundle() != null && !policy.getSslBundle().isBlank()) {

@@ -14,6 +14,7 @@ import org.springframework.boot.ssl.SslBundles;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
+import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
 import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
 
 /**
@@ -29,7 +30,9 @@ public class PlatformAuthAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    GatewayKeys gatewayKeys(McpPlatformProperties props, ObjectProvider<SslBundles> sslBundles) {
+    GatewayKeys gatewayKeys(McpPlatformProperties props, ObjectProvider<SslBundles> sslBundles,
+                            ObjectProvider<PlatformConfigurationGuard> guard) {
+        guard.getIfAvailable();    // the guard first: it refuses a configuration before any key is fetched
         McpPlatformProperties.InternalJwt jwt = props.getInternalJwt();
         SSLContext sslContext = null;
         if (jwt.getJwksSslBundle() != null && !jwt.getJwksSslBundle().isBlank()) {
@@ -42,7 +45,9 @@ public class PlatformAuthAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    JtiReplayStore jtiReplayStore(McpPlatformProperties props, ObjectProvider<StringRedisTemplate> redis) {
+    JtiReplayStore jtiReplayStore(McpPlatformProperties props, ObjectProvider<StringRedisTemplate> redis,
+                                  ObjectProvider<PlatformConfigurationGuard> guard) {
+        guard.getIfAvailable();    // the guard first
         if (props.getInternalJwt().getReplayStore() == McpPlatformProperties.ReplayStore.MEMORY) {
             return new InMemoryJtiReplayStore(Clock.systemUTC());
         }
@@ -54,7 +59,9 @@ public class PlatformAuthAutoConfiguration {
     }
 
     @Bean
-    InternalJwtVerifier internalJwtVerifier(McpPlatformProperties props, GatewayKeys keys, JtiReplayStore replayStore) {
+    InternalJwtVerifier internalJwtVerifier(McpPlatformProperties props, GatewayKeys keys, JtiReplayStore replayStore,
+                                            ObjectProvider<PlatformConfigurationGuard> guard) {
+        guard.getIfAvailable();    // the guard first
         McpPlatformProperties.InternalJwt jwt = props.getInternalJwt();
         return new InternalJwtVerifier(
                 new InternalJwtVerifier.Settings(jwt.getIssuer(), props.getServerId(), jwt.getClockSkew(),

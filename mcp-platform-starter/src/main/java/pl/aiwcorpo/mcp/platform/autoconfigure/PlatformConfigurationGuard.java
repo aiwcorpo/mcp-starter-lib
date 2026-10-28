@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -46,7 +47,11 @@ public class PlatformConfigurationGuard implements InitializingBean {
      */
     public static final String DEVSTACK_PROFILE = "devstack";
 
-    /** Property and environment variable that must both be {@code true} for the {@code devstack} profile. */
+    /**
+     * Property and environment variable that must both be {@code true} for the {@code devstack} profile. The variable is read from
+     * the environment of the process only: a property of that name in {@code application.yml}, on the command line or in
+     * {@code SPRING_APPLICATION_JSON} does not count, so the two acknowledgements come from two different places.
+     */
     public static final String DEVSTACK_ACK_PROPERTY = "aiwcorpo.mcp.platform.devstack.acknowledged";
     public static final String DEVSTACK_ACK_ENVIRONMENT = "MCP_DEVSTACK_ACKNOWLEDGED";
 
@@ -64,10 +69,21 @@ public class PlatformConfigurationGuard implements InitializingBean {
 
     private final McpPlatformProperties properties;
     private final Environment environment;
+    private final Function<String, String> processEnvironment;
 
     public PlatformConfigurationGuard(McpPlatformProperties properties, Environment environment) {
+        this(properties, environment, System::getenv);
+    }
+
+    /**
+     * @param processEnvironment the environment variables of the process ({@code System::getenv}); injectable for tests. The
+     *                           {@code devstack} acknowledgement is read from here and from nowhere else.
+     */
+    public PlatformConfigurationGuard(McpPlatformProperties properties, Environment environment,
+                                      Function<String, String> processEnvironment) {
         this.properties = properties;
         this.environment = environment;
+        this.processEnvironment = processEnvironment;
     }
 
     @Override
@@ -92,7 +108,7 @@ public class PlatformConfigurationGuard implements InitializingBean {
         }
         if (devstack) {
             boolean acknowledged = "true".equalsIgnoreCase(environment.getProperty(DEVSTACK_ACK_PROPERTY, ""))
-                    && "true".equalsIgnoreCase(environment.getProperty(DEVSTACK_ACK_ENVIRONMENT, ""));
+                    && "true".equalsIgnoreCase(processEnvironment.apply(DEVSTACK_ACK_ENVIRONMENT));
             if (!acknowledged) {
                 problems.add("the 'devstack' profile accepts signing keys named test-* and needs two acknowledgements, so that a "
                         + "copied configuration does not carry it to production: " + DEVSTACK_ACK_PROPERTY + "=true and the "
