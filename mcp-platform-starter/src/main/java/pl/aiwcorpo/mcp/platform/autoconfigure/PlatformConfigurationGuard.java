@@ -87,9 +87,7 @@ public class PlatformConfigurationGuard implements InitializingBean {
                     environment.getProperty(PlatformDefaultsEnvironmentPostProcessor.OVERRIDDEN_KEY, ""));
             DevProfileEnvironment.deploymentSignal(environment)
                     .ifPresent(signal -> problems.add(DevProfileEnvironment.refusal(signal)));
-            String managementPort = environment.getProperty("management.server.port");
-            if (managementPort != null && !managementPort.equals(environment.getProperty("server.port", "8080"))
-                    && !loopback(environment.getProperty("management.server.address"))) {
+            if (separateManagementServer() && !loopback(environment.getProperty("management.server.address"))) {
                 problems.add("with the 'dev' profile and a separate management.server.port the management server "
                         + "must listen on a loopback address (management.server.address=127.0.0.1), not '"
                         + environment.getProperty("management.server.address") + "': it is outside the internal JWT "
@@ -125,8 +123,7 @@ public class PlatformConfigurationGuard implements InitializingBean {
             problems.add("spring.ai.mcp.server.protocol must be STREAMABLE (the transport the gateway uses and the "
                     + "platform's checks are built for), not " + protocol);
         }
-        String managementPort = environment.getProperty("management.server.port");
-        if (!dev && managementPort != null && !managementPort.equals(environment.getProperty("server.port", "8080"))) {
+        if (!dev && separateManagementServer()) {
             problems.add("management.server.port must be unset or equal to server.port outside the 'dev' profile: "
                     + "the internal JWT and mTLS checks do not cover a separate management server");
         }
@@ -177,6 +174,27 @@ public class PlatformConfigurationGuard implements InitializingBean {
 
         if (!problems.isEmpty()) {
             throw new IllegalStateException("Invalid MCP platform configuration:\n - " + String.join("\n - ", problems));
+        }
+    }
+
+    /**
+     * Whether Spring Boot runs the actuator on a server of its own: a management port other than the main one,
+     * compared as numbers. Port 0 is always a separate server (a random port each, even when {@code server.port}
+     * is 0 as well) and -1 turns the actuator's HTTP endpoints off.
+     */
+    private boolean separateManagementServer() {
+        String managementPort = environment.getProperty("management.server.port");
+        if (managementPort == null || managementPort.isBlank()) {
+            return false;
+        }
+        try {
+            int management = Integer.parseInt(managementPort.trim());
+            if (management < 0) {
+                return false;
+            }
+            return management == 0 || management != Integer.parseInt(environment.getProperty("server.port", "8080").trim());
+        } catch (NumberFormatException ex) {
+            return true;
         }
     }
 

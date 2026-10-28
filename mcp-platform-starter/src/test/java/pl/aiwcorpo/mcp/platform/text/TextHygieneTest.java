@@ -91,6 +91,55 @@ class TextHygieneTest {
     }
 
     @Test
+    void aLongRunDoesNotEndInAHalfWrittenTokenAfterADelimiter() {
+        String openParens = "(".repeat(61);
+        UntrustedText mention = UntrustedText.plain(openParens + "@allison", 65);
+        assertThat(mention.text()).isEqualTo(openParens + "@").doesNotContain("@all");
+        assertThat(mention.truncated()).isTrue();
+
+        String path = "x".repeat(60) + "/@allison";
+        assertThat(UntrustedText.plain(path, 65).text()).isEqualTo("x".repeat(60) + "/@");
+
+        assertThat(UntrustedText.plain("\u4e2d\u6587".repeat(40) + "https://host/x", 90).text())
+                .isEqualTo("\u4e2d\u6587".repeat(40) + "https://");
+        assertThat(UntrustedText.plain("note " + "(".repeat(70) + "abcdef", 77).text()).isEqualTo("note " + "(".repeat(70));
+    }
+
+    @Test
+    void theServerCanCutBeforeItsFilterAndBuildTheValueFromTheCutText() {
+        String markdown = "`x @all y` and more text";
+        String cut = UntrustedText.cut(markdown, 7);
+        assertThat(cut).isEqualTo("`x @all");
+
+        UntrustedText value = UntrustedText.markdownCut(cut.replace("@all", ""), true);
+        assertThat(value.text()).doesNotContain("@all");
+        assertThat(value.truncated()).isTrue();
+        assertThat(value.format()).isEqualTo("text/markdown");
+        assertThat(UntrustedText.plainCut("a\u200bb", false).text()).isEqualTo("a b");
+        assertThat(UntrustedText.cut("short", 100)).isEqualTo("short");
+    }
+
+    @Test
+    void onlyARealChangeAfterTheFilterIsReported() {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(UntrustedText.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender = new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            UntrustedText.plain(null, 10);
+            assertThat(UntrustedText.plain("line1\r\nline2\rline3\u2028line4", 100).text()).isEqualTo("line1\nline2\nline3\nline4");
+            UntrustedText.markdown("tab\tseparated\nlines", 100);
+
+            assertThat(pl.aiwcorpo.mcp.platform.CapturedLogs.snapshot(appender)).isEmpty();
+
+            UntrustedText.plain("x \u200b@all", 100);
+            assertThat(pl.aiwcorpo.mcp.platform.CapturedLogs.snapshot(appender)).hasSize(1);
+        } finally {
+            logger.detachAppender(appender);
+        }
+    }
+
+    @Test
     void textNormalizedAfterTheFilterIsReportedWithoutQuotingIt() {
         ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(UntrustedText.class);
         ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender = new ch.qos.logback.core.read.ListAppender<>();

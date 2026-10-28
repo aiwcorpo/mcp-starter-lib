@@ -159,9 +159,20 @@ Serwer nie wstaje, gdy:
   managementu: przy `management.server.port` różnym od `server.port` w `dev` wymagane jest loopbackowe
   `management.server.address`;
 - profil `dev` (jedyny aktywny) w środowisku wdrożenia: Spring Boot wykrywa platformę chmurową (Kubernetes, Cloud Foundry
-  itd.) albo jest ustawione `INVOCATION_ID` (jednostka systemd). `dev` zdejmuje z serwera TLS, mTLS i Redis, więc
-  `SPRING_PROFILES_ACTIVE=dev` w pliku `.env`, szablonie compose czy jednostce systemd zatrzymuje start (przed otwarciem
-  gniazda) zamiast po cichu zostawić serwer z samym JWT. Uruchamiaj `dev` z terminala na stacji programisty;
+  itd.; `spring.main.cloud-platform=none` nie jest platformą), są ustawione zmienne `KUBERNETES_SERVICE_HOST` i
+  `KUBERNETES_SERVICE_PORT`, jest ustawione `INVOCATION_ID` (jednostka systemd) albo proces działa w kontenerze
+  (`/.dockerenv`, `/run/.containerenv`, zmienna `container`, ścieżka cgroup z `docker`, `kubepods`, `libpod`, `crio`).
+  `dev` zdejmuje z serwera TLS, mTLS i Redis, więc `SPRING_PROFILES_ACTIVE=dev` w pliku `.env`, szablonie compose, obrazie
+  czy jednostce systemd zatrzymuje start (przed otwarciem gniazda) zamiast po cichu zostawić serwer z samym JWT.
+  Uruchamiaj `dev` z terminala na stacji programisty. To siatka na skopiowaną konfigurację, nie granica bezpieczeństwa:
+  kto steruje środowiskiem procesu, ukryje sygnały (pusty `SPRING_MAIN_CLOUD_PLATFORM`, plik w innym układzie); zmienne
+  procesu (`INVOCATION_ID`, `KUBERNETES_*`) są czytane także bezpośrednio, więc `-DINVOCATION_ID=` ich nie zasłania.
+  Kontekst budowany przez Spring TestContext (`@SpringBootTest`, slice'y) nie jest wdrożeniem: testy serwera z
+  `TestGateway` działają w `dev` w CI na Kubernetesie i pod runnerem systemd. Kontekst testowy jest rozpoznawany po
+  ramkach test frameworka na stosie wątku, który go buduje, a nie po właściwości, którą dałoby się ustawić we wdrożeniu;
+- `spring.autoconfigure.exclude` (także `SPRING_AUTOCONFIGURE_EXCLUDE`) z klasą z pakietu `pl.aiwcorpo.mcp.platform.`
+  albo `exclude` na `@SpringBootApplication`, które usuwa `platformConfigurationGuard`, `internalJwtVerifier`,
+  `internalJwtFilter` lub `toolCallbackAuditPostProcessor`, poza `dev` i poza kontekstem testowym;
 - profil `dev` jest aktywny razem z innym profilem (także przez grupę profili). Relaksacje działają tylko, gdy
   `dev` jest **jedynym aktywnym** profilem; `spring.profiles.default=dev` się nie liczy;
 - poza takim profilem `dev`: włączono `dev-pat`, `allow-test-keys`, `replay-store: memory` albo
@@ -381,11 +392,14 @@ profilu. Punkty rozszerzenia (`@ConditionalOnMissingBean`): `GatewayKeys`, `JtiR
 
 **Treść z systemu.** Wynik narzędzia z tekstem z systemu (opis, komentarz, tytuł, wiersz logu) zawiera
 `pl.aiwcorpo.mcp.platform.text.UntrustedText` (`UntrustedText.plain(raw, maxLength)` albo `markdown(...)`: tnie do limitu na granicy słowa, żeby cięcie nie utworzyło
-na końcu tokenu, którego filtr nie widział (`hello @allison` do 10 znaków to `hello`, `truncated=true`);
+na końcu tokenu, którego filtr nie widział (`hello @allison` do 10 znaków to `hello`, `truncated=true`; w długim ciągu bez spacji
+odpada końcowy ciąg liter i cyfr, więc po `(((...(@allison` zostaje `(((...(@`);
 konstruktor normalizuje tekst przez `TextHygiene.normalize`, a usunięty ciąg niewidocznych znaków zastępuje jedną spacją,
 żeby nie skleić tokenów). Serwer, który usuwa z tekstu składnię (obrazy, linki, makra, wzmianki), najpierw zamienia format
-na tekst (w tym dekoduje encje `&#8203;`), potem normalizuje **przed** tym filtrem i dopiero potem woła fabrykę; fabryka
-loguje WARN `event=untrusted_text_not_normalized`, gdy tekst zmienił się jeszcze po filtrze. Wynik narzędzia większy niż
+na tekst (w tym dekoduje encje `&#8203;`), normalizuje **przed** tym filtrem, tnie `UntrustedText.cut(tekst, limit)`
+**przed** filtrem (cięcie może zdjąć domykający ogranicznik bloku kodu, a tylko filtr po cięciu widzi to, co dostanie klient)
+i buduje wartość przez `plainCut(tekst, truncated)` albo `markdownCut(...)`; fabryka `plain|markdown(raw, limit)` cina sama.
+Fabryka loguje WARN `event=untrusted_text_not_normalized` (bez `null` i bez zmiany samych końców linii), gdy tekst zmienił się jeszcze po filtrze. Wynik narzędzia większy niż
 `aiwcorpo.mcp.platform.tools.max-result-size` (domyślnie 1MB, bajty UTF-8) to `internal_error`; narzędzie zwracające listy
 stronicuje. Wynik musi być rekordem; starter publikuje wtedy `outputSchema`
 z definicją `UntrustedText` z kontraktów (wchodzi do `definitionHash`) i zwraca wynik także jako `structuredContent`.
@@ -426,6 +440,11 @@ z bibliotekami dla macOS i Linuksa). Wzorce dostają przez `@ArgumentLimits(cont
 potrzebny dopiero przy `@ResourceRef` i silniku polityk (beta), po stronie startera.
 
 ## Testy serwera bez gateway'a
+
+Testy z `TestGateway` uruchamiaj w profilu `dev` (`@ActiveProfiles("dev")`). Kontrola "`dev` we wdrożeniu" (Kubernetes,
+systemd, kontener) nie obejmuje kontekstu budowanego przez Spring TestContext, więc te testy przechodzą także w CI na
+Kubernetesie i pod runnerem uruchomionym jako usługa systemd. Aplikacja uruchamiana ręcznie z `SpringApplication` w
+takim środowisku nadal jest odrzucana.
 
 ```xml
 <dependency>

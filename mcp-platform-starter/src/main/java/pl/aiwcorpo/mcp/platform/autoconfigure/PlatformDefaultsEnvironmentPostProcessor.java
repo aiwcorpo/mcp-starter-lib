@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import org.springframework.boot.EnvironmentPostProcessor;
 import org.springframework.boot.SpringApplication;
+import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.core.Ordered;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.MapPropertySource;
@@ -74,6 +75,7 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
             environment.getPropertySources().addLast(new MapPropertySource(SOURCE_NAME, defaults));
         }
         List<String> active = Arrays.asList(environment.getActiveProfiles());
+        refuseExcludedPlatform(environment, active);
         if (active.equals(List.of(PlatformConfigurationGuard.DEV_PROFILE))
                 && !environment.getPropertySources().contains(DEV_SOURCE_NAME)) {
             DevProfileEnvironment.deploymentSignal(environment).ifPresent(signal -> {
@@ -100,6 +102,27 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
             } else {
                 environment.getPropertySources().addBefore(firstConfigFile, source);
             }
+        }
+    }
+
+    /**
+     * {@code spring.autoconfigure.exclude} (also as {@code SPRING_AUTOCONFIGURE_EXCLUDE}) can switch off the
+     * platform's auto-configurations, and with them the configuration guard and the internal JWT check, in a
+     * profile where nothing else would notice. The {@code dev} profile and a Spring test context (slice tests
+     * leave the platform out on purpose) are not checked. A {@code @SpringBootApplication(exclude = ...)} is not
+     * a property and is caught by {@link PlatformPresenceCheck} instead.
+     */
+    private static void refuseExcludedPlatform(ConfigurableEnvironment environment, List<String> active) {
+        if (active.equals(List.of(PlatformConfigurationGuard.DEV_PROFILE)) || DevProfileEnvironment.inSpringTestContext()) {
+            return;
+        }
+        String[] excluded = Binder.get(environment).bind("spring.autoconfigure.exclude", String[].class).orElse(new String[0]);
+        List<String> platform = Arrays.stream(excluded).map(String::trim)
+                .filter(name -> name.startsWith("pl.aiwcorpo.mcp.platform.")).toList();
+        if (!platform.isEmpty()) {
+            throw new IllegalStateException("spring.autoconfigure.exclude lists " + platform + ": the platform's "
+                    + "auto-configurations (configuration guard, internal JWT check, audit wrapper) cannot be switched "
+                    + "off outside the 'dev' profile; remove them from the exclusion");
         }
     }
 }

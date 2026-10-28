@@ -21,6 +21,59 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
 
+3.0.0-alpha-10: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-10`, tag `v3.0.0-alpha-10` (praca na `3.0.0-alpha-10-SNAPSHOT`, nic innego w `~/.m2` nie instalowane). Ostatnia przed migracją serwerów. Instrukcja dla serwerów: `MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-10". Kamienie:
+1. A9-M2. `DevProfileEnvironment`: `CloudPlatform.NONE` nie jest środowiskiem wdrożenia; kontekst budowany przez Spring TestContext
+   (ramki `org.springframework.test.context.` i `org.springframework.boot.test.context.` na stosie wątku, który buduje kontekst)
+   nie jest wdrożeniem, więc testy serwerów z `TestGateway` działają w CI na Kubernetesie i pod runnerem systemd. Wybrane
+   wykrywanie po stosie, a nie po właściwości (`Inlined Test Properties`, `SpringBootTestContextBootstrapper=true`): właściwość da
+   się skopiować do `.env` i do jednostki. Stos wymaga klas test frameworka w wątku, który uruchamia kontekst; produkcyjny
+   `java -jar` ich nie ma, a testy ręcznie uruchamiające `SpringApplication` w podzie są nadal odrzucane (to zamierzone).
+   Testy: `DeploymentContextTest` (`@SpringBootTest` z `INVOCATION_ID` i `KUBERNETES_*` w `dev` startuje),
+   `StartupRefusalTest` (to samo przez `SpringApplicationBuilder` kończy start; `cloud-platform=none` nie), `PlatformConfigurationGuardTest`.
+2. A9-L1. Sygnały: zmienne procesu `INVOCATION_ID`, `KUBERNETES_SERVICE_HOST`+`PORT` czytane z `System.getenv` (nie do zasłonięcia
+   `-D`), kontener (`/.dockerenv`, `/run/.containerenv`, zmienna `container`, cgroup z `docker|kubepods|libpod|crio|containerd`).
+   Puste `SPRING_MAIN_CLOUD_PLATFORM` nadal wyłącza wykrywanie Boota, ale nie zmienne `KUBERNETES_*`. Zdanie "obejścia nie ma" poprawione
+   (kamień 1 alpha-9): to nie granica bezpieczeństwa. Ograniczenie: devcontainer programisty jest kontenerem, więc `dev` w nim
+   nie wystartuje poza testami; uruchom aplikację poza kontenerem albo użyj testów.
+3. A9-L2. Port managementu jako liczby (`separateManagementServer`): `0` zawsze osobny serwer, `-1` wyłączony, nie-liczba osobny
+   (odmowa). Dotyczy też reguły poza `dev`. Test `theManagementPortIsComparedAsANumber`.
+4. A9-L3. `spring.autoconfigure.exclude` z klasą `pl.aiwcorpo.mcp.platform.*` kończy start poza `dev`
+   (`PlatformDefaultsEnvironmentPostProcessor`, ładowany z `spring.factories`), a `PlatformPresenceCheck`
+   (`ApplicationContextInitializer` z `spring.factories`, `BeanFactoryPostProcessor`) sprawdza, że `platformConfigurationGuard`,
+   `internalJwtVerifier`, `internalJwtFilter` i `toolCallbackAuditPostProcessor` są zdefiniowane, co łapie też `exclude` na
+   `@SpringBootApplication`. Oba pomijane w `dev` i w kontekście testowym (slice'y nie ładują platformy z założenia).
+   Testy: `StartupRefusalTest` (property, kod), `PlatformConfigurationGuardTest`.
+5. A9-L4. `UntrustedText.cut` (publiczne): w ciągu bez spacji dłuższym niż 64 jednostki odpadają końcowe litery, cyfry i `_`,
+   o ile zostaje cokolwiek (`(((...(@allison` -> `(((...(@`); ciąg z samych liter i cyfr jest cięty na limicie. Wybrane zamiast
+   "usuń cały ostatni ciąg", bo całe zdanie w piśmie bez spacji (CJK) albo blob alfanumeryczny zniknęłyby w całości. Ogranicznik
+   zdjęty przez cięcie: serwer tnie `cut` przed filtrem i buduje wartość przez `plainCut|markdownCut(tekst, truncated)`
+   (README, MIGRATION). Testy: `TextHygieneTest` (2 nowe).
+6. A9-L5. WARN `untrusted_text_not_normalized` pomija `null` i zmianę samych końców linii (CRLF, CR, U+2028, U+2029, U+0085).
+   Ograniczenie do jednej linii na narzędzie nie zrobione: wymaga stanu statycznego z czasem, który psułby testy równoległe; po
+   poprawce fałszywych trafień zostaje jedna linia na obiekt tylko przy prawdziwej zmianie po filtrze. Test `onlyARealChangeAfterTheFilterIsReported`.
+7. A9-L6. `McpErrorMapperTest.aRejectedResultIsInternalErrorEvenWhenTheServerMapsEveryRuntimeException` (mapping `RuntimeException`,
+   wyjątek bez opakowania, jak go rzuca `AuditingToolCallback`); mutacja M1 (`if (false)` w `classify`) teraz czerwona. Stary test
+   zostaje, ale sam nie zabijał mutacji. Test end-to-end w `OutputSchemaTest` nie dodany: ścieżka opakowania jest pokryta
+   `AuditingToolCallbackTest`, a mapowanie ma teraz test jednostkowy.
+8. A9-M1, A9-L7. MIGRATION-3.0.md: zdanie "alpha-8 nietknięte" zastąpione stanem faktycznym (nadpisane, odtworzenie po stronie
+   człowieka), nagłówek "Stan" na alpha-10. Alpha-8 w `~/.m2` NIE jest odtworzone przez to wydanie. Reguła w buildzie odmawiająca
+   `install` wersji bez `-SNAPSHOT` bez tagu `v<wersja>` (enforcer): nie zrobiona, wymaga decyzji o dodaniu pluginu do parenta.
+   Razem 335 testów (starter 268, mcp-platform-test 67).
+
+Znalezisko -> status (przegląd Opus alpha-9):
+
+| Znalezisko | Status | Gdzie |
+| --- | --- | --- |
+| A9-M1 alpha-8 w `~/.m2` zawiera kod alpha-9, MIGRATION mówi inaczej | MIGRATION poprawiony; odtworzenie alpha-8 po stronie człowieka (receptura w STATUS alpha-9) | `MIGRATION-3.0.md` |
+| A9-M2 `NONE` jako platforma; testy serwerów blokowane w CI | naprawione: `NONE` pominięte, kontekst TestContext nie jest wdrożeniem | `DeploymentContextTest`, `StartupRefusalTest`, `PlatformConfigurationGuardTest` |
+| A9-L1 neutralizatory, brak Dockera, zdanie w STATUS | naprawione: kontenery i bezpośrednie zmienne procesu; zdanie poprawione; dokumentacja | `PlatformConfigurationGuardTest.aContainerIsADeployment...`, `theProcessVariablesCount...` |
+| A9-L2 porty jako napisy | naprawione | `theManagementPortIsComparedAsANumber` |
+| A9-L3 `spring.autoconfigure.exclude` | naprawione (property i kod) | `StartupRefusalTest`, `PlatformConfigurationGuardTest.excluding...` |
+| A9-L4 cięcie długiego ciągu i ograniczniki | naprawione: cofanie liter na końcu, `cut` + `plainCut|markdownCut` | `TextHygieneTest` |
+| A9-L5 szum WARN | naprawione: bez `null` i CRLF; limit linii na narzędzie nie zrobiony (uzasadnienie w kamieniu 6) | `TextHygieneTest.onlyARealChange...` |
+| A9-L6 luka testu M1 | naprawione, mutacja zabita | `McpErrorMapperTest` |
+| A9-L7 nagłówek MIGRATION | naprawione | `MIGRATION-3.0.md` |
+
 3.0.0-alpha-9: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-9`, tag `v3.0.0-alpha-9` (praca na `3.0.0-alpha-9-SNAPSHOT`). Instrukcja dla serwerów: `MIGRATION-3.0.md`,
 sekcja "Zmiany w 3.0.0-alpha-9". Kamienie:
 1. Profil `dev` i guard (A8-L1, A8-L2, A8-L3).
@@ -31,8 +84,9 @@ sekcja "Zmiany w 3.0.0-alpha-9". Kamienie:
    każdy programista skopiuje razem z `dev` do pliku, a nie odróżnia ona maszyny developera od wdrożenia; sygnał środowiska
    odróżnia. `dev` jako jedyny profil kończy start (w `PlatformDefaultsEnvironmentPostProcessor`, przed otwarciem gniazda, i
    w guardzie), gdy Boot wykrywa platformę chmurową (`CloudPlatform.getActive`: Kubernetes, Cloud Foundry itd.) albo ustawione
-   jest `INVOCATION_ID` (jednostka systemd, czyli `install.sh` template'u). Obejścia nie ma; na maszynie dewelopera z
-   terminala `INVOCATION_ID` nie występuje. Obecność `server.ssl.bundle` nie jest sygnałem: README każe go mieć w `dev`.
+   jest `INVOCATION_ID` (jednostka systemd, czyli `install.sh` template'u). To siatka na skopiowaną konfigurację, nie granica
+   bezpieczeństwa: kto steruje środowiskiem procesu, ukryje sygnały (stan alpha-9 miał też neutralizatory, patrz alpha-10);
+   na maszynie dewelopera z terminala `INVOCATION_ID` nie występuje. Obecność `server.ssl.bundle` nie jest sygnałem: README każe go mieć w `dev`.
    Dodatkowo linia `dev_profile_overrides` jest na WARN i wymienia nadpisane klucze, które konfiguracja serwera ustawiała inaczej.
    L3: `PlatformConfigurationGuard`, `InternalJwtVerifier` i `InternalJwtFilter` bez `@ConditionalOnMissingBean`;
    `ForeignToolPolicyCheck` zatrzymuje start z własnym beanem któregoś z nich w każdym profilu (także `dev`). Punkty

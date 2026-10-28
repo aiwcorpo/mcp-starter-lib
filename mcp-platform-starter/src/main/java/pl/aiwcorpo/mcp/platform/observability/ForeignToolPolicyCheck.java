@@ -35,7 +35,7 @@ import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
 public class ForeignToolPolicyCheck implements BeanFactoryPostProcessor, EnvironmentAware {
 
     static final String INPUT_POLICY_BEAN = "toolInputPolicy";
-    static final String AUDIT_POST_PROCESSOR_BEAN = "toolCallbackAuditPostProcessor";
+    public static final String AUDIT_POST_PROCESSOR_BEAN = "toolCallbackAuditPostProcessor";
     static final String REGISTERED_TOOLS_CHECK_BEAN = "registeredToolsCheck";
     static final String HINTS_POST_PROCESSOR_BEAN = "toolHintsPostProcessor";
 
@@ -46,9 +46,9 @@ public class ForeignToolPolicyCheck implements BeanFactoryPostProcessor, Environ
         this.environment = environment;
     }
 
-    static final String CONFIGURATION_GUARD_BEAN = "platformConfigurationGuard";
-    static final String JWT_VERIFIER_BEAN = "internalJwtVerifier";
-    static final String JWT_FILTER_BEAN = "internalJwtFilter";
+    public static final String CONFIGURATION_GUARD_BEAN = "platformConfigurationGuard";
+    public static final String JWT_VERIFIER_BEAN = "internalJwtVerifier";
+    public static final String JWT_FILTER_BEAN = "internalJwtFilter";
 
     @Override
     public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) throws BeansException {

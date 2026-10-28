@@ -132,6 +132,19 @@ class McpErrorMapperTest {
     }
 
     @Test
+    void aRejectedResultIsInternalErrorEvenWhenTheServerMapsEveryRuntimeException() {
+        ToolErrorMapping catchAll = ex -> ex instanceof RuntimeException
+                ? Optional.of(new SafeError("not_found_or_denied", "The issue does not exist or is not visible."))
+                : Optional.empty();
+        McpErrorMapper withMapping = new McpErrorMapper(List.of(catchAll), CONNECT);
+
+        assertThat(withMapping.map(new IllegalStateException("client state")).code()).isEqualTo("not_found_or_denied");
+        assertThat(withMapping.map(new pl.aiwcorpo.mcp.platform.text.ToolResultRejectedException(
+                "The result of tool 'get_issue' does not match its outputSchema at /assignee (type)")).code())
+                .isEqualTo("internal_error");
+    }
+
+    @Test
     void aServerMappingWinsButMustUseAC10Code() {
         class NotVisible extends RuntimeException {
         }

@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import pl.aiwcorpo.mcp.platform.test.app.ProbeServer;
+import pl.aiwcorpo.mcp.platform.test.excluding.ExcludingServer;
 
 /** Development relaxations outside the {@code dev} profile stop the server instead of weakening it. */
 class StartupRefusalTest {
@@ -60,5 +61,38 @@ class StartupRefusalTest {
                 .properties(properties).properties("server.port=0").profiles("dev")
                 .run("--server.address=0.0.0.0").close())
                 .rootCause().hasMessageContaining("loopback");
+    }
+
+    /** The same properties pass in a Spring test context (DeploymentContextTest); started by hand they are a deployment. */
+    @Test
+    void devOnAKubernetesPodOrUnderSystemdOutsideATestContext() {
+        assertThatThrownBy(() -> start(Map.of("KUBERNETES_SERVICE_HOST", "10.96.0.1", "KUBERNETES_SERVICE_PORT", "443"), "dev"))
+                .hasMessageContaining("the 'dev' profile is active in").hasMessageContaining("remove SPRING_PROFILES_ACTIVE=dev");
+        assertThatThrownBy(() -> start(Map.of("INVOCATION_ID", "7f3a9c1e5b2d4e8f"), "dev"))
+                .hasMessageContaining("systemd");
+    }
+
+    @Test
+    void cloudPlatformNoneIsNoDeployment() {
+        start(Map.of("spring.main.cloud-platform", "none"), "dev");
+    }
+
+    @Test
+    void excludingThePlatformByPropertyOutsideDev() {
+        assertThatThrownBy(() -> start(Map.of("spring.autoconfigure.exclude",
+                "pl.aiwcorpo.mcp.platform.security.PlatformSecurityAutoConfiguration",
+                "aiwcorpo.mcp.platform.internal-jwt.allow-test-keys", "false",
+                "aiwcorpo.mcp.platform.internal-jwt.replay-store", "redis",
+                "aiwcorpo.mcp.platform.mtls.required", "true"), "prod"))
+                .hasMessageContaining("spring.autoconfigure.exclude lists");
+    }
+
+    @Test
+    void excludingThePlatformInCodeOutsideDev() {
+        Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
+        properties.put("spring.ai.mcp.server.name", "startup-refusal-test");
+        assertThatThrownBy(() -> new SpringApplicationBuilder(ExcludingServer.class).web(WebApplicationType.SERVLET)
+                .properties(properties).properties("server.port=0").profiles("prod").run().close())
+                .hasMessageContaining("are not defined").hasMessageContaining("platformConfigurationGuard");
     }
 }

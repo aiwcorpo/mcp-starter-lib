@@ -1,6 +1,6 @@
 # Migracja z 2.x na 3.0
 
-Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-7**.
+Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-10**.
 
 ## Zmiana modelu
 
@@ -255,7 +255,9 @@ podpisuje kluczami testowymi. Opis i komenda startu: README, "Uruchomienie lokal
 
 ## Zmiany w 3.0.0-alpha-9
 
-Pracowano na `3.0.0-alpha-9-SNAPSHOT`; alpha-8 i wcześniejsze nietknięte. Przejście z alpha-8: podbić wersję BOM na
+Pracowano na `3.0.0-alpha-9-SNAPSHOT`. Wydane alpha-8 w `~/.m2` zostało przy tym nadpisane kodem roboczym alpha-9 (incydent
+opisany w `STATUS.md`); odtworzenie z tagu `v3.0.0-alpha-8` jest po stronie człowieka. Do tego czasu nie uznawaj wyniku
+budowy "na alpha-8" za dowód zachowania wydania alpha-8. Przejście z alpha-8: podbić wersję BOM na
 `3.0.0-alpha-9`. API publiczne nie ma usunięć, które dotykałyby kodu serwera zgodnego z alpha-8; kod ma się zmienić tylko
 tam, gdzie poniższe punkty mówią wprost.
 
@@ -280,6 +282,31 @@ tam, gdzie poniższe punkty mówią wprost.
   `AuditLogger`, `ToolRiskRegistry`, `McpErrorMapper`). `AuditingToolCallback` i `ToolCallbackAuditPostProcessor` mają
   konstruktory pakietowe, `ToolInputPolicy` jest enumem (`STRICT`, `DEV`); kod serwera, który ich nie budował (żaden z
   pięciu serwerów i template'u), nie wymaga zmian.
+
+## Zmiany w 3.0.0-alpha-10
+
+Pracowano na `3.0.0-alpha-10-SNAPSHOT`. Przejście z alpha-9: podbić wersję BOM na `3.0.0-alpha-10`. Kod serwera zgodny z
+alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
+
+- **Testy serwera w CI** (A9-M2): kontrola "`dev` we wdrożeniu" nie obejmuje kontekstu budowanego przez Spring TestContext
+  (`@SpringBootTest`, slice'y), więc testy z `TestGateway` przechodzą na podzie Kubernetesa i pod runnerem systemd. Nic nie
+  trzeba ustawiać; nie dodawaj `INVOCATION_ID=` ani `SPRING_MAIN_CLOUD_PLATFORM=` do konfiguracji CI (nie działają i
+  przeciekłyby do wdrożenia). `spring.main.cloud-platform=none` nie jest już platformą wdrożenia.
+- **Sygnały wdrożenia dla `dev`**: także `KUBERNETES_SERVICE_HOST` z `KUBERNETES_SERVICE_PORT` i kontener (`/.dockerenv`,
+  `/run/.containerenv`, zmienna `container`, cgroup); zmienne procesu są czytane bezpośrednio, `-DINVOCATION_ID=` ich nie
+  zasłania. Obraz z `SPRING_PROFILES_ACTIVE=dev` nie wystartuje.
+- **Port managementu** porównywany jako liczba: `0` to zawsze osobny serwer (wymaga loopbacku w `dev`, odmowa poza `dev`),
+  `-1` wyłącza HTTP actuatora i nie wymaga adresu.
+- **Wykluczenie auto-konfiguracji platformy** (`spring.autoconfigure.exclude` albo `exclude` na `@SpringBootApplication`)
+  kończy start poza `dev` i poza kontekstem testowym.
+- **Cięcie tekstu**: w ciągu bez spacji dłuższym niż 64 jednostki odpadają końcowe litery i cyfry, więc po ogranicznikach
+  nie zostaje niepełny token (`(((...(@allison` -> `(((...(@`). Nowe `UntrustedText.cut(tekst, limit)`,
+  `plainCut(tekst, truncated)` i `markdownCut(...)`: serwer z filtrem tnie przed filtrem, potem buduje wartość z już
+  przyciętego tekstu (cięcie może zdjąć domykający ogranicznik, np. backtick, a filtr ma widzieć to, co dostanie klient).
+  Kolejność: konwersja, `normalize`, `cut`, filtr, `plainCut|markdownCut`. Test serwera porównujący dokładnie ucięty
+  długi ciąg trzeba poprawić.
+- **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
+  U+2029, U+0085 na `\n`).
 
 ## Wdrożenie
 

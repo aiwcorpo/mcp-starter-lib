@@ -14,7 +14,8 @@ import pl.aiwcorpo.mcp.platform.auth.CallerContext;
  * <p>The constructor normalizes the text ({@link TextHygiene#normalize}), so a value carries no control, bidi or
  * zero-width characters however it was built (a factory, {@code new}, Jackson). Normalization replaces what it
  * removes with a space, so a server must normalize the raw text <em>before</em> it filters it (links, images,
- * macros, mentions) and pass the filtered result on; the factories also cut the text to a limit, at a word boundary. Fields a system adds next to the four
+ * macros, mentions) and pass the filtered result on; the factories also cut the text to a limit ({@link #cut}). A server
+ * that filters should cut first, then filter, and build the value with {@link #plainCut}. Fields a system adds next to the four
  * required ones (for example {@code omittedMacros}) go in the surrounding result record.
  *
  * @param kind      always {@code untrusted-data}
@@ -56,15 +57,38 @@ public record UntrustedText(String kind, String format, String text, boolean tru
     }
 
     /**
-     * A cut inside a word would make a new token at the end of the text that the server's filter never saw
-     * ({@code "hello @allison"} cut to 10 units is {@code "hello @all"}). So the cut moves back to the last white
-     * space when the part of the last word it would keep is at most {@value #WORD_LIMIT} units; a longer unbroken
-     * run (text in a script written without spaces, a blob) is cut where the limit falls, because dropping it would
-     * lose the text and it is no mention or macro name. The cut never splits a surrogate pair.
+     * Text a server has already cut with {@link #cut} and filtered afterwards: normalized by the constructor, not cut
+     * again.
+     *
+     * @param truncated whether {@link #cut} (or the server) removed something
+     */
+    public static UntrustedText plainCut(String text, boolean truncated) {
+        return new UntrustedText(KIND, PLAIN, text, truncated);
+    }
+
+    /** Markdown the server has already cut and filtered, like {@link #plainCut}. */
+    public static UntrustedText markdownCut(String text, boolean truncated) {
+        return new UntrustedText(KIND, MARKDOWN, text, truncated);
+    }
+
+    /**
+     * Cuts normalized text to at most {@code maxLength} UTF-16 units so that the cut makes no token the server's
+     * filter has not seen. The server cuts <em>before</em> its filter and passes the result to
+     * {@link #plainCut}/{@link #markdownCut}: only a filter that runs on the cut text sees what the client sees
+     * (a cut can also remove the closing delimiter of a code span or block, which turns {@code `@all`}, harmless
+     * as code, into a plain {@code @all}).
+     *
+     * <p>A cut inside a word would make a new token at the end of the text ({@code "hello @allison"} cut to 10
+     * units is {@code "hello @all"}). So the cut moves back to the last white space when the part of the last
+     * word it would keep is at most {@value #WORD_LIMIT} units. In a longer unbroken run (text in a script written
+     * without spaces, a blob, {@code "((((...(@allison"}) the cut drops the word characters at its end
+     * ({@code [\p{L}\p{N}_]}), so no name or scheme is left half written after a delimiter; a run made only of
+     * word characters is cut where the limit falls, because there is no delimiter for a token to start from. The
+     * cut never splits a surrogate pair.
      *
      * @return the text to keep, without trailing white space; shorter than {@code text} exactly when something was cut
      */
-    static String cut(String text, int maxLength) {
+    public static String cut(String text, int maxLength) {
         if (text.length() <= maxLength) {
             return text;
         }
@@ -80,9 +104,26 @@ public record UntrustedText(String kind, String format, String text, boolean tru
             }
             if (end - start <= WORD_LIMIT) {
                 end = start;
+            } else {
+                int word = end;
+                while (word > start && isWordCharacter(Character.codePointBefore(text, word))) {
+                    word -= Character.charCount(Character.codePointBefore(text, word));
+                }
+                if (word > start) {
+                    end = word;
+                }
             }
         }
         return text.substring(0, end).stripTrailing();
+    }
+
+    private static boolean isWordCharacter(int point) {
+        return Character.isLetterOrDigit(point) || point == '_';
+    }
+
+    private static String withUnifiedLineBreaks(String raw) {
+        return raw.replace("\r\n", "\n").replace('\r', '\n').replace('\u2028', '\n').replace('\u2029', '\n')
+                .replace('\u0085', '\n');
     }
 
     private static UntrustedText of(String format, String raw, int maxLength) {
@@ -90,9 +131,10 @@ public record UntrustedText(String kind, String format, String text, boolean tru
             throw new IllegalArgumentException("maxLength must not be negative");
         }
         String clean = TextHygiene.normalize(raw);
-        if (!clean.equals(raw)) {
+        if (raw != null && !clean.equals(withUnifiedLineBreaks(raw))) {
             // The text changed here, after the server's own filter had looked at it: the filter saw something else
             // than the client will, typically because entities were decoded after normalize() (MIGRATION-3.0.md).
+            // Line breaks are not that: CRLF and the Unicode separators become a newline without hiding anything.
             LOG.warn("event=untrusted_text_not_normalized tool={} detail=\"normalize() before the filter, then the "
                     + "factory\"", CallerContext.current().map(CallerContext::tool).map(TextHygiene::normalize).orElse("-"));
         }

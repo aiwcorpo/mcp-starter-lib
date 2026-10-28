@@ -44,7 +44,9 @@ import tools.jackson.databind.json.JsonMapper;
  * }
  * }</pre>
  * The server under test must run with the {@code dev} profile ({@code @ActiveProfiles("dev")}): the test keys,
- * the in-memory jti store and plain HTTP are refused otherwise.
+ * the in-memory jti store and plain HTTP are refused otherwise. The starter's "{@code dev} in a deployment" check does
+ * not apply to a context built by Spring's test framework, so these tests also run in CI on a Kubernetes pod or under
+ * a systemd runner; there is nothing to set for that.
  *
  * <p>The keys are public (mcp-contracts {@code test-vectors/keys}); this class exists for tests only.
  */

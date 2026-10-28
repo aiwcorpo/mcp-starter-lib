@@ -1,2 +1,5 @@
 org.springframework.boot.EnvironmentPostProcessor=\
 pl.aiwcorpo.mcp.platform.autoconfigure.PlatformDefaultsEnvironmentPostProcessor
+
+org.springframework.context.ApplicationContextInitializer=\
+pl.aiwcorpo.mcp.platform.autoconfigure.PlatformPresenceCheck

@@ -271,4 +271,118 @@ class PlatformConfigurationGuardTest {
             logger.detachAppender(appender);
         }
     }
+
+    private static DevProfileEnvironment.Host host(Map<String, String> variables, Map<String, String> files) {
+        return new DevProfileEnvironment.Host() {
+            @Override
+            public String variable(String name) {
+                return variables.get(name);
+            }
+
+            @Override
+            public boolean exists(String path) {
+                return files.containsKey(path);
+            }
+
+            @Override
+            public String read(String path) {
+                return files.getOrDefault(path, "");
+            }
+        };
+    }
+
+    private static java.util.Optional<String> signal(MockEnvironment environment, DevProfileEnvironment.Host host,
+            boolean testContext) {
+        return DevProfileEnvironment.deploymentSignal(environment, host, () -> testContext);
+    }
+
+    @Test
+    void cloudPlatformNoneIsNotADeployment() {
+        MockEnvironment none = new MockEnvironment().withProperty("spring.main.cloud-platform", "none");
+        assertThat(signal(none, host(Map.of(), Map.of()), false)).isEmpty();
+        MockEnvironment dev = serverConfigAsInTheReadme("dev").withProperty("spring.main.cloud-platform", "none");
+        assertThatCode(() -> new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(dev, null))
+                .doesNotThrowAnyException();
+    }
+
+    @Test
+    void aContainerIsADeploymentWhateverTheEnvironmentPropertiesSay() {
+        MockEnvironment env = new MockEnvironment();
+        assertThat(signal(env, host(Map.of(), Map.of("/.dockerenv", "")), false)).hasValueSatisfying(
+                s -> assertThat(s).contains("container"));
+        assertThat(signal(env, host(Map.of(), Map.of("/run/.containerenv", "")), false)).isPresent();
+        assertThat(signal(env, host(Map.of("container", "podman"), Map.of()), false)).isPresent();
+        assertThat(signal(env, host(Map.of(), Map.of("/proc/self/cgroup", "12:cpu:/docker/4f2a9c\n")), false)).isPresent();
+        assertThat(signal(env, host(Map.of(), Map.of("/proc/1/cgroup", "0::/kubepods.slice/kubepods-burstable.slice/x")), false))
+                .isPresent();
+        assertThat(signal(env, host(Map.of(), Map.of("/proc/self/cgroup", "0::/user.slice/user-501.slice/session-3.scope")), false))
+                .isEmpty();
+    }
+
+    @Test
+    void theProcessVariablesCountEvenWhenAPropertyHidesThem() {
+        MockEnvironment shadowed = new MockEnvironment().withProperty("INVOCATION_ID", "")
+                .withProperty("spring.main.cloud-platform", "off");
+        assertThat(signal(shadowed, host(Map.of("INVOCATION_ID", "7f3a9c1e5b2d4e8f"), Map.of()), false))
+                .hasValueSatisfying(s -> assertThat(s).contains("systemd"));
+        assertThat(signal(shadowed, host(Map.of("KUBERNETES_SERVICE_HOST", "10.0.0.1", "KUBERNETES_SERVICE_PORT", "443"),
+                Map.of()), false)).hasValueSatisfying(s -> assertThat(s).contains("Kubernetes"));
+        assertThat(signal(shadowed, host(Map.of("KUBERNETES_SERVICE_HOST", "10.0.0.1"), Map.of()), false)).isEmpty();
+    }
+
+    @Test
+    void aSpringTestContextIsNeverADeploymentButOtherCodeOnAPodIs() {
+        DevProfileEnvironment.Host pod = host(Map.of("KUBERNETES_SERVICE_HOST", "10.0.0.1", "KUBERNETES_SERVICE_PORT", "443",
+                "INVOCATION_ID", "7f3a9c1e5b2d4e8f"), Map.of("/.dockerenv", ""));
+        MockEnvironment env = new MockEnvironment().withProperty("spring.main.cloud-platform", "kubernetes");
+
+        assertThat(signal(env, pod, true)).isEmpty();
+        assertThat(signal(env, pod, false)).isPresent();
+        assertThat(DevProfileEnvironment.inSpringTestContext()).isFalse();
+    }
+
+    @Test
+    void theManagementPortIsComparedAsANumber() {
+        MockEnvironment randomBoth = profiles("dev").withProperty("server.port", "0").withProperty("management.server.port", "0");
+        assertThatThrownBy(() -> check(valid(), randomBoth)).hasMessageContaining("management.server.address");
+
+        MockEnvironment padded = profiles("dev").withProperty("server.port", "8080").withProperty("management.server.port", " 8080");
+        assertThatCode(() -> check(valid(), padded)).doesNotThrowAnyException();
+
+        MockEnvironment disabled = profiles("dev").withProperty("server.port", "18600").withProperty("management.server.port", "-1");
+        assertThatCode(() -> check(valid(), disabled)).doesNotThrowAnyException();
+
+        MockEnvironment notANumber = profiles("dev").withProperty("management.server.port", "http");
+        assertThatThrownBy(() -> check(valid(), notANumber)).hasMessageContaining("management.server.address");
+
+        MockEnvironment prodRandom = production().withProperty("server.port", "0").withProperty("management.server.port", "0");
+        assertThatThrownBy(() -> check(valid(), prodRandom)).hasMessageContaining("management.server.port must be unset");
+        MockEnvironment prodDisabled = production().withProperty("management.server.port", "-1");
+        assertThatCode(() -> check(valid(), prodDisabled)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void excludingThePlatformsAutoConfigurationsStopsTheServerOutsideDev() {
+        String guard = "pl.aiwcorpo.mcp.platform.security.PlatformSecurityAutoConfiguration";
+        MockEnvironment prod = serverConfigAsInTheReadme("prod").withProperty("spring.autoconfigure.exclude",
+                "org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration, " + guard);
+        assertThatThrownBy(() -> new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(prod, null))
+                .hasMessageContaining("spring.autoconfigure.exclude").hasMessageContaining(guard);
+
+        MockEnvironment indexed = serverConfigAsInTheReadme("prod").withProperty("spring.autoconfigure.exclude[0]", guard);
+        assertThatThrownBy(() -> new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(indexed, null))
+                .hasMessageContaining(guard);
+
+        MockEnvironment noProfile = new MockEnvironment().withProperty("spring.autoconfigure.exclude", guard);
+        assertThatThrownBy(() -> new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(noProfile, null))
+                .hasMessageContaining(guard);
+
+        MockEnvironment unrelated = serverConfigAsInTheReadme("prod").withProperty("spring.autoconfigure.exclude",
+                "org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration");
+        assertThatCode(() -> new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(unrelated, null))
+                .doesNotThrowAnyException();
+        MockEnvironment dev = serverConfigAsInTheReadme("dev").withProperty("spring.autoconfigure.exclude", guard);
+        assertThatCode(() -> new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(dev, null))
+                .doesNotThrowAnyException();
+    }
 }
