@@ -24,6 +24,13 @@ public enum InternalJwtRejection {
     TOOL_MISSING("tool_missing"),
     TOOL_NOT_ALLOWED("tool_not_allowed"),
     TOOL_MISMATCH("tool_mismatch"),
+    /**
+     * The header of a token whose {@code kid} resolved to a gateway key carries {@code crit} or a {@code typ} other than
+     * {@code JWT}. Not a parse failure and never capped: it takes a token that got past the key lookup. Reported with the
+     * closest existing code of C8, {@code alg_not_allowed} (a header parameter the verifier does not accept); a code of its
+     * own is a proposal in STATUS.
+     */
+    HEADER_NOT_ALLOWED("alg_not_allowed"),
     /** mTLS: no client certificate, or one with a name that is not the gateway's. */
     CLIENT_CERTIFICATE_REJECTED("client_certificate_rejected"),
     /** The gateway's JWKS could not be fetched and no usable copy is cached. Answered with 503. */

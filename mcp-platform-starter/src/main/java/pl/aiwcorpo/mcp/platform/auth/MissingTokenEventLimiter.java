@@ -1,17 +1,19 @@
 package pl.aiwcorpo.mcp.platform.auth;
 
 import io.micrometer.core.instrument.MeterRegistry;
+import java.util.EnumMap;
+import java.util.Map;
 import java.util.function.LongSupplier;
 
 /**
- * One per-process budget for the refusals of requests that carry no usable token: {@code missing_token} and
- * {@code malformed} (an empty or foreign {@code Authorization} header, a string that is not a JWT). Both cost the
- * caller nothing, so without a cap anyone who reaches the port could fill the audit stream and the application log
- * (CC-120). What is over the budget is only counted ({@value #METRIC}, tag {@code reason}), neither audited nor
- * logged. The same mechanism and default as the gateway's, which caps {@code missing_token}.
+ * Per-process caps on the refusals of requests whose token could not even be parsed: {@code missing_token} (no or empty
+ * header) and {@code malformed} (a foreign {@code Authorization} scheme, a string that is not three segments, a header
+ * that is not a JSON object). Both cost the caller nothing, so without a cap anyone who reaches the port could fill the
+ * audit stream and the application log (CC-120). Each reason has a budget of its own: a flood of one must not use up the
+ * other. What is over a budget is only counted ({@value #METRIC}, tag {@code reason}), neither audited nor logged.
  *
- * <p>Other reasons are not capped: they need a token of the right shape, a certificate or a failing dependency, and
- * each of them is a signal on its own.
+ * <p>Nothing else is capped, in particular not a token that got past parsing and the key lookup (a header with
+ * {@code crit}, a wrong signature, claims): that takes effort and is an attempt, not noise.
  */
 public final class MissingTokenEventLimiter {
 
@@ -23,8 +25,7 @@ public final class MissingTokenEventLimiter {
     private final int perSecond;
     private final LongSupplier nanoClock;
     private final MeterRegistry meters;
-    private long windowStart;
-    private int inWindow;
+    private final Map<InternalJwtRejection, long[]> windows = new EnumMap<>(InternalJwtRejection.class);
 
     public MissingTokenEventLimiter(int perSecond, LongSupplier nanoClock, MeterRegistry meters) {
         if (perSecond < 1) {
@@ -33,7 +34,6 @@ public final class MissingTokenEventLimiter {
         this.perSecond = perSecond;
         this.nanoClock = nanoClock;
         this.meters = meters;
-        this.windowStart = nanoClock.getAsLong();
     }
 
     /** Whether a refusal for this reason is capped at all. */
@@ -44,11 +44,12 @@ public final class MissingTokenEventLimiter {
     /** True when the event may be written; false (and counted under {@code reason}) when this second's budget is spent. */
     public synchronized boolean tryAcquire(InternalJwtRejection reason) {
         long now = nanoClock.getAsLong();
-        if (now - windowStart >= SECOND_NANOS) {
-            windowStart = now;
-            inWindow = 0;
+        long[] window = windows.computeIfAbsent(reason, r -> new long[] {now, 0});
+        if (now - window[0] >= SECOND_NANOS) {
+            window[0] = now;
+            window[1] = 0;
         }
-        if (++inWindow > perSecond) {
+        if (++window[1] > perSecond) {
             meters.counter(METRIC, "reason", reason.code()).increment();
             return false;
         }

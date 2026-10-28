@@ -96,7 +96,7 @@ public final class InternalJwtVerifier {
         }
         JsonNode typ = header.get("typ");
         if (header.has("crit") || (typ != null && !(typ.isString() && "JWT".equals(typ.asString())))) {
-            throw reject(InternalJwtRejection.MALFORMED);
+            throw reject(InternalJwtRejection.HEADER_NOT_ALLOWED);
         }
         if (!signatureValid(token, key)) {
             throw reject(InternalJwtRejection.BAD_SIGNATURE);

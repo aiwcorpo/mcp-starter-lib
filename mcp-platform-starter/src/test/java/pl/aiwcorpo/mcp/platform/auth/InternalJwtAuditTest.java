@@ -24,6 +24,7 @@ import pl.aiwcorpo.mcp.platform.CapturedLogs;
 import pl.aiwcorpo.mcp.platform.ContractSchemas;
 import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.node.ObjectNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /** A refused request leaves an {@code authentication} event (C8, CC-071) with the closed field list of 2.2.5 (CC-120). */
@@ -220,7 +221,7 @@ class InternalJwtAuditTest {
     }
 
     @Test
-    void missingAndMalformedShareOneBudgetForTheEventAndTheLogLine() throws Exception {
+    void eachReasonWithoutAParsableTokenHasItsOwnBudgetForTheEventAndTheLogLine() throws Exception {
         Logger filterLog = (Logger) LoggerFactory.getLogger(InternalJwtFilter.class);
         ListAppender<ILoggingEvent> warnings = new ListAppender<>();
         warnings.start();
@@ -229,23 +230,54 @@ class InternalJwtAuditTest {
             AtomicLong nanos = new AtomicLong(1_000_000_000L);
             SimpleMeterRegistry meters = new SimpleMeterRegistry();
             InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock), false,
-                    new MissingTokenEventLimiter(4, nanos::get, meters));
-            String[] headers = {null, "x", "", "Bearer", "Bearer ", "Bearer not-a-jwt", "Basic abc", "Bearer a.b.c"};
+                    new MissingTokenEventLimiter(2, nanos::get, meters));
 
-            for (String header : headers) {
+            for (int i = 0; i < 6; i++) {
+                filter.doFilter(toolCall(null), new MockHttpServletResponse(), new MockFilterChain());
+            }
+            for (String header : new String[] {"x", "", "Bearer", "Bearer not-a-jwt", "Basic abc", "Bearer a.b.c"}) {
                 MockHttpServletResponse response = new MockHttpServletResponse();
                 filter.doFilter(toolCall(header), response, new MockFilterChain());
                 assertThat(response.getStatus()).as("header '%s'", header).isEqualTo(401);
             }
 
-            assertThat(CapturedLogs.snapshot(lines)).hasSize(4);
+            List<String> reasons = CapturedLogs.snapshot(lines).stream()
+                    .map(line -> JSON.readTree(line.getFormattedMessage()).get("reason").asString()).toList();
+            assertThat(reasons).containsExactly("missing_token", "missing_token", "malformed", "malformed");
             assertThat(CapturedLogs.snapshot(warnings).stream().filter(e -> e.getFormattedMessage().contains("internal_jwt_rejected")))
                     .hasSize(4);
-            double counted = meters.get(MissingTokenEventLimiter.METRIC).counters().stream().mapToDouble(c -> c.count()).sum();
-            assertThat(counted).isEqualTo(4.0);
-            assertThat(meters.get(MissingTokenEventLimiter.METRIC).tag("reason", "malformed").counter().count()).isPositive();
+            assertThat(meters.get(MissingTokenEventLimiter.METRIC).tag("reason", "missing_token").counter().count()).isEqualTo(4.0);
+            assertThat(meters.get(MissingTokenEventLimiter.METRIC).tag("reason", "malformed").counter().count()).isEqualTo(4.0);
         } finally {
             filterLog.detachAppender(warnings);
         }
+    }
+
+    /** A token whose kid resolved but whose header has crit is an attempt, not noise: no flood of cheap requests hides it. */
+    @Test
+    void aFloodWithoutATokenDoesNotSuppressTheEventForATokenWithACritHeader() throws Exception {
+        AtomicLong nanos = new AtomicLong(1_000_000_000L);
+        InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock), false,
+                new MissingTokenEventLimiter(1, nanos::get, new SimpleMeterRegistry()));
+        for (int i = 0; i < 20; i++) {
+            filter.doFilter(toolCall(null), new MockHttpServletResponse(), new MockFilterChain());
+            filter.doFilter(toolCall("Bearer junk"), new MockHttpServletResponse(), new MockFilterChain());
+        }
+        assertThat(CapturedLogs.snapshot(lines)).hasSize(2);
+
+        ObjectNode header = (ObjectNode) JSON.readTree(JSON.writeValueAsString(vector.get("header")));
+        header.putArray("crit").add("exp");
+        String forged = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(JSON.writeValueAsString(header).getBytes(StandardCharsets.UTF_8))
+                + token.substring(token.indexOf('.'));
+        for (int i = 0; i < 3; i++) {
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            filter.doFilter(toolCall("Bearer " + forged), response, new MockFilterChain());
+            assertThat(response.getStatus()).isEqualTo(401);
+        }
+
+        List<String> reasons = CapturedLogs.snapshot(lines).stream()
+                .map(line -> JSON.readTree(line.getFormattedMessage()).get("reason").asString()).toList();
+        assertThat(reasons).containsExactly("missing_token", "malformed", "alg_not_allowed", "alg_not_allowed", "alg_not_allowed");
     }
 }

@@ -1,6 +1,6 @@
 # Migracja z 2.x na 3.0
 
-Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-13**.
+Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-14**.
 
 ## Zmiana modelu
 
@@ -308,14 +308,14 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
-## Jak przejść z alpha-11 (albo alpha-12) na 3.0.0-alpha-13
+## Jak przejść z alpha-11 (albo alpha-12) na 3.0.0-alpha-14
 
 Jedna lista dla serwera i dla template'u; szczegóły i uzasadnienia są w sekcjach "Zmiany w 3.0.0-alpha-12" i
-"Zmiany w 3.0.0-alpha-13" niżej. Kolejność ma znaczenie tylko dla ostatniego punktu.
+"Zmiany w 3.0.0-alpha-13" i "Zmiany w 3.0.0-alpha-14" niżej. Kolejność ma znaczenie tylko dla ostatniego punktu.
 
-1. **Wersje.** W `pom.xml` serwera `<mcp-platform.version>3.0.0-alpha-13</mcp-platform.version>` (BOM zarządza też
+1. **Wersje.** W `pom.xml` serwera `<mcp-platform.version>3.0.0-alpha-14</mcp-platform.version>` (BOM zarządza też
    `mcp-contracts` 2.2.5). W README serwera wersja startera i kontraktów jest wpisana ręcznie (`starter 3.0.0-alpha-11`,
-   `kontrakty 2.1.1`): popraw na `3.0.0-alpha-13` i `2.2.5`. `new-server.sh` bierze wersję BOM z `pom.xml` template'u, więc
+   `kontrakty 2.1.1`): popraw na `3.0.0-alpha-14` i `2.2.5`. `new-server.sh` bierze wersję BOM z `pom.xml` template'u, więc
    template trzeba przestawić przed generowaniem nowych serwerów.
 2. **Zastąp cały plik** `mcp-app/src/test/java/pl/aiwcorpo/mcp/<system>/app/DevProfileLoopbackTest.java` (to nie jest
    dopisek do testu z alpha-11: `TestGateway`, `SpringApplicationBuilder` i `assertThatThrownBy` znikają z importów).
@@ -427,6 +427,17 @@ punkt) i usunąć wykluczenia platformy, jeśli są (drugi). Reszta zmienia się
 - **Rozpoznanie jaru test frameworka** (A11-L2): ścieżka musi kończyć się na `spring-test-<wersja>.jar` albo
   `spring-boot-test-<wersja>.jar` (z `!/` w jarze zagnieżdżonym); katalog o takiej nazwie już się nie liczy. Nic do zmiany w serwerach.
 - **Devcontainer** (A10-L2): bez zmian; człowiek wybrał opcję 1 (STATUS), `dev` w kontenerze nadal odmawia.
+
+## Zmiany w 3.0.0-alpha-14
+
+Pracowano na `3.0.0-alpha-14-SNAPSHOT`. Przejście: lista "Jak przejść z alpha-11" wyżej (z alpha-13 wystarczy podbić wersję).
+
+- **Limit zdarzeń: osobny budżet na powód, tylko dla nieparsowalnego tokenu.** `missing_token` i `malformed` (obcy schemat, nie trzy
+  segmenty, nagłówek JWT nie jest obiektem) mają osobne budżety (domyślnie 20 na sekundę każdy), więc zalew jednego nie zużywa drugiego.
+  Token z `crit` albo `typ` innym niż `JWT` w nagłówku, po rozwiązaniu `kid`, nie jest już `malformed` ani limitowany: to próba, nie szum,
+  i jest raportowany bez limitu jako `alg_not_allowed` (najbliższy istniejący kod C8; własny kod to propozycja CC w STATUS).
+  Alert na `malformed` nie obejmuje już tych tokenów, a `alg_not_allowed` obejmuje je razem z nagłówkami z `alg` innym niż ES256.
+  Poprawia alpha-13, gdzie budżet był wspólny dla obu powodów i dla każdego niepoprawnego nagłówka.
 
 ## Zmiany w 3.0.0-alpha-13
 

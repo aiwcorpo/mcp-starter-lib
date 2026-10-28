@@ -21,6 +21,12 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
 
+3.0.0-alpha-14: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-14`, tag `v3.0.0-alpha-14` (praca na `3.0.0-alpha-14-SNAPSHOT`). Razem 442 testy (starter 359, mcp-platform-test 83). Poprawka automatycznego przeglądu bezpieczeństwa alpha-13 (MEDIUM): wspólny budżet `missing_token`+`malformed` pozwalał tanimi żądaniami bez tokenu zużyć limit i ukryć w audycie token z nagłówkiem po rozwiązaniu `kid` (`crit`, `typ`), czyli próbę, nie szum.
+1. `MissingTokenEventLimiter`: osobny budżet na powód (`missing_token`, `malformed`), limitowane tylko odrzucenia nieparsowalnego tokenu (brak/pusty/obcy `Authorization`, nie trzy segmenty, nagłówek JWT nie jest obiektem).
+2. Nowy `InternalJwtRejection.HEADER_NOT_ALLOWED` dla nagłówka z `crit` albo `typ` innym niż `JWT` po rozwiązaniu `kid`: bez limitu, na wire jako `alg_not_allowed` (najbliższy istniejący kod C8; żaden wektor kontraktów nie wymaga tu `malformed`). Zmiana zachowania: wcześniej `malformed`.
+3. Testy: `InternalJwtAuditTest.eachReasonWithoutAParsableTokenHasItsOwnBudgetForTheEventAndTheLogLine`, `aFloodWithoutATokenDoesNotSuppressTheEventForATokenWithACritHeader` (zalew `missing_token` i `malformed` nie tłumi zdarzenia dla tokenu z `crit`).
+4. Propozycja CC 8 (C8): osobny powód `header_not_allowed` (albo `unsupported_header`) dla nagłówka JWT z `crit` lub niedozwolonym `typ`, zamiast przeciążonego `alg_not_allowed`; do decyzji ws-00.
+
 3.0.0-alpha-13: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-13`, tag `v3.0.0-alpha-13` (praca na `3.0.0-alpha-13-SNAPSHOT`, wersji alpha-12 i wcześniejszych nie instalowano ponownie). Razem 440 testów. Instrukcja: `MIGRATION-3.0.md`, sekcja "Jak przejść z alpha-11 (albo alpha-12) na 3.0.0-alpha-13". Decyzja człowieka A10-L2: opcja 1 (devcontainer nie jest wspierany dla `dev`, bez zmian w kodzie). Kamienie (przegląd alpha-12: 0 CRITICAL/HIGH, 1 MEDIUM, 3 LOW):
 1. A12-M1. `PlatformConfigurationGuard`, `CredentialTransportGuard` i `DevListenAddressCheck` są `@Lazy(false)`; przy `spring.main.lazy-initialization=true`
    guard powstawał tylko jako zależność `CredentialHeaderFilter` (`@ConditionalOnMissingBean`), więc serwer z własnym filtrem startował bez kontroli.
@@ -424,6 +430,7 @@ Pozostałe poniżej wymagają decyzji ws-00; nowe punkty na końcu listy.
    z ws-05, bo pusty lub obcy nagłówek `Authorization` omija limit gateway'a), a nadmiar wyłącznie liczyć; nazwy liczników dziś różne
    (`gateway_audit_authentication_suppressed_total`, `mcp_server_audit_authentication_suppressed_total`), więc SIEM i alerty
    potrzebują albo wspólnej nazwy, albo listy. Do rozstrzygnięcia przez ws-00 razem z ws-05.
+8. C8 (nowe w alpha-14): osobny powód `header_not_allowed` dla nagłówka tokenu z `crit` albo niedozwolonym `typ` po rozwiązaniu `kid`; starter raportuje go dziś jako `alg_not_allowed`.
 
 3.0.0-alpha-6: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-6`,
 tag `v3.0.0-alpha-6`. API bez usunięć; zgłoszenia pięciu serwerów ws-04 i template'u. Instrukcja dla serwerów
