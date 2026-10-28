@@ -193,25 +193,25 @@ class BoundedSchemaTest {
                 + "\"additionalProperties\":false}", "l: a list needs an items schema");
         refused("{\"type\":\"object\",\"properties\":{\"n\":{\"type\":\"integer\",\"minimum\":0}},"
                 + "\"additionalProperties\":false}", "n: a number needs minimum and maximum");
-        refused("{\"type\":\"object\",\"properties\":{\"x\":{}},\"additionalProperties\":false}", "x: has no type");
-        refused("{\"type\":\"object\",\"properties\":{\"s\":{\"type\":[\"string\",\"null\"]}},"
-                + "\"additionalProperties\":false}", "s: text needs maxLength");
+        refused("{\"type\":\"object\",\"properties\":{\"x\":{}},\"additionalProperties\":false}", "x: needs exactly one type");
+        refused("{\"type\":\"object\",\"properties\":{\"s\":{\"type\":[\"string\",\"null\"],\"maxLength\":5}},"
+                + "\"additionalProperties\":false}", "s: needs exactly one type");
         refused("{\"type\":\"object\",\"properties\":{\"r\":{\"$ref\":\"#/$defs/R\"}},\"additionalProperties\":false,"
-                + "\"$defs\":{\"R\":{\"type\":\"object\",\"properties\":{\"t\":{\"type\":\"string\"}},"
-                + "\"additionalProperties\":false}}}", "r.t: text needs maxLength");
+                + "\"$defs\":{\"R\":{\"type\":\"object\",\"properties\":{\"t\":{\"type\":\"string\",\"maxLength\":5}},"
+                + "\"additionalProperties\":false}}}", "r: $ref is not supported");
     }
 
     @Test
-    void aTypedMapIsAllowedOnlyWithEveryBoundStated() {
+    void aMapIsRefusedTypedOrNot() {
         String map = "{\"type\":\"object\",\"properties\":{\"m\":{\"type\":\"object\",\"maxProperties\":5,"
                 + "\"propertyNames\":{\"maxLength\":20},\"additionalProperties\":{\"type\":\"string\",\"maxLength\":50}}},"
                 + "\"additionalProperties\":false}";
-        handWritten(map, ToolInputPolicy.STRICT).validate("{\"m\":{\"a\":\"b\"}}");
-        assertThatThrownBy(() -> handWritten(map, ToolInputPolicy.STRICT).validate("{\"m\":{\"a\":\"" + "x".repeat(51) + "\"}}"))
-                .isInstanceOf(InvalidToolArgumentException.class);
-        refused(map.replace("\"maxProperties\":5,", ""), "m: a map needs maxProperties");
-        refused(map.replace("\"propertyNames\":{\"maxLength\":20},", ""), "m: a map needs propertyNames.maxLength");
-        refused(map.replace("\"maxLength\":50", "\"x\":1"), "m{value}: text needs maxLength");
+        refused(map, "m: accepts undeclared properties");
+        refused("{\"type\":\"object\",\"properties\":{\"m\":{\"type\":\"object\",\"patternProperties\":{\"^a$\":"
+                + "{\"type\":\"string\",\"maxLength\":5}},\"additionalProperties\":false}},\"additionalProperties\":false}",
+                "m: patternProperties");
+        refused("{\"type\":\"object\",\"properties\":{\"m\":{\"type\":\"object\",\"additionalProperties\":true}},"
+                + "\"additionalProperties\":false}", "m: accepts undeclared properties");
     }
 
     @Test
@@ -241,7 +241,7 @@ class BoundedSchemaTest {
                 + "\"prefixItems\":[{\"type\":\"string\",\"maxLength\":5}]%s}},\"additionalProperties\":false}";
         refused(template.formatted(""), "l: a list needs an items schema");
         refused(template.formatted(",\"items\":{\"type\":\"string\"}"), "l[]: text needs maxLength");
-        handWritten(template.formatted(",\"items\":false"), ToolInputPolicy.STRICT);
+        refused(template.formatted(",\"items\":false"), "l[]: a boolean schema accepts any value");
         handWritten(template.formatted(",\"items\":{\"type\":\"string\",\"maxLength\":5}"), ToolInputPolicy.STRICT);
     }
 
@@ -254,9 +254,8 @@ class BoundedSchemaTest {
                     "key":{"type":"string","maxLength":20,"pattern":"^[^/]+$"},
                     "text":{"type":"string","maxLength":100},
                     "keys":{"type":"array","maxItems":3,"items":{"type":"string","maxLength":20,"pattern":"^[^/]+$"}},
-                    "ref":{"$ref":"#/$defs/Key"}}}},
-                 "additionalProperties":false,
-                 "$defs":{"Key":{"type":"string","maxLength":20,"pattern":"^[^/]+$"}}}""", ToolInputPolicy.STRICT);
+                    "ref":{"type":"string","maxLength":20,"pattern":"^[^/]+$"}}}},
+                 "additionalProperties":false}""", ToolInputPolicy.STRICT);
 
         validator.validate("{\"note\":\"a\\nb\",\"filter\":{\"text\":\"a\\nb\\tc\",\"key\":\"a b\"}}");
         for (String bad : new String[] {
@@ -269,15 +268,15 @@ class BoundedSchemaTest {
     }
 
     @Test
-    void keysOfObjectsAreIdentifiersAndGoThroughTheSameHygiene() {
+    void anUndeclaredKeyOfANestedObjectGoesThroughTheSameHygieneAndIsNotEchoed() {
         ToolInputValidator validator = handWritten("""
                 {"type":"object","properties":{
-                  "labels":{"type":"object","maxProperties":3,"propertyNames":{"maxLength":20},
-                            "additionalProperties":{"type":"string","maxLength":20}}},
+                  "labels":{"type":"object","additionalProperties":false,"properties":{
+                    "team":{"type":"string","maxLength":20}}}},
                  "additionalProperties":false}""", ToolInputPolicy.STRICT);
 
-        validator.validate("{\"labels\":{\"team\":\"a\",\"zone-1\":\"b\"}}");
-        for (String key : new String[] {"a\\u202eb", "a\\nb", "a\\u200bb", "a\\u001bb", "a\\u200db", "a\\ud800b"}) {
+        validator.validate("{\"labels\":{\"team\":\"a\"}}");
+        for (String key : new String[] {"a\\u202eb", "a\\nb", "a\\u200bb", "a\\u001bb", "a\\ud800b"}) {
             String json = "{\"labels\":{\"" + key + "\":\"v\"}}";
             assertThatThrownBy(() -> validator.validate(json)).as(key).isInstanceOf(InvalidToolArgumentException.class)
                     .hasMessageContaining("labels has a name with");
@@ -306,7 +305,7 @@ class BoundedSchemaTest {
         validator.validate("{\"pair\":[\"key\",\"free\\ntext\\tallowed here\"]}");
         for (String bad : new String[] {
                 "{\"pair\":[\"a\\nb\"]}",
-                "{\"pair\":[\"a\\u200db\"]}",
+                "{\"pair\":[\"a\\u200bb\"]}",
                 "{\"pair\":[\"ok\",\"x\\u200by\"]}",
                 "{\"pair\":[\"ok\",\"" + "z".repeat(51) + "\"]}"}) {
             assertThatThrownBy(() -> validator.validate(bad)).as(bad).isInstanceOf(InvalidToolArgumentException.class);
@@ -316,7 +315,7 @@ class BoundedSchemaTest {
     @Test
     void anUnboundedPrefixElementStopsTheServer() {
         String template = "{\"type\":\"object\",\"properties\":{\"l\":{\"type\":\"array\",\"maxItems\":2,"
-                + "\"prefixItems\":[%s],\"items\":false}},\"additionalProperties\":false}";
+                + "\"prefixItems\":[%s],\"items\":{\"type\":\"string\",\"maxLength\":5}}},\"additionalProperties\":false}";
         refused(template.formatted("{\"type\":\"string\"}"), "l[]: text needs maxLength");
         refused(template.formatted("{\"type\":\"integer\",\"minimum\":0}"), "l[]: a number needs minimum and maximum");
         handWritten(template.formatted("{\"type\":\"string\",\"maxLength\":5}"), ToolInputPolicy.STRICT);

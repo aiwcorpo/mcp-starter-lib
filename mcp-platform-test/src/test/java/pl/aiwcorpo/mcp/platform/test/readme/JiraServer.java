@@ -7,6 +7,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
 import pl.aiwcorpo.mcp.platform.guard.ToolRisk;
+import pl.aiwcorpo.mcp.platform.guard.ToolTitle;
 import pl.aiwcorpo.mcp.platform.input.ArgumentLimits;
 import pl.aiwcorpo.mcp.platform.input.SchemaLimitedToolCallbacks;
 import pl.aiwcorpo.mcp.platform.security.CredentialContext;
@@ -28,6 +29,7 @@ public class JiraServer {
 
         @Tool(name = "get_issue", description = "Returns an issue by key.")
         @ToolRisk(RiskLevel.READ_ONLY)
+        @ToolTitle("Test tool")
         public String getIssue(@ArgumentLimits(maxLength = 16, contractPattern = "JiraIssueKey") String issueKey) {
             // A real adapter calls Jira with: .headers(CredentialContext.require("jira")::applyTo)
             return issueKey + " read with a " + CredentialContext.require("jira").scheme().wireName() + " credential";

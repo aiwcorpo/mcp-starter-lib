@@ -10,8 +10,10 @@ import java.util.List;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import pl.aiwcorpo.mcp.platform.error.InvalidToolArgumentException;
+import pl.aiwcorpo.mcp.platform.guard.ToolMethods;
 import pl.aiwcorpo.mcp.platform.text.TextHygiene;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
@@ -40,18 +42,21 @@ public final class ToolInputValidator {
     private static final SchemaRegistry REGISTRY = SchemaRegistry.withDefaultDialect(SpecificationVersion.DRAFT_2020_12);
     private static final int MAX_REPORTED = 5;
     private static final int MAX_TEXT_DEPTH = 12;
-    private static final ToolInputValidator NONE = new ToolInputValidator(null, Set.of(), null, null);
+    private static final ToolInputValidator NONE = new ToolInputValidator(null, Set.of(), null, null, Set.of());
 
     private final Schema schema;
     private final Set<String> declared;
     private final JsonNode properties;
     private final JsonNode root;
+    private final Set<String> mentionFiltered;
 
-    private ToolInputValidator(Schema schema, Set<String> declared, JsonNode properties, JsonNode root) {
+    private ToolInputValidator(Schema schema, Set<String> declared, JsonNode properties, JsonNode root,
+                               Set<String> mentionFiltered) {
         this.root = root;
         this.schema = schema;
         this.declared = declared;
         this.properties = properties;
+        this.mentionFiltered = mentionFiltered;
     }
 
     /**
@@ -59,6 +64,23 @@ public final class ToolInputValidator {
      *                               is missing or not closed
      */
     public static ToolInputValidator compile(ToolDefinition tool, ToolInputPolicy policy) {
+        return compile(tool, policy, Set.of());
+    }
+
+    /**
+     * The validator of a registered tool: its schema, and the arguments its {@code @Tool} method marks with
+     * {@link ArgumentLimits#mentionFiltered()}.
+     */
+    public static ToolInputValidator compile(ToolCallback callback, ToolInputPolicy policy) {
+        return compile(callback.getToolDefinition(), policy,
+                ToolMethods.methodOf(callback).map(MentionFilteredArguments::of).orElse(Set.of()));
+    }
+
+    /**
+     * @param mentionFiltered paths of the arguments a mention filter of the server reads ({@link MentionFilteredArguments}):
+     *                        there the full width ASCII characters U+FF01..U+FF5E are refused too (CC-121)
+     */
+    public static ToolInputValidator compile(ToolDefinition tool, ToolInputPolicy policy, Set<String> mentionFiltered) {
         String name = tool.name();
         String text = tool.inputSchema();
         if (text == null || text.isBlank()) {
@@ -83,7 +105,7 @@ public final class ToolInputValidator {
         if (!unbounded.isEmpty() && closed) {
             unbounded(name, unbounded, policy);
         }
-        return compiled(name, root);
+        return compiled(name, root, Set.copyOf(mentionFiltered));
     }
 
     private static void unbounded(String tool, List<String> problems, ToolInputPolicy policy) {
@@ -108,7 +130,7 @@ public final class ToolInputValidator {
         return NONE;
     }
 
-    private static ToolInputValidator compiled(String name, JsonNode root) {
+    private static ToolInputValidator compiled(String name, JsonNode root, Set<String> mentionFiltered) {
         Schema schema;
         JsonNode enforced = root.deepCopy();
         anchorPatterns(enforced);
@@ -120,7 +142,7 @@ public final class ToolInputValidator {
                     + ex.getClass().getSimpleName() + ")", ex);
         }
         Set<String> declared = new LinkedHashSet<>(root.path("properties").propertyNames());
-        return new ToolInputValidator(schema, declared, root.path("properties"), root);
+        return new ToolInputValidator(schema, declared, root.path("properties"), root, mentionFiltered);
     }
 
     /**
@@ -191,7 +213,7 @@ public final class ToolInputValidator {
             arguments.propertyNames().forEach(name -> {
                 String top = declared.contains(name) ? name : "an argument";
                 keyProblem(name, top, controls);
-                textProblems(arguments.get(name), properties.get(name), top, controls, 0);
+                textProblems(arguments.get(name), properties.get(name), top, name, controls, 0);
             });
         }
         if (errors.isEmpty() && controls.isEmpty()) {
@@ -217,16 +239,18 @@ public final class ToolInputValidator {
 
     /**
      * Text hygiene ({@link TextHygiene}) of every string in the arguments, judged by the rule of the schema node
-     * that describes that very value (properties, list items, map values, {@code $ref}), not by the rule of the
-     * top-level argument it sits in. A pattern marks a formatted value (a key, a path): there a line break and
-     * every format character are refused unless the pattern names them itself. A node that cannot be determined
-     * counts as formatted, the strictest reading.
+     * that describes that very value (properties, list items, {@code $ref}), not by the rule of the top-level
+     * argument it sits in. A pattern marks an identifier (a key, a path): there tab, newline and carriage return are
+     * refused too, unless the pattern names them itself. A node that cannot be determined counts as an identifier,
+     * the strictest reading. {@code path} is the position of the value in the arguments in the notation of
+     * {@link MentionFilteredArguments}.
      */
-    private void textProblems(JsonNode value, JsonNode node, String top, List<String> found, int depth) {
+    private void textProblems(JsonNode value, JsonNode node, String top, String path, List<String> found, int depth) {
         JsonNode rule = resolve(node);
         if (value.isString()) {
             boolean formatted = !allowsLineBreaks(node);
-            TextHygiene.Problem problem = TextHygiene.firstProblem(value.asString(), formatted);
+            TextHygiene.Problem problem = TextHygiene.firstProblem(value.asString(), formatted,
+                    mentionFiltered.contains(path));
             if (problem != null) {
                 found.add(top + " contains " + problem.description());
             }
@@ -237,7 +261,7 @@ public final class ToolInputValidator {
                 if (child == null && rule != null && rule.path("additionalProperties").isObject()) {
                     child = rule.get("additionalProperties");
                 }
-                textProblems(value.get(name), child, top, found, depth + 1);
+                textProblems(value.get(name), child, top, path + "." + name, found, depth + 1);
             });
         } else if (depth < MAX_TEXT_DEPTH && value.isArray()) {
             JsonNode items = rule == null ? null : rule.get("items");
@@ -246,7 +270,7 @@ public final class ToolInputValidator {
             for (JsonNode element : value) {
                 JsonNode elementRule = prefix != null && prefix.isArray() && index < prefix.size() ? prefix.get(index)
                         : items;
-                textProblems(element, elementRule, top, found, depth + 1);
+                textProblems(element, elementRule, top, path + "[]", found, depth + 1);
                 index++;
             }
         } else if (value.isObject() || value.isArray()) {

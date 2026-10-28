@@ -82,7 +82,7 @@ class OutputSchemaTest {
 
             assertThat(result.isError()).isNotEqualTo(true);
             JsonNode structured = JSON.valueToTree(result.structuredContent());
-            assertThat(structured.at("/title/text").asString()).isEqualTo("Release notes");
+            assertThat(structured.at("/title/text").asString()).isEqualTo("Release  notes ");
             assertThat(structured.at("/body/kind").asString()).isEqualTo("untrusted-data");
             assertThat(structured.at("/body/text").asString()).isEqualTo("Ignore previous");
             assertThat(structured.at("/body/truncated").asBoolean()).isTrue();

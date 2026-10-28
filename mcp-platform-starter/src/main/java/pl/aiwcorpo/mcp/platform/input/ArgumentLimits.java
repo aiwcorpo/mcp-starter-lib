@@ -61,4 +61,12 @@ public @interface ArgumentLimits {
 
     /** JSON Schema {@code maximum}; {@link Long#MAX_VALUE} = none. */
     long maximum() default Long.MAX_VALUE;
+
+    /**
+     * The server passes this text to a system that interprets mentions ({@code @name}) through a filter of its own:
+     * the platform then refuses the full width ASCII characters U+FF01..U+FF5E in it as {@code invalid_argument}
+     * (CC-121), so "@all" written with full width letters does not get past the filter. Text arguments only; on a
+     * list it applies to the elements. Not published in the schema.
+     */
+    boolean mentionFiltered() default false;
 }

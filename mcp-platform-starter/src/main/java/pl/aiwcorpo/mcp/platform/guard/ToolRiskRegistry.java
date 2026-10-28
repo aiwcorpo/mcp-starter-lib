@@ -1,6 +1,5 @@
 package pl.aiwcorpo.mcp.platform.guard;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.Locale;
 import java.util.Map;
@@ -10,9 +9,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.method.MethodToolCallback;
 import org.springframework.core.annotation.AnnotatedElementUtils;
+import pl.aiwcorpo.mcp.platform.text.TextHygiene;
 import pl.aiwcorpo.mcp.platform.text.ToolOutputSchemas;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
@@ -29,6 +31,10 @@ import tools.jackson.databind.node.ObjectNode;
  *       words in the name, not a control.</li>
  *   <li><b>Names are unique.</b> Two tools with one name would make the gateway's approval, the audit and
  *       the internal JWT's {@code tool} claim ambiguous.</li>
+ *   <li><b>A title and a consistent action.</b> {@link ToolTitle} is mandatory (CC-115) and {@link ToolRisk#action()}
+ *       must not contradict the risk ({@link ToolAction#resolve}).</li>
+ *   <li><b>No {@code confirmation_code} argument.</b> The name belongs to the gateway (C11); the gateway removes the
+ *       argument before it reaches a server.</li>
  * </ol>
  */
 public class ToolRiskRegistry {
@@ -43,13 +49,19 @@ public class ToolRiskRegistry {
         DESTRUCTIVE
     }
 
+    /** Longest {@link ToolTitle}; the contract sets none, a title is a label. */
+    public static final int MAX_TITLE_LENGTH = 100;
+
+    private static final JsonMapper JSON = JsonMapper.builder().build();
+
     private static final Set<String> DESTRUCTIVE_WORDS =
             Set.of("delete", "drop", "remove", "purge", "truncate", "destroy", "wipe", "erase");
 
     private final Unclassified unclassified;
     private final Map<String, Registered> registered = new ConcurrentHashMap<>();
 
-    private record Registered(ToolCallback tool, RiskLevel risk, Optional<ObjectNode> outputSchema) {
+    private record Registered(ToolCallback tool, RiskLevel risk, ToolAction action, String title,
+                              Optional<ObjectNode> outputSchema) {
     }
 
     public ToolRiskRegistry(Unclassified unclassified) {
@@ -70,8 +82,11 @@ public class ToolRiskRegistry {
             throw new IllegalStateException("Two tools are named '" + name + "'. Tool names must be unique.");
         }
         RiskLevel risk = classify(callback);
-        Optional<ObjectNode> outputSchema = methodOf(callback).flatMap(ToolOutputSchemas::forMethod);
-        Registered previous = registered.putIfAbsent(name, new Registered(callback, risk, outputSchema));
+        ToolAction action = actionOf(callback, risk);
+        String title = titleOf(callback);
+        noConfirmationCode(callback);
+        Optional<ObjectNode> outputSchema = ToolMethods.methodOf(callback).flatMap(ToolOutputSchemas::forMethod);
+        Registered previous = registered.putIfAbsent(name, new Registered(callback, risk, action, title, outputSchema));
         if (previous != null && previous.tool() != callback) {
             throw new IllegalStateException("Two tools are named '" + name + "'. Tool names must be unique.");
         }
@@ -85,6 +100,18 @@ public class ToolRiskRegistry {
     public Optional<RiskLevel> riskOf(String toolName) {
         Registered entry = registered.get(toolName);
         return entry == null ? Optional.empty() : Optional.of(entry.risk());
+    }
+
+    /** The Cedar action of a registered tool (C6 {@code action}). */
+    public Optional<ToolAction> actionOf(String toolName) {
+        Registered entry = registered.get(toolName);
+        return entry == null ? Optional.empty() : Optional.of(entry.action());
+    }
+
+    /** The title of a registered tool (C6 {@code definition.title}). */
+    public Optional<String> titleOf(String toolName) {
+        Registered entry = registered.get(toolName);
+        return entry == null ? Optional.empty() : Optional.of(entry.title());
     }
 
     /** The output schema of a tool whose result holds {@code UntrustedText}, see {@link ToolOutputSchemas}. */
@@ -126,33 +153,58 @@ public class ToolRiskRegistry {
         if (callback instanceof RiskClassifiedTool classified) {
             return Optional.ofNullable(classified.riskLevel());
         }
-        return methodOf(callback).map(method -> AnnotatedElementUtils.findMergedAnnotation(method, ToolRisk.class))
-                .map(ToolRisk::value);
+        return toolRisk(callback).map(ToolRisk::value);
     }
 
-    /**
-     * The {@code @Tool} method behind a callback. Spring AI keeps the reflective Method private and offers no
-     * accessor. Found by type rather than by field name, so a rename upstream fails startup (tool counts as
-     * unflagged) instead of unflagging.
-     */
-    private static Optional<Method> methodOf(ToolCallback callback) {
-        if (!(callback instanceof MethodToolCallback)) {
-            return Optional.empty();
+    private static Optional<ToolRisk> toolRisk(ToolCallback callback) {
+        return ToolMethods.methodOf(callback).map(method -> AnnotatedElementUtils.findMergedAnnotation(method, ToolRisk.class));
+    }
+
+    private static ToolAction actionOf(ToolCallback callback, RiskLevel risk) {
+        String name = callback.getToolDefinition().name();
+        ToolAction declared = callback instanceof RiskClassifiedTool classified ? classified.action()
+                : toolRisk(callback).map(ToolRisk::action).orElse(ToolAction.AUTO);
+        try {
+            return ToolAction.resolve(declared, risk);
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalStateException("Tool '" + name + "': " + ex.getMessage() + ". A "
+                    + risk.label() + " tool evaluates " + ToolAction.resolve(ToolAction.AUTO, risk).wireName()
+                    + (risk == RiskLevel.READ_ONLY ? "" : " or admin") + " on its resources.");
         }
-        for (Field field : MethodToolCallback.class.getDeclaredFields()) {
-            if (field.getType() != Method.class) {
-                continue;
-            }
-            try {
-                field.setAccessible(true);
-                return Optional.ofNullable((Method) field.get(callback));
-            } catch (ReflectiveOperationException | RuntimeException ex) {
-                LOG.warn("event=tool_risk_unreadable tool=\"{}\" reason=\"{}\"",
-                        callback.getToolDefinition().name(), ex.toString());
-                return Optional.empty();
-            }
+    }
+
+    private static String titleOf(ToolCallback callback) {
+        String name = callback.getToolDefinition().name();
+        String title = callback instanceof RiskClassifiedTool classified ? classified.title()
+                : ToolMethods.methodOf(callback).map(method -> AnnotatedElementUtils.findMergedAnnotation(method, ToolTitle.class))
+                        .map(ToolTitle::value).orElse(null);
+        if (title == null || title.isBlank()) {
+            throw new IllegalStateException("Tool '" + name + "' has no title. Annotate its @Tool method with "
+                    + "@ToolTitle(\"...\") (or return a title from RiskClassifiedTool on a hand-written ToolCallback): "
+                    + "the contracts require definition.title since 3.0.0 (CC-115).");
         }
-        return Optional.empty();
+        if (title.length() > MAX_TITLE_LENGTH || !title.equals(title.strip())
+                || TextHygiene.firstProblem(title, true) != null) {
+            throw new IllegalStateException("Tool '" + name + "': the title must be at most " + MAX_TITLE_LENGTH
+                    + " characters, without leading or trailing white space, line breaks or invisible characters.");
+        }
+        return title;
+    }
+
+    private static void noConfirmationCode(ToolCallback callback) {
+        String schema = callback.getToolDefinition().inputSchema();
+        if (schema == null || schema.isBlank()) {
+            return;
+        }
+        try {
+            if (JSON.readTree(schema).path("properties").has("confirmation_code")) {
+                throw new IllegalStateException("Tool '" + callback.getToolDefinition().name() + "' declares an argument "
+                        + "named confirmation_code, which belongs to the gateway (C11): the gateway adds it to tools/list "
+                        + "and removes it before the call reaches the server. Rename the argument.");
+            }
+        } catch (JacksonException ex) {
+            // An unreadable schema is reported by the input validator with the tool's name.
+        }
     }
 
     private static Optional<String> destructiveWordIn(String toolName) {

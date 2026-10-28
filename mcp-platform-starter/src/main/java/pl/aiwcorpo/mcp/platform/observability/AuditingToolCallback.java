@@ -81,7 +81,7 @@ public final class AuditingToolCallback implements ToolCallback {
         this.errorMapper = errorMapper;
         this.interceptors = List.copyOf(interceptors);
         this.risk = registry.register(delegate);
-        this.inputValidator = ToolInputValidator.compile(delegate.getToolDefinition(), inputPolicy);
+        this.inputValidator = ToolInputValidator.compile(delegate, inputPolicy);
         this.resultValidator = registry.outputSchemaOf(delegate.getToolDefinition().name())
                 .map(schema -> ToolResultValidator.compile(delegate.getToolDefinition().name(), schema)).orElse(null);
     }

@@ -1,7 +1,6 @@
 package pl.aiwcorpo.mcp.platform.input;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import tools.jackson.databind.JsonNode;
@@ -11,37 +10,46 @@ import tools.jackson.databind.JsonNode;
  * the model cannot hand the tool an unbounded amount of data at any depth.
  *
  * <ul>
- *   <li>object: {@code additionalProperties: false}, or a typed map with {@code maxProperties}, key length
- *       ({@code propertyNames.maxLength}) and a bounded value schema;</li>
+ *   <li>object: {@code additionalProperties: false}; no map, typed or not, and no {@code patternProperties} or
+ *       {@code unevaluatedProperties} (CC-078, CC-123);</li>
  *   <li>string (except {@code enum}/{@code const}): {@code maxLength}; a {@code pattern} is anchored with
  *       {@code ^} and {@code $} and has no alternation outside a group, because an unanchored match
  *       ({@code [0-9]+} accepts {@code ../../1}, {@code ^a|b$} accepts {@code a/../x}) is no format at all;</li>
  *   <li>array: {@code maxItems} and an {@code items} schema that is bounded in turn (after {@code prefixItems}
- *       too: {@code items: false} or a bounded schema, so elements past the prefix have a limit);</li>
- *   <li>integer, number: a lower and an upper bound;</li>
- *   <li>no type at all (accepts any JSON value), {@code patternProperties} and the combinators
- *       ({@code allOf}, {@code anyOf}, {@code oneOf}, {@code not}, {@code if}) are refused.</li>
+ *       too, so elements past the prefix have a limit);</li>
+ *   <li>integer, number: {@code minimum} and {@code maximum};</li>
+ *   <li>every node has exactly one {@code type} of string, integer, number, boolean, array or object (no union, no
+ *       {@code null}, no {@code $ref}), and the combinators ({@code allOf}, {@code anyOf}, {@code oneOf},
+ *       {@code not}, {@code if}, {@code then}, {@code else}) are refused.</li>
  * </ul>
  * Problems carry the path of declared property names (schema author text), never request data.
+ *
+ * <p>The rules are those of the manifest rules {@code input-schema-closed}, {@code input-schema-bounded} and
+ * {@code input-schema-no-combinators} of mcp-manifest (README of mcp-contracts, "Reguły semantyczne manifestu"): a
+ * schema this class accepts passes them, so the manifest the server publishes is accepted by the gateway.
  */
 final class InputSchemaBounds {
 
     private static final int MAX_DEPTH = 8;
+    private static final List<String> COMBINATORS = List.of("allOf", "anyOf", "oneOf", "not", "if", "then", "else");
+    private static final Set<String> TYPES = Set.of("string", "integer", "number", "boolean", "array", "object");
 
-    private final JsonNode root;
     private final List<String> problems = new ArrayList<>();
 
-    private InputSchemaBounds(JsonNode root) {
-        this.root = root;
+    private InputSchemaBounds() {
     }
 
     static List<String> problems(JsonNode root) {
-        InputSchemaBounds bounds = new InputSchemaBounds(root);
-        bounds.visit(root, "", 0, new HashSet<>());
+        InputSchemaBounds bounds = new InputSchemaBounds();
+        if (!root.isObject() || !"object".equals(root.path("type").asString(null))) {
+            bounds.problems.add("the arguments: the root of the schema must be type object");
+            return List.copyOf(bounds.problems);
+        }
+        bounds.visit(root, "", 0);
         return List.copyOf(bounds.problems);
     }
 
-    private void visit(JsonNode schema, String path, int depth, Set<String> followedRefs) {
+    private void visit(JsonNode schema, String path, int depth) {
         String where = path.isEmpty() ? "the arguments" : path;
         if (depth > MAX_DEPTH) {
             problems.add(where + ": nested deeper than " + MAX_DEPTH + " levels");
@@ -51,119 +59,89 @@ final class InputSchemaBounds {
             problems.add(where + ": a boolean schema accepts any value");
             return;
         }
-        String ref = schema.path("$ref").asString(null);
-        if (ref != null) {
-            JsonNode target = ref.startsWith("#") ? root.at(ref.substring(1)) : null;
-            if (target == null || target.isMissingNode()) {
-                problems.add(where + ": $ref '" + ref + "' cannot be resolved inside the schema");
-            } else if (followedRefs.add(ref)) {
-                visit(target, path, depth + 1, followedRefs);
-                followedRefs.remove(ref);
-            } else {
-                problems.add(where + ": recursive $ref '" + ref + "' has no bound");
-            }
-            return;
-        }
-        if (schema.has("enum") || schema.has("const")) {
-            return;
-        }
-        for (String keyword : List.of("allOf", "anyOf", "oneOf", "not", "if", "then", "else")) {
+        for (String keyword : COMBINATORS) {
             if (schema.has(keyword)) {
                 problems.add(where + ": " + keyword + " is not supported (a limit has to be readable at each level; "
                         + "write the level out)");
-                return;
             }
         }
-        List<String> types = types(schema);
-        if (types.isEmpty()) {
-            problems.add(where + ": has no type, so it accepts any JSON value");
+        if (schema.has("$ref")) {
+            problems.add(where + ": $ref is not supported (every level is written out)");
             return;
         }
-        for (String type : types) {
-            switch (type) {
-                case "object" -> object(schema, path, where, depth, followedRefs);
-                case "array" -> array(schema, path, where, depth, followedRefs);
-                case "string" -> string(schema, where);
-                case "integer", "number" -> number(schema, where);
-                default -> { }
+        JsonNode typeNode = schema.get("type");
+        if (typeNode == null || !typeNode.isString() || !TYPES.contains(typeNode.asString())) {
+            problems.add(where + ": needs exactly one type of string, integer, number, boolean, array or object");
+            return;
+        }
+        boolean fixed = schema.has("enum") || schema.has("const");
+        String pattern = schema.path("pattern").asString(null);
+        if (schema.has("pattern") && (pattern == null || !anchored(pattern))) {
+            problems.add(where + ": pattern must start with ^, end with $ and keep any alternation inside a group, "
+                    + "e.g. ^(?:a|b)$");
+        }
+        switch (typeNode.asString()) {
+            case "object" -> object(schema, path, where, depth);
+            case "array" -> array(schema, path, where, depth);
+            case "string" -> {
+                if (!fixed && !count(schema.get("maxLength"))) {
+                    problems.add(where + ": text needs maxLength");
+                }
             }
+            case "integer", "number" -> {
+                if (!fixed && !(schema.path("minimum").isNumber() && schema.path("maximum").isNumber())) {
+                    problems.add(where + ": a number needs minimum and maximum");
+                }
+            }
+            default -> { }
         }
     }
 
-    private static List<String> types(JsonNode schema) {
-        JsonNode type = schema.path("type");
-        List<String> result = new ArrayList<>();
-        if (type.isString()) {
-            result.add(type.asString());
-        } else if (type.isArray()) {
-            type.forEach(t -> result.add(t.asString()));
-        }
-        return result;
-    }
-
-    private void object(JsonNode schema, String path, String where, int depth, Set<String> followedRefs) {
-        if (schema.has("patternProperties")) {
-            problems.add(where + ": patternProperties cannot be bounded");
+    private void object(JsonNode schema, String path, String where, int depth) {
+        if (schema.has("patternProperties") || schema.has("unevaluatedProperties")) {
+            problems.add(where + ": patternProperties and unevaluatedProperties cannot be bounded");
         }
         JsonNode additional = schema.path("additionalProperties");
-        if (additional.isBoolean() && !additional.asBoolean()) {
-            // closed: only the declared properties
-        } else if (additional.isObject()) {
-            if (!schema.path("maxProperties").isIntegralNumber()) {
-                problems.add(where + ": a map needs maxProperties");
-            }
-            if (!schema.path("propertyNames").path("maxLength").isIntegralNumber()) {
-                problems.add(where + ": a map needs propertyNames.maxLength");
-            }
-            visit(additional, path + "{value}", depth + 1, followedRefs);
-        } else {
-            problems.add(where + ": accepts undeclared properties (additionalProperties: false is missing)");
+        if (!additional.isBoolean() || additional.asBoolean()) {
+            problems.add(where + ": accepts undeclared properties (additionalProperties: false is missing); a map "
+                    + "cannot be bounded, use a record or a list of records");
         }
         JsonNode properties = schema.path("properties");
         for (String name : properties.propertyNames()) {
-            visit(properties.get(name), path.isEmpty() ? name : path + "." + name, depth + 1, followedRefs);
+            visit(properties.get(name), path.isEmpty() ? name : path + "." + name, depth + 1);
         }
     }
 
-    private void array(JsonNode schema, String path, String where, int depth, Set<String> followedRefs) {
-        if (!schema.path("maxItems").isIntegralNumber()) {
+    private void array(JsonNode schema, String path, String where, int depth) {
+        if (!count(schema.get("maxItems"))) {
             problems.add(where + ": a list needs maxItems");
         }
-        JsonNode items = schema.path("items");
+        JsonNode items = schema.get("items");
+        if (items == null) {
+            problems.add(where + ": a list needs an items schema");
+        } else {
+            visit(items, path + "[]", depth + 1);
+        }
         JsonNode prefix = schema.path("prefixItems");
-        if (items.isMissingNode()) {
-            problems.add(where + ": a list needs an items schema (items: false after prefixItems)");
-        } else if (!(items.isBoolean() && !items.asBoolean())) {
-            visit(items, path + "[]", depth + 1, followedRefs);
-        }
         if (prefix.isArray()) {
-            prefix.forEach(element -> visit(element, path + "[]", depth + 1, followedRefs));
+            prefix.forEach(element -> visit(element, path + "[]", depth + 1));
         }
     }
 
-    private void string(JsonNode schema, String where) {
-        if (!schema.path("maxLength").isIntegralNumber()) {
-            problems.add(where + ": text needs maxLength");
-        }
-        String pattern = schema.path("pattern").asString(null);
-        if (pattern != null && !anchored(pattern)) {
-            problems.add(where + ": pattern '" + pattern + "' must start with ^, end with $ and keep any alternation "
-                    + "inside a group, e.g. ^(?:a|b)$");
-        }
+    private static boolean count(JsonNode value) {
+        return value != null && value.isIntegralNumber() && value.asLong() >= 0;
     }
 
-    private void number(JsonNode schema, String where) {
-        boolean lower = schema.has("minimum") || schema.has("exclusiveMinimum");
-        boolean upper = schema.has("maximum") || schema.has("exclusiveMaximum");
-        if (!lower || !upper) {
-            problems.add(where + ": a number needs minimum and maximum");
-        }
-    }
-
-    /** {@code ^...$} (or {@code \z}) with no {@code |} outside parentheses and character classes. */
+    /** {@code ^...$} with the last {@code $} not escaped and no {@code |} outside parentheses and character classes. */
     static boolean anchored(String pattern) {
-        if (!pattern.startsWith("^") || !(pattern.endsWith("$") || pattern.endsWith("\\z"))
-                || (pattern.endsWith("$") && pattern.endsWith("\\$"))) {
+        if (!pattern.startsWith("^") || !pattern.endsWith("$")) {
+            return false;
+        }
+        int backslashes = 0;
+        for (int i = pattern.length() - 2; i >= 0 && pattern.charAt(i) == '\\'; i--) {
+            backslashes++;
+        }
+        if (backslashes % 2 == 1) {
             return false;
         }
         int depth = 0;

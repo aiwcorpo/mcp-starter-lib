@@ -66,6 +66,12 @@ class ToolHintsPostProcessorTest {
     }
 
     private record Flagged(String name, RiskLevel riskLevel) implements ToolCallback, RiskClassifiedTool {
+
+        @Override
+        public String title() {
+            return "Test tool";
+        }
+
         @Override
         public ToolDefinition getToolDefinition() {
             return DefaultToolDefinition.builder().name(name).description("d").inputSchema("{\"type\":\"object\",\"properties\":{\"issueKey\":{\"type\":\"string\"}},\"additionalProperties\":false}").build();

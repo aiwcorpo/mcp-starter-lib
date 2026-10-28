@@ -20,7 +20,7 @@ import org.springframework.beans.factory.config.BeanPostProcessor;
 /**
  * Publishes each tool's risk flag to MCP clients as the standard tool annotations
  * ({@code readOnlyHint}, {@code destructiveHint}), so a client can show its own warning before it
- * even sends a destructive call.
+ * even sends a destructive call, and its {@link ToolTitle} as the {@code title} of the definition.
  *
  * <p>Spring AI builds the MCP tool list from {@code ToolCallback}s and has no place for these
  * annotations, so this rewrites the finished list. The hints are advice to the client and nothing
@@ -104,7 +104,7 @@ public class ToolHintsPostProcessor implements BeanPostProcessor {
 
     private static SyncToolSpecification withHints(SyncToolSpecification specification, ToolRiskRegistry toolRegistry) {
         McpSchema.Tool tool = specification.tool();
-                RiskLevel risk = toolRegistry.riskOf(tool.name()).orElse(null);
+        RiskLevel risk = toolRegistry.riskOf(tool.name()).orElse(null);
         if (risk == null) {
             return specification;   // not one of ours (e.g. declared with Spring AI's own @McpTool)
         }
@@ -119,7 +119,8 @@ public class ToolHintsPostProcessor implements BeanPostProcessor {
         Optional<ObjectNode> outputSchema = toolRegistry.outputSchemaOf(tool.name());
         Map<String, Object> published = tool.outputSchema() != null || outputSchema.isEmpty() ? tool.outputSchema()
                 : JSON.convertValue(outputSchema.get(), new TypeReference<Map<String, Object>>() { });
-        McpSchema.Tool annotated = new McpSchema.Tool(tool.name(), tool.title(), tool.description(),
+        McpSchema.Tool annotated = new McpSchema.Tool(tool.name(), toolRegistry.titleOf(tool.name()).orElse(tool.title()),
+                tool.description(),
                 tool.inputSchema(), published, hints, tool.meta(), tool.icons());
         return new SyncToolSpecification(annotated,
                 outputSchema.isPresent() ? withStructuredContent(specification.callHandler()) : specification.callHandler());

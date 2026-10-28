@@ -9,31 +9,30 @@ import pl.aiwcorpo.mcp.platform.text.TextHygiene.Problem;
 class TextHygieneTest {
 
     @Test
-    void textFromASystemLosesWhatHidesOrReorders() {
+    void everyRunOfForbiddenCharactersInSystemTextBecomesOneSpace() {
         assertThat(TextHygiene.normalize("a\u200bb\u2060c\ufeffd\u202ee\u2066f\udb40\udc41g")).isEqualTo("a b c d e f g");
-        assertThat(TextHygiene.normalize("one\u2028two\u2029three\u0085four")).isEqualTo("one\ntwo\nthree\nfour");
-        assertThat(TextHygiene.normalize("x\r\ny\rz\u0007\u001b[31m\u007f\u0090")).isEqualTo("x\ny\nz [31m");
-        assertThat(TextHygiene.normalize("lone\ud800 and\uffff and\ufdd0")).isEqualTo("lone and and");
-        assertThat(TextHygiene.normalize("tab\tkept, naive caf\u00e9 \ud83d\ude00 kept")).isEqualTo("tab\tkept, naive caf\u00e9 \ud83d\ude00 kept");
+        assertThat(TextHygiene.normalize("a\u200b\u200b\u2060b")).isEqualTo("a b");
+        assertThat(TextHygiene.normalize("one\u2028two\u2029three\u0085four")).isEqualTo("one two three four");
+        assertThat(TextHygiene.normalize("x\u0007\u001b[31m\u007f\u0090")).isEqualTo("x [31m ");
+        assertThat(TextHygiene.normalize("lone\ud800 and\uffff and\ufdd0")).isEqualTo("lone  and  and ");
         assertThat(TextHygiene.normalize(null)).isEmpty();
     }
 
     @Test
-    void removingInvisibleCharactersNeverGluesTheNeighboursTogether() {
-        assertThat(TextHygiene.normalize("@a\u200bll")).isEqualTo("@a ll");
-        assertThat(TextHygiene.normalize("!\u200bhttps://host/x.png!")).isEqualTo("! https://host/x.png!");
-        assertThat(TextHygiene.normalize("!\u200b[x](https://host/?q=1)")).isEqualTo("! [x](https://host/?q=1)");
-        assertThat(TextHygiene.normalize("{no\u2060format}")).isEqualTo("{no format}");
-        assertThat(TextHygiene.normalize("h\u200bt\u200bt\u200bp://x")).isEqualTo("h t t p://x");
-        assertThat(TextHygiene.normalize("a\u200b\u200b\u2060b")).isEqualTo("a b");
+    void lineBreaksTabsAndTheJoinersOfEmojiAndScriptsStay() {
+        assertThat(TextHygiene.normalize("a\nb\r\nc\td")).isEqualTo("a\nb\r\nc\td");
+        String family = "\ud83d\udc68\u200d\ud83d\udc69";
+        assertThat(TextHygiene.normalize(family + " \u200c\u200e\u200f naive caf\u00e9")).isEqualTo(family + " \u200c\u200e\u200f naive caf\u00e9");
+        assertThat(TextHygiene.normalize("\u2764\ufe0f done")).isEqualTo("\u2764\ufe0f done");
     }
 
     @Test
-    void theSeparatorIsLeftOutAtTheEdgesAndNextToWhitespace() {
-        assertThat(TextHygiene.normalize("\ufeffstart\u200b")).isEqualTo("start");
-        assertThat(TextHygiene.normalize("a \u200bb")).isEqualTo("a b");
-        assertThat(TextHygiene.normalize("a\u200b\nb")).isEqualTo("a\nb");
-        assertThat(TextHygiene.normalize("a\u200b\u2028b")).isEqualTo("a\nb");
+    void removingInvisibleCharactersNeverGluesTheNeighboursTogetherAndNothingIsTrimmed() {
+        assertThat(TextHygiene.normalize("@a\u200bll")).isEqualTo("@a ll");
+        assertThat(TextHygiene.normalize("!\u200bhttps://host/x.png!")).isEqualTo("! https://host/x.png!");
+        assertThat(TextHygiene.normalize("h\u200bt\u200bt\u200bp://x")).isEqualTo("h t t p://x");
+        assertThat(TextHygiene.normalize("\u200bhello\ufeff")).isEqualTo(" hello ");
+        assertThat(TextHygiene.normalize("a \u200bb")).isEqualTo("a  b");
     }
 
     @Test
@@ -47,11 +46,29 @@ class TextHygieneTest {
         assertThat(TextHygiene.firstProblem("plain\nmulti\tline\r\ntext \u200d\u200f", false)).isNull();
         assertThat(TextHygiene.firstProblem("a\u0007", false)).isEqualTo(Problem.CONTROL);
         assertThat(TextHygiene.firstProblem("a\u2028", false)).isEqualTo(Problem.LINE_SEPARATOR);
-        assertThat(TextHygiene.firstProblem("a\u202e", false)).isEqualTo(Problem.INVISIBLE);
-        assertThat(TextHygiene.firstProblem("a\ud800", false)).isEqualTo(Problem.INVALID_TEXT);
-        assertThat(TextHygiene.firstProblem("a\uffff", false)).isEqualTo(Problem.INVALID_TEXT);
+        assertThat(TextHygiene.firstProblem("a\u202e", false)).isEqualTo(Problem.FORMAT_CHARACTER);
+        assertThat(TextHygiene.firstProblem("a\ud800", false)).isEqualTo(Problem.UNPAIRED_SURROGATE);
+        assertThat(TextHygiene.firstProblem("a\uffff", false)).isEqualTo(Problem.NONCHARACTER);
+        assertThat(TextHygiene.firstProblem("a\u0345\u034f", false)).isEqualTo(Problem.INVISIBLE_CHARACTER);
         assertThat(TextHygiene.firstProblem("a\nb", true)).isEqualTo(Problem.LINE_BREAK);
-        assertThat(TextHygiene.firstProblem("a\u200db", true)).isEqualTo(Problem.INVISIBLE);
+        assertThat(TextHygiene.firstProblem("a\u200db", true)).isNull();
+    }
+
+    @Test
+    void anEmojiPresentationSelectorIsAllowedOnlyDirectlyAfterAnEmoji() {
+        assertThat(TextHygiene.firstProblem("\u2764\ufe0f", false)).isNull();
+        assertThat(TextHygiene.firstProblem("a\ufe0f", false)).isEqualTo(Problem.VARIATION_SELECTOR);
+        assertThat(TextHygiene.firstProblem("\ufe0f", false)).isEqualTo(Problem.VARIATION_SELECTOR);
+        assertThat(TextHygiene.firstProblem("\u2764\ufe0f\ufe0f", false)).isEqualTo(Problem.VARIATION_SELECTOR);
+        assertThat(TextHygiene.firstProblem("\u2764\ufe0e", false)).isEqualTo(Problem.VARIATION_SELECTOR);
+    }
+
+    @Test
+    void fullWidthAsciiIsRefusedOnlyWhereAMentionFilterReadsTheArgument() {
+        String fullWidthAtAll = "\uff20\uff41\uff4c\uff4c";
+        assertThat(TextHygiene.firstProblem(fullWidthAtAll, false)).isNull();
+        assertThat(TextHygiene.firstProblem(fullWidthAtAll, false, true)).isEqualTo(Problem.FULL_WIDTH_ASCII);
+        assertThat(TextHygiene.firstProblem("a\u3000b\uff5f\uff00", false, true)).isNull();
     }
 
     @Test
@@ -179,7 +196,7 @@ class TextHygieneTest {
         logger.addAppender(appender);
         try {
             UntrustedText.plain(null, 10);
-            assertThat(UntrustedText.plain("line1\r\nline2\rline3\u2028line4", 100).text()).isEqualTo("line1\nline2\nline3\nline4");
+            assertThat(UntrustedText.plain("line1\r\nline2\rline3\tline4", 100).text()).isEqualTo("line1\r\nline2\rline3\tline4");
             UntrustedText.markdown("tab\tseparated\nlines", 100);
 
             assertThat(pl.aiwcorpo.mcp.platform.CapturedLogs.snapshot(appender)).isEmpty();
@@ -200,7 +217,7 @@ class TextHygieneTest {
         try {
             // An entity decoded after normalize(): the filter ran on "x &#8203;@all", the factory sees the ZWSP.
             String decodedLate = "x \u200b@all";
-            assertThat(UntrustedText.plain(decodedLate, 100).text()).isEqualTo("x @all");
+            assertThat(UntrustedText.plain(decodedLate, 100).text()).isEqualTo("x  @all");
             UntrustedText.plain(TextHygiene.normalize(decodedLate), 100);
 
             var lines = pl.aiwcorpo.mcp.platform.CapturedLogs.snapshot(appender).stream()

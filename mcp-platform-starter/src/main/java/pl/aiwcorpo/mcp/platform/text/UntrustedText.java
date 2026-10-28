@@ -157,20 +157,14 @@ public record UntrustedText(String kind, String format, String text, boolean tru
                 || type == Character.ENCLOSING_MARK;
     }
 
-    private static String withUnifiedLineBreaks(String raw) {
-        return raw.replace("\r\n", "\n").replace('\r', '\n').replace('\u2028', '\n').replace('\u2029', '\n')
-                .replace('\u0085', '\n');
-    }
-
     private static UntrustedText of(String format, String raw, int maxLength) {
         if (maxLength < 0) {
             throw new IllegalArgumentException("maxLength must not be negative");
         }
         String clean = TextHygiene.normalize(raw);
-        if (raw != null && !clean.equals(withUnifiedLineBreaks(raw))) {
+        if (raw != null && !clean.equals(raw)) {
             // The text changed here, after the server's own filter had looked at it: the filter saw something else
             // than the client will, typically because entities were decoded after normalize() (MIGRATION-3.0.md).
-            // Line breaks are not that: CRLF and the Unicode separators become a newline without hiding anything.
             LOG.warn("event=untrusted_text_not_normalized tool={} detail=\"normalize() before the filter, then the "
                     + "factory\"", CallerContext.current().map(CallerContext::tool).map(TextHygiene::normalize).orElse("-"));
         }

@@ -190,6 +190,12 @@ class ForeignToolPolicyCheckTest {
     }
 
     private record OpenTool() implements ToolCallback, RiskClassifiedTool {
+
+        @Override
+        public String title() {
+            return "Test tool";
+        }
+
         @Override
         public ToolDefinition getToolDefinition() {
             return DefaultToolDefinition.builder().name("open_tool").description("d")

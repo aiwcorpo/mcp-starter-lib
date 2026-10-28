@@ -66,6 +66,12 @@ class ToolCallbackAuditPostProcessorTest {
 
     private static ToolCallbackProvider provider(String toolName) {
         record Flagged(String name) implements ToolCallback, RiskClassifiedTool {
+
+        @Override
+        public String title() {
+            return "Test tool";
+        }
+
             @Override
             public ToolDefinition getToolDefinition() {
                 return DefaultToolDefinition.builder().name(name).description("d").inputSchema("{\"type\":\"object\",\"properties\":{\"issueKey\":{\"type\":\"string\",\"maxLength\":64}},\"additionalProperties\":false}").build();

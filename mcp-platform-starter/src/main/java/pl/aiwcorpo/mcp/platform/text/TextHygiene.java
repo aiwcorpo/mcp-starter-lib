@@ -1,38 +1,57 @@
 package pl.aiwcorpo.mcp.platform.text;
 
 /**
- * Characters that make text mean something other than it shows, for two uses with one definition:
- * {@link #normalize} cleans text that comes from a backend system before it goes to the model or into a log,
- * {@link #firstProblem} judges text that comes from the model (tool arguments).
+ * The text hygiene rules of the contracts (CC-121, CC-122; {@code test-vectors/text-hygiene/}), one definition for two
+ * uses: {@link #firstProblem} judges text that comes from the model (tool arguments), {@link #normalize} cleans text
+ * that comes from a backend system before it goes to the model or into a log.
  *
- * <p>What is dangerous: C0/C1 controls and DEL (forge log lines and terminal output), U+2028/U+2029 (line
- * breaks that many log viewers and JSON consumers treat differently), unpaired surrogates and noncharacters
- * (invalid text, parsed differently by different consumers), and format characters ({@code \p{Cf}}): bidi
- * overrides and isolates that reorder what a reviewer reads, zero-width characters and U+2060..U+2064 that hide
- * text from a human but not from a model, tag characters U+E0000..U+E007F that carry an invisible message.
- * Format characters are an allowlist in free text ({@link #allowedInFreeText}), not a denylist.
+ * <p>The forbidden set: C0 controls other than TAB, LF and CR; DEL and C1 controls; U+2028 and U+2029; unpaired
+ * surrogates; noncharacters (U+FDD0..U+FDEF, U+xFFFE, U+xFFFF); every {@code \p{Cf}} character except U+200C..U+200F
+ * (ZWNJ, ZWJ, LRM, RLM, which emoji sequences and right-to-left scripts need); the invisible characters U+034F,
+ * U+115F, U+1160, U+3164, U+FFA0 and U+2800; the variation selectors U+FE00..U+FE0F and U+E0100..U+E01EF, except one
+ * U+FE0F directly after an {@code Extended_Pictographic} character (an emoji presentation selector).
+ *
+ * <p>There is no Unicode normalization (no NFKC, no NFC): text passes unchanged except for the set above. Full width
+ * ASCII (U+FF01..U+FF5E) is refused only in arguments that reach a mention filter, because only there "@all" written
+ * with full width letters means something to the system.
  */
 public final class TextHygiene {
 
     /** What is wrong with a piece of text. */
     public enum Problem {
         /** C0 (other than tab, newline and carriage return), DEL, C1. */
-        CONTROL("control characters"),
+        CONTROL("control_character", "control characters"),
         /** Tab, newline or carriage return where the value is a single formatted token. */
-        LINE_BREAK("line breaks or tabs"),
+        LINE_BREAK("line_break_in_identifier", "line breaks or tabs"),
         /** U+2028 or U+2029. */
-        LINE_SEPARATOR("line or paragraph separators"),
-        /** An unpaired UTF-16 surrogate or a Unicode noncharacter. */
-        INVALID_TEXT("characters that are not valid text"),
+        LINE_SEPARATOR("line_separator", "line or paragraph separators"),
+        /** An unpaired UTF-16 surrogate. */
+        UNPAIRED_SURROGATE("unpaired_surrogate", "characters that are not valid text"),
+        /** A Unicode noncharacter. */
+        NONCHARACTER("noncharacter", "characters that are not valid text"),
+        /** A variation selector that is not an emoji presentation selector. */
+        VARIATION_SELECTOR("variation_selector", "invisible or direction-changing characters"),
+        /** U+034F, Hangul fillers, Braille blank. */
+        INVISIBLE_CHARACTER("invisible_character", "invisible or direction-changing characters"),
         /** Bidi controls, zero-width characters, tag characters and the like. */
-        INVISIBLE("invisible or direction-changing characters");
+        FORMAT_CHARACTER("format_character", "invisible or direction-changing characters"),
+        /** U+FF01..U+FF5E in an argument that reaches a mention filter. */
+        FULL_WIDTH_ASCII("full_width_ascii", "full width characters");
 
+        private final String reason;
         private final String description;
 
-        Problem(String description) {
+        Problem(String reason, String description) {
+            this.reason = reason;
             this.description = description;
         }
 
+        /** The reason as the contract's vectors name it (never sent to a client). */
+        public String reason() {
+            return reason;
+        }
+
+        /** Wording for the {@code invalid_argument} message: names the kind of characters, never the value. */
         public String description() {
             return description;
         }
@@ -42,16 +61,14 @@ public final class TextHygiene {
     }
 
     /**
-     * Text from a system, made safe to show: control characters, unpaired surrogates, noncharacters and every
-     * {@code \p{Cf}} character are dropped; U+2028, U+2029 and U+0085 become a newline, and a carriage return
-     * becomes a newline (CRLF one newline). Tab and newline stay. {@code null} gives the empty string.
+     * Text from a system, made safe to show: every maximal run of forbidden characters becomes one space, nothing is
+     * trimmed and nothing else changes (CC-121). Tab, newline and carriage return stay, as do U+200C..U+200F and an
+     * emoji presentation selector. {@code null} gives the empty string.
      *
-     * <p>A dropped run is replaced by one space, not by nothing: with nothing, {@code "@a<ZWSP>ll"} becomes
-     * {@code "@all"} and {@code "!<ZWSP>https://host/x.png!"} becomes image syntax, that is, text a server's own
-     * filter let through because it did not recognise it comes out as the very token it looks for. The space
-     * is left out at the start and end of the text and next to whitespace. A zero-width joiner inside an emoji
-     * sequence therefore splits it into separate emoji, and a ZWNJ in Persian becomes a space; that is the price
-     * of not letting invisible characters through.
+     * <p>The run becomes a space, not nothing: with nothing, {@code "@a<ZWSP>ll"} would turn into {@code "@all"} and
+     * {@code "!<ZWSP>https://host/x.png!"} into image syntax, that is, text a server's own filter let through because
+     * it did not recognise it would come out as the very token it looks for. A zero-width joiner inside an emoji
+     * sequence is allowed, so emoji sequences stay whole.
      *
      * <p>Run this on the raw text <em>before</em> any server-side filtering (removing links, images, macros,
      * mentions), not after it: the filter has to see the text the client will see.
@@ -60,88 +77,84 @@ public final class TextHygiene {
         if (text == null) {
             return "";
         }
-        StringBuilder out = new StringBuilder(text.length());
         int[] points = text.codePoints().toArray();
-        boolean dropped = false;
+        StringBuilder out = new StringBuilder(text.length());
+        boolean inRun = false;
         for (int i = 0; i < points.length; i++) {
-            int point = points[i];
-            int kept;
-            if (point == '\r') {
-                if (i + 1 < points.length && points[i + 1] == '\n') {
-                    continue;
+            if (problemAt(points, i, false, false) != null) {
+                if (!inRun) {
+                    out.append(' ');
                 }
-                kept = '\n';
-            } else if (point == 0x2028 || point == 0x2029 || point == 0x85) {
-                kept = '\n';
-            } else if (point == '\n' || point == '\t') {
-                kept = point;
-            } else if (isControl(point) || isInvalid(point) || Character.getType(point) == Character.FORMAT) {
-                dropped = true;
-                continue;
+                inRun = true;
             } else {
-                kept = point;
+                inRun = false;
+                out.appendCodePoint(points[i]);
             }
-            if (dropped && !out.isEmpty() && !Character.isWhitespace(out.charAt(out.length() - 1))
-                    && !Character.isWhitespace(kept)) {
-                out.append(' ');
-            }
-            dropped = false;
-            out.appendCodePoint(kept);
         }
         return out.toString();
     }
 
     /**
-     * The first problem in text received from the model, or {@code null}.
+     * The first problem in a tool argument, or {@code null}.
      *
-     * @param formatted {@code true} for a value that has a {@code pattern} (a key, a path, a name): there a
-     *                  newline, tab or carriage return and every format character are a problem too; in free
-     *                  text newline, carriage return and tab are normal and only the format characters that hide
-     *                  or reorder text are refused (only U+200C..U+200F stay, because emoji sequences and
-     *                  right-to-left scripts need them)
+     * @param identifier {@code true} for a value that has a {@code pattern} (a key, a path, a name): there tab, newline
+     *                   and carriage return are forbidden too; in free text they are ordinary
      */
-    public static Problem firstProblem(String text, boolean formatted) {
-        int length = text.length();
-        for (int i = 0; i < length; ) {
-            int point = text.codePointAt(i);
-            i += Character.charCount(point);
-            boolean whitespace = point == '\n' || point == '\r' || point == '\t';
-            if (whitespace) {
-                if (formatted) {
-                    return Problem.LINE_BREAK;
-                }
-            } else if (isControl(point)) {
-                return Problem.CONTROL;
-            } else if (point == 0x2028 || point == 0x2029) {
-                return Problem.LINE_SEPARATOR;
-            } else if (isInvalid(point)) {
-                return Problem.INVALID_TEXT;
-            } else if (Character.getType(point) == Character.FORMAT && (formatted || !allowedInFreeText(point))) {
-                return Problem.INVISIBLE;
+    public static Problem firstProblem(String text, boolean identifier) {
+        return firstProblem(text, identifier, false);
+    }
+
+    /**
+     * As {@link #firstProblem(String, boolean)}; {@code mentionFiltered} adds the full width ASCII characters
+     * U+FF01..U+FF5E, for an argument the server passes on to a system that interprets mentions.
+     */
+    public static Problem firstProblem(String text, boolean identifier, boolean mentionFiltered) {
+        int[] points = text.codePoints().toArray();
+        for (int i = 0; i < points.length; i++) {
+            Problem problem = problemAt(points, i, identifier, mentionFiltered);
+            if (problem != null) {
+                return problem;
             }
         }
         return null;
     }
 
-    private static boolean isControl(int point) {
-        return Character.isISOControl(point) && point != '\n' && point != '\t' && point != '\r';
-    }
-
-    /** An unpaired surrogate (a pair is read as one code point) or a noncharacter. */
-    private static boolean isInvalid(int point) {
-        return (point >= Character.MIN_SURROGATE && point <= Character.MAX_SURROGATE)
-                || (point >= 0xFDD0 && point <= 0xFDEF) || (point & 0xFFFE) == 0xFFFE;
-    }
-
-    /**
-     * The only format characters ({@code \p{Cf}}) free text may keep: ZWNJ and ZWJ (U+200C, U+200D), which Persian,
-     * Indic scripts and emoji sequences need, and the LRM and RLM marks (U+200E, U+200F), which fix the direction of
-     * punctuation in mixed-direction text and move nothing beyond their neighbours. Everything else in the category
-     * is refused, not listed: soft hyphen U+00AD, Arabic letter mark U+061C, the other bidi controls, zero-width
-     * space U+200B, word joiner and invisible operators U+2060..U+2064, interlinear annotation U+FFF9..U+FFFB, BOM,
-     * tag characters, and whatever Unicode adds to the category later.
-     */
-    private static boolean allowedInFreeText(int point) {
-        return point == 0x200C || point == 0x200D || point == 0x200E || point == 0x200F;
+    private static Problem problemAt(int[] points, int index, boolean identifier, boolean mentionFiltered) {
+        int point = points[index];
+        if (point < 0x20) {
+            if (point == '\t' || point == '\n' || point == '\r') {
+                return identifier ? Problem.LINE_BREAK : null;
+            }
+            return Problem.CONTROL;
+        }
+        if (point >= 0x7F && point <= 0x9F) {
+            return Problem.CONTROL;
+        }
+        if (point == 0x2028 || point == 0x2029) {
+            return Problem.LINE_SEPARATOR;
+        }
+        if (point >= Character.MIN_SURROGATE && point <= Character.MAX_SURROGATE) {
+            return Problem.UNPAIRED_SURROGATE;
+        }
+        if ((point >= 0xFDD0 && point <= 0xFDEF) || (point & 0xFFFE) == 0xFFFE) {
+            return Problem.NONCHARACTER;
+        }
+        if (point == 0xFE0F && index > 0 && Character.isExtendedPictographic(points[index - 1])) {
+            return null;
+        }
+        if ((point >= 0xFE00 && point <= 0xFE0F) || (point >= 0xE0100 && point <= 0xE01EF)) {
+            return Problem.VARIATION_SELECTOR;
+        }
+        if (point == 0x034F || point == 0x115F || point == 0x1160 || point == 0x3164 || point == 0xFFA0
+                || point == 0x2800) {
+            return Problem.INVISIBLE_CHARACTER;
+        }
+        if (Character.getType(point) == Character.FORMAT && !(point >= 0x200C && point <= 0x200F)) {
+            return Problem.FORMAT_CHARACTER;
+        }
+        if (mentionFiltered && point >= 0xFF01 && point <= 0xFF5E) {
+            return Problem.FULL_WIDTH_ASCII;
+        }
+        return null;
     }
 }

@@ -2,9 +2,19 @@ package pl.aiwcorpo.mcp.platform.guard;
 
 /**
  * For tools that are not {@code @Tool} methods (hand-written {@code ToolCallback}s): implement this
- * on the callback to declare its risk, since there is no method to put {@link ToolRisk} on.
+ * on the callback to declare what {@link ToolRisk}, {@link ToolAction} and {@link ToolTitle} declare on a method.
  */
 public interface RiskClassifiedTool {
 
     RiskLevel riskLevel();
+
+    /** The Cedar action; {@link ToolAction#AUTO} takes it from the risk. */
+    default ToolAction action() {
+        return ToolAction.AUTO;
+    }
+
+    /** The title shown by clients; required, a tool without one stops the server. */
+    default String title() {
+        return null;
+    }
 }

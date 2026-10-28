@@ -38,8 +38,8 @@ class InternalJwtVectorsTest {
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final String ROOT = "mcp-contracts/test-vectors/";
 
-    /** Files in test-vectors/jwt of mcp-contracts 2.2.5. */
-    private static final int EXPECTED_VECTORS = 51;
+    /** Files in test-vectors/jwt of mcp-contracts 3.0.1. */
+    private static final int EXPECTED_VECTORS = 57;
 
     record Vector(String name, JsonNode data) {
         @Override
@@ -169,7 +169,9 @@ class InternalJwtVectorsTest {
                     ? RequestBinding.protocol(rid) : RequestBinding.other(rid);
         }
         String path = request.get("path").asString();
-        if ("POST".equals(method) && "/v1/credentials/resolve".equals(path)) {
+        if (("POST".equals(method) && ("/v1/credentials/resolve".equals(path) || "/v1/authenticator/verify".equals(path)
+                || "/v1/authenticator/invalidate-codes".equals(path)))
+                || ("GET".equals(method) && "/v1/authenticator".equals(path))) {
             return RequestBinding.toolScoped(rid);
         }
         if ("GET".equals(method) && ("/mcp-manifest".equals(path) || "/v1/systems".equals(path))) {

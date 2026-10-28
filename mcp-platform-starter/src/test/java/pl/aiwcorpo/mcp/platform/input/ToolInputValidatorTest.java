@@ -75,18 +75,18 @@ class ToolInputValidatorTest {
     }
 
     @Test
-    void aKeyOfAMapFromTheInputIsNotInTheMessage() {
+    void anUndeclaredKeyOfANestedObjectIsNotInTheMessage() {
         String schema = """
                 {"type":"object","additionalProperties":false,"required":["issueKey"],"properties":{
                   "issueKey":{"type":"string","maxLength":20},
-                  "labels":{"type":"object","maxProperties":3,"propertyNames":{"maxLength":20},"additionalProperties":{"type":"string","maxLength":5}}}}
+                  "labels":{"type":"object","additionalProperties":false,"properties":{"team":{"type":"string","maxLength":5}}}}}
                 """;
         ToolInputValidator validator = ToolInputValidator.compile(tool(schema), ToolInputPolicy.STRICT);
 
-        String message = assertThatThrownBy(() -> validator.validate("{\"issueKey\":\"A-1\",\"labels\":{\"SECRETKEY77\":\"too long value\"}}"))
+        String message = assertThatThrownBy(() -> validator.validate("{\"issueKey\":\"A-1\",\"labels\":{\"SECRETKEY77\":\"x\"}}"))
                 .actual().getMessage();
 
-        assertThat(message).contains("labels.* is longer than 5 characters").doesNotContain("SECRETKEY77");
+        assertThat(message).contains("unknown arguments are not allowed").doesNotContain("SECRETKEY77");
     }
 
     @Test
