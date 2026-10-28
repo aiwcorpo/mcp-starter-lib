@@ -21,7 +21,7 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
 
-3.0.0-alpha-9: w pracy (`3.0.0-alpha-9-SNAPSHOT`, alpha-8 w `~/.m2` nietknięte). Instrukcja dla serwerów: `MIGRATION-3.0.md`,
+3.0.0-alpha-9: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-9`, tag `v3.0.0-alpha-9` (praca na `3.0.0-alpha-9-SNAPSHOT`). Instrukcja dla serwerów: `MIGRATION-3.0.md`,
 sekcja "Zmiany w 3.0.0-alpha-9". Kamienie:
 1. Profil `dev` i guard (A8-L1, A8-L2, A8-L3).
    L1: guard w `dev` przy osobnym `management.server.port` wymaga loopbacku w `management.server.address` (pusty adres =
@@ -66,6 +66,36 @@ sekcja "Zmiany w 3.0.0-alpha-9". Kamienie:
    `ThreadLocal` między tymi warstwami dodałoby ukryty stan, a przy limicie 1MB koszt jest rzędu milisekund (pomiar
    przeglądu: 12 MB w 148 ms). Walidator zbiera nadal wszystkie błędy przed odcięciem do 5; przy limicie rozmiaru to
    ograniczone. Testy: `TextHygieneTest` (4 nowe), `AuditingToolCallbackTest` (2), `McpErrorMapperTest` (1), `ForeignToolPolicyCheckTest` (1).
+
+4. Smoke Haiku alpha-8 (README). Przykład "Pierwszy serwer" jest teraz kompletny: `pom.xml` (rodzic Boot 4.1.0, import BOM,
+   starter, `<finalName>mcp-jira</finalName>`, `spring-boot-maven-plugin`), `JiraServer` z metodą `main` i importem
+   `SpringApplication` (kopia w `mcp-platform-test/.../readme/JiraServer.java` też ma `main`), wskazanie, że konfiguracja to
+   sekcja "Konfiguracja". Komenda z jarem: `$JAVA_HOME/bin/java -jar target/mcp-jira.jar ...` z uwagą, że `java` z PATH bywa
+   starsza (17), a `mvn` zamiast `./mvnw` (nowy projekt nie ma wrappera). Sprawdzone według README w
+   `scratchpad/starter-a9-check/` (pom, klasa i yml wycięte z README skryptem): `mvn clean package` daje `target/mcp-jira.jar`,
+   start na porcie 18600 w `dev`, health 200, `POST /mcp` bez JWT 401, z `INVOCATION_ID` start odmawia; proces zatrzymany.
+   Linia `dev_profile_overrides` (WARN, lista nadpisanych kluczy) pisze `PlatformConfigurationGuard`, bo
+   `EnvironmentPostProcessor` działa przed konfiguracją logowania i jego własny logger nic nie wypisywał (w alpha-8 INFO z tego
+   miejsca też nie było widać w logu).
+   Razem 320 testów (starter 258, mcp-platform-test 62).
+
+Znalezisko -> status (przegląd Opus alpha-8):
+
+| Znalezisko | Status | Gdzie |
+| --- | --- | --- |
+| A8-L1 guard loopback bez serwera managementu | naprawione: w `dev` osobny `management.server.port` wymaga loopbackowego `management.server.address` (domyślnej wartości Boot nie pozwala ustawić bez osobnego portu) | `PlatformConfigurationGuardTest.aSeparateManagementServerInDevMustListenOnLoopbackToo` |
+| A8-L2 samo `SPRING_PROFILES_ACTIVE=dev` zdejmuje TLS/mTLS/Redis | naprawione: odmowa startu, gdy `dev` jest w środowisku wdrożenia (platforma chmurowa Boota, `INVOCATION_ID`); WARN z nadpisanymi kluczami; uzasadnienie wyboru w kamieniu 1 | `devInADeploymentIsRefusedBeforeAnySocketIsOpened`, `theDeploymentCheckDoesNotTouch...`, `theOverridesThatChanged...` |
+| A8-L3 guard z `@ConditionalOnMissingBean` | naprawione: guard, `InternalJwtVerifier`, `InternalJwtFilter` nie do podmiany w żadnym profilu | `ForeignToolPolicyCheckTest.theConfigurationGuardAndTheJwtCheckCannotBeReplacedInAnyProfile` |
+| A8-L4 obejścia polityki (ręczny wrapper, podmiana definicji) | naprawione: konstruktory pakietowe, klasy `final`, `ToolInputPolicy` enum, kontrola źródła definicji; zdanie o "nadpisaniu definicji" poprawione | `ForeignToolPolicyCheckTest` (swap, konstruktory) |
+| A8-L5 encje po normalizacji, cięcie po filtrze | naprawione: kolejność w MIGRATION + WARN `untrusted_text_not_normalized`; cięcie na granicy słowa; NFKC jako propozycja CC 6 | `TextHygieneTest` |
+| A8-L6 niezgodność wyniku mapowana przez serwer, brak limitu rozmiaru | naprawione: `ToolResultRejectedException` przed mappingami, `tools.max-result-size` (1MB); jedno parsowanie zamiast trzech: nie robione, uzasadnienie w kamieniu 3 | `McpErrorMapperTest`, `AuditingToolCallbackTest` |
+
+Incydent budowy: `./mvnw clean install` odpalony przed ustawieniem wersji `3.0.0-alpha-9-SNAPSHOT` (poms miały jeszcze
+`3.0.0-alpha-8`) nadpisał w `~/.m2` bom, rodzica i `mcp-platform-starter` 3.0.0-alpha-8 kodem roboczym alpha-9 (jar
+startera z 06:39, `mcp-platform-test` nie doszedł do `install`, bo testy modułu padły). Wersja poprawiona natychmiast na
+SNAPSHOT. Odtworzenie z tagu `v3.0.0-alpha-8` zbudowane (bez `install`) w
+`scratchpad/restore-a8/mcp-platform-starter/target/mcp-platform-starter-3.0.0-alpha-8.jar`; nie zainstalowane, bo próba
+`install` została zablokowana przez klasyfikator uprawnień. Do decyzji człowieka (patrz raport).
 
 3.0.0-alpha-8: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-8`, tag
 `v3.0.0-alpha-8` (praca na `3.0.0-alpha-8-SNAPSHOT`, alpha-7 w `~/.m2` nietknięte). Instrukcja dla serwerów:

@@ -4,8 +4,6 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.boot.EnvironmentPostProcessor;
 import org.springframework.boot.SpringApplication;
 import org.springframework.core.Ordered;
@@ -53,7 +51,8 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
     static final String SOURCE_NAME = "mcpPlatformDefaults";
     static final String DEV_SOURCE_NAME = "mcpPlatformDevOverrides";
 
-    private static final Logger LOG = LoggerFactory.getLogger(PlatformDefaultsEnvironmentPostProcessor.class);
+    /** Keys of the dev overrides that replaced a different value of the server's own configuration. */
+    static final String OVERRIDDEN_KEY = "mcp.platform.internal.dev-overridden";
 
     @Override
     public int getOrder() {
@@ -80,16 +79,18 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
             DevProfileEnvironment.deploymentSignal(environment).ifPresent(signal -> {
                 throw new IllegalStateException(DevProfileEnvironment.refusal(signal));
             });
-            Map<String, Object> overrides = Map.of(
+            Map<String, Object> overrides = new HashMap<>(Map.of(
                     "server.ssl.enabled", "false",
                     "aiwcorpo.mcp.platform.mtls.required", "false",
                     "aiwcorpo.mcp.platform.internal-jwt.replay-store", "memory",
-                    "aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle", "");
+                    "aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle", ""));
             // A value the server's own configuration sets differently is what a deployment looks like.
             List<String> changed = overrides.entrySet().stream()
                     .filter(entry -> environment.getProperty(entry.getKey()) != null
                             && !entry.getValue().equals(environment.getProperty(entry.getKey())))
                     .map(Map.Entry::getKey).sorted().toList();
+            // Logging is not set up yet at this point; PlatformConfigurationGuard writes the line once it is.
+            overrides.put(OVERRIDDEN_KEY, String.join(",", changed));
             MapPropertySource source = new MapPropertySource(DEV_SOURCE_NAME, overrides);
             String firstConfigFile = environment.getPropertySources().stream().map(p -> p.getName())
                     .filter(name -> name.startsWith("Config resource") || name.startsWith("applicationConfig"))
@@ -99,8 +100,6 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
             } else {
                 environment.getPropertySources().addBefore(firstConfigFile, source);
             }
-            LOG.warn("event=dev_profile_overrides overridden={} detail=\"server.ssl disabled, mtls.required=false, "
-                    + "replay-store=memory, jwks-ssl-bundle ignored (profile dev, loopback only)\"", changed);
         }
     }
 }

@@ -82,6 +82,9 @@ public class PlatformConfigurationGuard implements InitializingBean {
         }
 
         if (dev) {
+            LOG.warn("event=dev_profile_overrides overridden=[{}] detail=\"server.ssl disabled, mtls.required=false, "
+                    + "replay-store=memory, jwks-ssl-bundle ignored (profile dev, loopback only)\"",
+                    environment.getProperty(PlatformDefaultsEnvironmentPostProcessor.OVERRIDDEN_KEY, ""));
             DevProfileEnvironment.deploymentSignal(environment)
                     .ifPresent(signal -> problems.add(DevProfileEnvironment.refusal(signal)));
             String managementPort = environment.getProperty("management.server.port");

@@ -252,13 +252,16 @@ class PlatformConfigurationGuardTest {
     @Test
     void theOverridesThatChangedTheServersConfigurationAreNamedInTheLog() {
         ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory
-                .getLogger(PlatformDefaultsEnvironmentPostProcessor.class);
+                .getLogger(PlatformConfigurationGuard.class);
         ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
                 new ch.qos.logback.core.read.ListAppender<>();
         appender.start();
         logger.addAppender(appender);
         try {
-            new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(serverConfigAsInTheReadme("dev"), null);
+            MockEnvironment dev = serverConfigAsInTheReadme("dev");
+            dev.setProperty("server.address", "127.0.0.1");
+            new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(dev, null);
+            check(valid(), dev);
             String line = pl.aiwcorpo.mcp.platform.CapturedLogs.snapshot(appender).stream()
                     .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
                     .filter(m -> m.contains("dev_profile_overrides")).findFirst().orElseThrow();
