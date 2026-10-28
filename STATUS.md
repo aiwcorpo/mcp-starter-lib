@@ -1,7 +1,24 @@
 # STATUS - mcp-starter-lib (ws-02)
 
 Linia `pl.aiwcorpo.mcp:mcp-platform*` 3.x (niezależna od wersji kontraktów). Kontrakty:
-`pl.aiwcorpo.mcp:mcp-contracts:2.2.5` od alpha-12 (2.1.1 od alpha-7, 2.0.2 do alpha-6).
+`pl.aiwcorpo.mcp:mcp-contracts:3.1.0` od beta-1 (2.2.5 w alpha-12 ... alpha-14, 2.1.1 od alpha-7, 2.0.2 do alpha-6).
+
+3.0.0-beta-1: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-1`, tag `v3.0.0-beta-1` (praca na `3.0.0-alpha-15-SNAPSHOT`; alpha-15 i alpha-16 nie wydane). Kontrakty 3.1.0 (CC-129; BOM, starter i test). Razem 668 testów (starter 552, mcp-platform-test 116). Instrukcja dla template'u i serwerów: `MIGRATION-3.0.md`, sekcja "Z alpha-14 na beta-1". Kamienie pośrednie:
+1. Kontrakty 3.0.1 (potem 3.0.2 i 3.1.0), higiena tekstu CC-121/122 (`TextHygiene`: 79 wektorów; `mentionFiltered` na `@ArgumentLimits`), zamknięty i ograniczony `inputSchema` zgodny z regułami mcp-manifest (CC-078/123; test na 27 wektorach `manifests/`), `@ToolTitle` obowiązkowy (CC-115), `ToolAction` w `@ToolRisk`, lista `$defs` (CC-079) pilnowana testem, kody C10 bez `confirmation_declined` (commit f775e9e).
+2. Silnik polityk: `PolicyEngine` (pull `latest.json` z ETag, `PolicyStore` z mcp-policy-bundle, rollback po restarcie, kanał `overrides`, `prv` jako podpowiedź do natychmiastowego pobrania), `@ResourceRef` + `ResourceResolver` (S1: każda wartość każdego refa; S2: zasób bez wymaganej klasyfikacji = odmowa), `Action::"call"` oceniana w starterze z tej samej paczki, `ResultFilter` (adnotacja na komponencie rekordu wyniku i `ResourcePolicy.retainAllowed*`), `QueryScope` (JQL/CQL/wzorce OpenSearch, odmowa JQL z niezamkniętym nawiasem), `vsScopes` z `vs`/`vsc` JWT, zdarzenie audytu `policy_decision`.
+3. Manifest C6: `ManifestGenerator` (z `tools/list` + adnotacji + `manifest.*`), kontrola schematem i regułami mcp-manifest przy starcie, `GET /mcp-manifest`, `manifest.output-file`; spójność `DESTRUCTIVE` (risk, `destructiveHint`, akcja `delete`/`admin`) pilnowana przy rejestracji i przy generowaniu.
+4. Dokumentacja i 3.1.0 (CC-129: `ancestorClassifications` w `ResolvedResource` GitLaba, test projektu trzy poziomy pod grupą `restricted`), README, MIGRATION.
+
+Zgodność z DoD briefu: test `ABC-123` przeniesionego do `HR` (Restricted) -> `not_found_or_denied` (`ResourcePolicyTest`); wyszukiwanie z linkiem zawężonym do `ABC` usuwa zgłoszenie `DEF` (`ResourcePolicyTest`, wynik z adnotacją `@ResourceRef` na komponencie); paczka z błędnym podpisem zostawia poprzednią, z metryką i logiem (`PolicyEngineTest`).
+
+Odstępstwa od briefu:
+- Generator manifestu działa przy starcie serwera (nie jako annotation processor ani plugin Maven): manifest powstaje z definicji, które serwer naprawdę publikuje, więc `definitionHash` jest zawsze hashem `tools/list`; plik dla kroku rejestracji daje `manifest.output-file`. Test porównuje definicje z surowym `tools/list`.
+- Serwer ocenia także `Action::"call"` na narzędziu (brief pkt 4: `access_denied` dla narzędzi), z paczki serwera, nie z decyzji gateway'a.
+- "S2" zinterpretowane jako: zasób (i jego rodzic) bez klasyfikacji wymaganej przez kontrakt nie jest budowany przez builder, więc jest odrzucany (`not_found_or_denied`), a element wyniku usuwany. Dotyczy też GitLaba bez `ancestorClassifications`.
+- Klient pobierania paczek jest własny (`PolicyBundleClient`: ETag, 16 MiB, bez przekierowań, nazwy plików tylko obok `latest.json`), bo `mcp-policy-bundle` go nie ma (CC-132 odłożone).
+- Starter nie dopuszcza `@ResourceRef` na opcjonalnym argumencie bez wartości (`no_resource` = odmowa); wyszukiwanie bez identyfikatorów używa `QueryScope`.
+
+Nie zrobione / zostaje na 3.0.0: pełne `ResultFilter` dla nietypowych kształtów wyniku (mapy, tablice tablic), recenzja bezpieczeństwa beta-1, smoke "od README" (Haiku), test na prawdziwej paczce dev ws-09 po zmianie schematu na 3.1.0 (wektory kontraktów 3.1.0 przechodzą).
 
 3.0.0-alpha: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom:3.0.0-alpha-1` (import),
 `pl.aiwcorpo.mcp:mcp-platform-starter:3.0.0-alpha-1`, `pl.aiwcorpo.mcp:mcp-platform-test:3.0.0-alpha-1` (test),
@@ -400,6 +417,20 @@ przebiegach zielony: do uodpornienia w teście, nie w kodzie startera; `pattern`
 
 ## Propozycje CC (do przeniesienia przez ws-00 do CONTRACT_CHANGES.md; status proposed)
 
+Nowe w beta-1 (numeracja robocza):
+- **Beta-A: `OpenSearchIndexPrefix` w `common.schema.json` ma alternację na wierzchu (`^...$|^[a-z0-9]$`)**, więc nie spełnia reguły
+  `input-schema-bounded` (CC-123), gdy serwer użyje go jako wzorca argumentu przez `contractPattern` (CC-079). Starter przepisuje go
+  na `^(?:...|...)$`. Propozycja: jedna zakotwiczona postać w kontrakcie (np. `^(?:[a-z0-9][a-z0-9._-]{0,253}[a-z0-9_]|[a-z0-9])$`).
+- **Beta-B: README kontraktów mówi, że manifest generuje starter "w czasie budowy" (`target/mcp-manifest.json`)**; starter robi to przy
+  starcie z tego, co publikuje (`tools/list`) i zapisuje plik na żądanie. Propozycja: sformułowanie "przy starcie lub w budowie".
+- **Beta-C: kod C10 dla niedostępnej polityki na serwerze** (brak paczki po restarcie z oczekiwanym `overrides`, błąd własny): starter
+  używa `upstream_unavailable`; kontrakt tego nie mówi.
+- **Beta-D: `reason` zdarzenia `policy_decision` na serwerze** (`policy_forbid` dla odmowy polityki, `not_granted` dla zasobu
+  nierozwiązanego): kontrakt wymienia wartości, ale nie rozróżnia przypadków serwera.
+- **Beta-E: `BundleFetcher` w `mcp-policy-bundle`** (CC-132 odłożone): `PolicyBundleClient` startera i klient gateway'a to dwie
+  implementacje tego samego protokołu bez wspólnych wektorów.
+- Zgłoszone koordynatorowi (naprawione w 3.0.2): jary `test-vectors` 3.0.0 i 3.0.1 miały nieaktualne pliki.
+
 Stan po kontraktach 2.2.5: punkty 1, 2 i 6 przyjęte jako CC-123, CC-121 i CC-122 (3.0.0), punkt 3 jako CC-112 (2.2.4), punkt 4 jako CC-120 (2.2.5).
 Pozostałe poniżej wymagają decyzji ws-00; nowe punkty na końcu listy.
 
@@ -582,12 +613,10 @@ opisane w README i `MIGRATION-3.0.md`.
 - `mcp-platform-test` zależy od jara `test-vectors` (klucze testowe) w zakresie compile modułu; serwery dodają
   moduł wyłącznie w `test`.
 
-## Zostaje na beta (punkty 3, 4, 6, 7) i 3.0.0 (punkt 5)
+## Zostało na 3.0.0
 
-`@ResourceRef` + `ResourceResolver`, `PolicyEngine` na `PolicyStore` z `mcp-policy-bundle` 2.0.2 (z `isReady`,
-osobny katalog stanu na instancję), `EntityBuilder` z `mcp-cedar-entities`, `QueryScope` (`queryConstraint`),
-generator manifestu C6 (`mcp-manifest`) i `GET /mcp-manifest`; `ResultFilter` (`allowed` dla list, `checkAll` dla
-narzędzi z identyfikatorami) w 3.0.0, dokończenie `MIGRATION-3.0.md`. Usunięcia z briefu zrobione w całości w alpha.
+Punkty 3, 4, 6, 7 briefu są w beta-1 (patrz wyżej), punkt 5 (`ResultFilter`) także w podstawowej postaci. Na 3.0.0: recenzja
+bezpieczeństwa, smoke od README, dokumentacja końcowa. Usunięcia z briefu zrobione w całości w alpha.
 
 ## Propozycje zmian kontraktu (mcp-contracts/CONTRACT_CHANGES.md, status open, zgłasza ws-02)
 

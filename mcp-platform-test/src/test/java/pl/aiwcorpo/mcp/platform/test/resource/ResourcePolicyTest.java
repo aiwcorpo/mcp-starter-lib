@@ -117,6 +117,25 @@ class ResourcePolicyTest {
     }
 
     @Test
+    void aProjectUnderARestrictedGroupIsDeniedThroughItsAncestorsAtAnyDepth() {
+        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read", "mcp-gitlab-read")))) {
+            assertThat(text(call(client, "get_project", Map.of("path", "team-a/sub/app")))).contains("project team-a/sub/app");
+            assertThat(text(call(client, "get_project", Map.of("path", "solo/app")))).contains("project solo/app");
+            assertThat(text(call(client, "get_project", Map.of("path", "hr/payroll/app")))).contains("not_found_or_denied");
+        }
+    }
+
+    @Test
+    void aGitLabProjectWithoutTheTopicsOfItsAncestorsIsDenied() {
+        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read", "mcp-gitlab-read")))) {
+            McpSchema.CallToolResult result = call(client, "get_project", Map.of("path", "bad/app"));
+
+            assertThat(result.isError()).isTrue();
+            assertThat(text(result)).contains("\"error\":\"not_found_or_denied\"");
+        }
+    }
+
+    @Test
     void aSystemThatIsDownIsUpstreamUnavailableNotADenial() {
         try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
             McpSchema.CallToolResult result = call(client, "get_issue", Map.of("issueKey", "DOWN-1"));

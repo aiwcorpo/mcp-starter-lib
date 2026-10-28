@@ -45,8 +45,8 @@ public final class ManifestGenerator {
             "Jira::Issue", List.of("key", "project"),
             "Confluence::Space", List.of("key", "labels"),
             "Confluence::Page", List.of("id", "space", "ancestorIds"),
-            "GitLab::Group", List.of("path", "classification"),
-            "GitLab::Project", List.of("path", "group", "classification"),
+            "GitLab::Group", List.of("path", "classification", "ancestorClassifications"),
+            "GitLab::Project", List.of("path", "group", "classification", "ancestorClassifications"),
             "OpenSearch::Index", List.of("name", "tags"),
             "ServiceDesk::Queue", List.of("id", "classification"),
             "ServiceDesk::Ticket", List.of("id", "queue"));

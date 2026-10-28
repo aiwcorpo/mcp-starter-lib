@@ -308,6 +308,291 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
+## Z alpha-14 na beta-1
+
+Lista dla template'u i pięciu serwerów (jira, confluence, gitlab, servicedesk, opensearch). Beta-1 przechodzi na
+`mcp-contracts` **3.1.0** (przez BOM) i dodaje to, czego brakowało do kamienia M3: tytuły narzędzi i zamknięty schemat,
+nową higienę tekstu, `@ResourceRef` z polityką Cedar, filtr wyników, `QueryScope`, manifest C6 z `GET /mcp-manifest`. Serwer
+po zmianie 1-4 buduje się i startuje bez nowej logiki; punkty 5-9 dodają ochronę zasobów.
+
+### 1. Wersje
+
+`pom.xml` serwera i template'u: `<version>3.0.0-beta-1</version>` w imporcie `mcp-platform-bom` (BOM zarządza też
+`mcp-contracts` 3.1.0, `mcp-cedar-entities`, `mcp-policy-bundle` i `mcp-manifest`; nie dopisuj ich ręcznie). README serwera:
+popraw ręcznie wpisane wersje startera i kontraktów na `3.0.0-beta-1` i `3.1.0`. `new-server.sh` bierze wersję BOM z `pom.xml`
+template'u, więc template przestaw przed generowaniem nowych serwerów.
+
+Wydane wcześniej wersje w `~/.m2` są niezmienne: nie instaluj ponownie `3.0.0-alpha-14`. Starter i BOM beta-1 trzeba mieć w
+`~/.m2` z `./mvnw install` na tagu `v3.0.0-beta-1` (albo z rejestru), zanim serwer się zbuduje.
+
+### 2. `@ToolTitle` na każdym narzędziu (CC-115)
+
+Kontrakt wymaga `title` w definicji narzędzia, a hash i `tools/list` go zawierają. Narzędzie bez tytułu zatrzymuje start.
+
+```java
+@Tool(name = "get_issue", description = "Returns an issue by key.")
+@ToolRisk(RiskLevel.READ_ONLY)
+@ToolTitle("Get issue")                      // pl.aiwcorpo.mcp.platform.guard.ToolTitle
+public IssueView getIssue(...) { ... }
+```
+
+Tytuł: niepusty, do 100 znaków, bez spacji na brzegach, końców linii i znaków ukrytych. Zmiana tytułu zmienia
+`definitionHash`, czyli dla gateway'a jest zmianą definicji narzędzia. Ręcznie napisany `ToolCallback` z
+`RiskClassifiedTool` zwraca tytuł z metody `title()`. Testy z narzędziami testowymi dostają ten sam obowiązek.
+
+### 3. Schemat wejścia: zamknięty i ograniczony (CC-078, CC-123)
+
+Reguły startera są teraz regułami manifestu (`input-schema-closed`, `-bounded`, `-no-combinators`), więc to, co starter
+przepuszcza, przechodzi też gateway. Zmienia się dla schematów pisanych ręcznie (generowane przez
+`SchemaLimitedToolCallbacks` już tak wyglądały):
+
+- mapa z `additionalProperties: {schemat}` i `maxProperties` jest odrzucana (była dopuszczona): użyj rekordu z nazwanymi
+  polami albo listy rekordów `{name, value}`;
+- `$ref`, typy łączone (`["string","null"]`), `items: false`, `exclusiveMinimum`/`exclusiveMaximum` zamiast `minimum`/`maximum`
+  i wzorzec bez `^...$` (albo z alternacją na wierzchu, np. `^a$|^b$`) są odrzucane;
+- parametr o nazwie `confirmation_code` zatrzymuje start (nazwa należy do gateway'a, C11);
+- `@ArgumentLimits(contractPattern = "OpenSearchIndexPrefix")` działa nadal: definicja kontraktów ma alternację na wierzchu,
+  starter publikuje ją jako `^(?:...|...)$`.
+
+### 4. Higiena tekstu (CC-121, CC-122)
+
+Jedna definicja z kontraktów (`test-vectors/text-hygiene/`, 79 wektorów):
+
+- **Argumenty.** Zakazane: kontrolki C0 poza TAB/LF/CR, DEL i C1 (także U+0085), U+2028/U+2029, niesparowane surogaty,
+  nieznaki, każdy znak `\p{Cf}` poza U+200C..U+200F, U+034F, U+115F, U+1160, U+3164, U+FFA0, U+2800 i selektory wariantów
+  (U+FE00..U+FE0F, U+E0100..U+E01EF), z wyjątkiem jednego U+FE0F zaraz po znaku emoji. W wartościach z `pattern`
+  (identyfikatory) zakazane są dodatkowo TAB, LF i CR; ZWJ, ZWNJ, LRM i RLM nie są już zakazane tam, gdzie wzorzec je przepuszcza.
+  Brak NFKC.
+- **Argumenty, które trafiają do filtra wzmianek serwera** (komentarz, opis, dowolny tekst przekazywany do systemu, który
+  zamienia `@nazwa` na powiadomienie): oznacz je, a pełna szerokość ASCII (U+FF01..U+FF5E, np. "@all" zapisane znakami U+FF20
+  U+FF41 U+FF4C U+FF4C) będzie odrzucana jako `invalid_argument`:
+
+  ```java
+  public IssueComment addComment(
+          @ArgumentLimits(maxLength = 16, contractPattern = "JiraIssueKey") String issueKey,
+          @ArgumentLimits(maxLength = 32000, mentionFiltered = true) String body) { ... }
+  // rekord: komponent z @ArgumentLimits(maxLength = 200, mentionFiltered = true) String body; na liście dotyczy elementów
+  ```
+
+  Gdzie filtr wzmianek jest Twoim kodem, wywołaj tam też `TextHygiene.firstProblem(text, false, true) != null` -> odrzuć. Znacznik
+  na liczbie albo wartości z `enum` zatrzymuje start.
+- **Tekst z systemu** (`UntrustedText`, `TextHygiene.normalize`): każdy maksymalny ciąg znaków zakazanych staje się **jedną
+  spacją**, nic nie jest przycinane, a CR, CRLF i LF zostają. Zmiana względem alpha-14: U+2028, U+2029 i U+0085 były nowym
+  wierszem, teraz są spacją; spacja nie jest już pomijana na brzegach i obok białych znaków (`"\u200bhello\ufeff"` daje `" hello "`).
+  Testy serwera, które porównują dokładny tekst po normalizacji, trzeba poprawić. Kolejność `normalize` -> `cut` -> filtr bez zmian.
+
+### 5. Konfiguracja: paczka polityk i manifest
+
+Nowe, obowiązkowe właściwości (bez nich start jest odrzucany z listą braków). Produkcja:
+
+```yaml
+aiwcorpo.mcp.platform:
+  policy:
+    main:
+      url: https://policies.internal/policies/main/latest.json
+      key-id: policies-main-2026
+      public-key-file: /etc/mcp/policies-main.pub.pem         # Ed25519, SPKI PEM (albo public-key: <PEM>)
+    overrides:                                                # opcjonalnie, paczka awaryjna z osobnym kluczem
+      url: https://policies.internal/policies/overrides/latest.json
+      key-id: policies-overrides-2026
+      public-key-file: /etc/mcp/policies-overrides.pub.pem
+    state-dir: /var/lib/mcp/policy-state                      # osobny katalog na instancję
+  manifest:
+    version: 1.4.0
+    internal-url: https://mcp-jira.internal:8443/mcp
+    accepted-credential-types: [user-oauth, user-secret]      # typy poświadczeń, które serwer przyjmuje
+```
+
+`dev` (dev-stack `mcp-platform-dev`, repozytorium paczek `ws-09` na `:18747`; klucz z `mcp-policies/keys/dev/`):
+
+```yaml
+aiwcorpo.mcp.platform:
+  policy:
+    allow-test-keys: true                                     # tylko dev; poza dev odmowa startu
+    main:
+      url: http://127.0.0.1:18747/policies/main/latest.json
+      key-id: test-policies-main-dev
+      public-key-file: ../mcp-policies/keys/dev/test-policies-main-dev.public.pem
+  manifest:
+    version: 0.1.0
+    internal-url: https://mcp-jira.internal:8443/mcp
+    accepted-credential-types: [user-secret]
+```
+
+`state-dir` trzyma rewizję i skrót archiwum każdego kanału: bez niego restart przyjąłby ponownie starszą podpisaną paczkę
+(CC-066), więc poza `dev` jest wymagany. Serwer bez paczki w `policy.startup-timeout` (30 s) nie wstaje. Szczegóły i
+zachowanie przy błędach: README, "Zasoby i polityki". Testy serwera nie wymagają zmian w konfiguracji:
+`GATEWAY.serverProperties()` dokłada `policy.*` i `manifest.*` (paczka z przykładowymi politykami kontraktów, klucze testowe).
+
+### 6. `@ResourceRef` i resolver zamiast własnego sprawdzania
+
+W alpha-14 narzędzie brało `String issueKey` i samo pytało system. Teraz zasób deklaruje się adnotacją, a starter przed
+uruchomieniem narzędzia rozwiązuje go resolverem i ocenia politykę. Resolver (bean) woła system poświadczeniem wywołującego,
+zwraca kanoniczny id, rodzica i klasyfikację **z systemu**:
+
+```java
+@Component
+class JiraIssueResolver implements ResourceResolver<JiraIssue> {
+
+    private final JiraClient jira;
+
+    JiraIssueResolver(JiraClient jira) {
+        this.jira = jira;
+    }
+
+    @Override
+    public String resourceType() {
+        return "Jira::Issue";
+    }
+
+    @Override
+    public Optional<JiraIssue> fetch(String key) {
+        return jira.issue(key);          // empty dla 404 i 403 (nie ma albo nie wolno); wyjątek dla awarii systemu
+    }
+
+    @Override
+    public ResolvedResource describe(JiraIssue issue) {
+        // id i projekt z odpowiedzi Jiry: zgłoszenie przeniesione do HR ma tu projekt HR, nie ten z argumentu
+        return ResolvedResource.of("Jira::Issue", issue.key(), Map.of("key", issue.key()))
+                .withParent(ResolvedResource.of("Jira::Project", issue.projectKey(),
+                        Map.of("key", issue.projectKey(), "category", Objects.requireNonNullElse(issue.projectCategory(), ""))));
+    }
+}
+
+@Tool(name = "get_issue", description = "Returns an issue by key.")
+@ToolRisk(RiskLevel.READ_ONLY)
+@ToolTitle("Get issue")
+public IssueView getIssue(@ArgumentLimits(maxLength = 16, contractPattern = "JiraIssueKey")
+                          @ResourceRef(type = "Jira::Issue") String issueKey) {
+    // wynik fetch z tego wywołania, bez drugiego pytania Jiry
+    JiraIssue issue = ResourceContext.current().orElseThrow().fetched("Jira::Issue", issueKey, JiraIssue.class).orElseThrow();
+    return IssueView.of(issue);
+}
+```
+
+Atrybuty obowiązkowe (zasób bez nich jest odrzucany, nie dopuszczany): `Jira::Project.category` (`""` gdy brak),
+`Confluence::Space.labels`, `OpenSearch::Index.tags`; opcjonalne `classification` dla `GitLab::Group`, `GitLab::Project`,
+`ServiceDesk::Queue` (GitLab: suma topics grup przodków). Dla Confluence strona podaje `ancestorIds`. Wszystkie wartości
+`@ResourceRef` są oceniane (lista, źródło i cel transferu); `resourceRefs` bez wartości (opcjonalny argument pominięty) kończy się
+odmową, więc argument, który może być nieobecny, nie jest `@ResourceRef` (wyszukiwanie: `QueryScope`, punkt 7).
+
+**GitLab: topics grup-przodków (CC-129, kontrakty 3.1.0).** Topics w GitLabie się nie dziedziczą, a `restricted` na grupie ma chronić całe
+poddrzewo, więc schemat Cedar ma wymagany `inheritedClassification` na `GitLab::Group` i `GitLab::Project`, który builder liczy z
+atrybutu `ancestorClassifications` podanego przez serwer. Starter nie ma na to osobnego API: to atrybut w `ResolvedResource`
+(mapa `<ścieżka grupy-przodka> -> topics`, dokładnie dla grup nad zasobem, `{}` dla grupy najwyższego poziomu), a **rodzic** projektu
+(grupa) dostaje swoją własną mapę (przodkowie grupy, bez niej samej). Brak mapy, brakujący albo nadmiarowy klucz (w tym sama grupa)
+lub topics niebędące listą napisów dają `internal_error`, czyli odmowę `not_found_or_denied` (zasób nie jest budowany). Resolver
+serwera GitLab pobiera topics każdej grupy na ścieżce (cache na czas wywołania):
+
+```java
+// projekt hr/payroll/app; GitLab: topics grupy hr = [Restricted], grupy hr/payroll = []
+Map<String, List<String>> ancestors = Map.of("hr", List.of("Restricted"), "hr/payroll", List.of());
+return ResolvedResource.of("GitLab::Project", "hr/payroll/app",
+                Map.of("path", "hr/payroll/app", "classification", ownTopics, "ancestorClassifications", ancestors))
+        .withParent(ResolvedResource.of("GitLab::Group", "hr/payroll",
+                Map.of("path", "hr/payroll", "classification", groupTopics,
+                        "ancestorClassifications", Map.of("hr", List.of("Restricted")))));   // bez samej grupy "hr/payroll"
+```
+
+Wartości są normalizowane przez builder (trim, małe litery ASCII), więc `Restricted` wystarcza. Wzór w testach:
+`GitLabProjectResolver` w `mcp-platform-test` (`JiraServer`, testy `ResourcePolicyTest`: projekt trzy poziomy pod grupą `restricted` jest
+odrzucany, projekt bez mapy też). Paczki zbudowane na schemacie 3.0.x są odrzucane (`schema_mismatch`): potrzebna jest paczka
+ws-09 na schemacie 3.1.0.
+
+`@ToolRisk(value = RiskLevel.UPDATE, action = ToolAction.ADMIN)` wybiera akcję Cedar `admin`; domyślnie `read`, `update`,
+`delete` wynikają z ryzyka, a sprzeczność (`READ_ONLY` z `delete`) zatrzymuje start.
+
+Co zmienia się w odpowiedziach: nieistniejący, niedostępny, przeniesiony do `restricted` i pozbawiony klasyfikacji zasób dają ten sam
+`not_found_or_denied` z tym samym tekstem; brak grupy narzędzia to `access_denied`; awaria systemu w resolverze to
+`upstream_unavailable` (nie odmowa). Adapter, który tłumaczył 404 na własny błąd, powinien w resolverze zwracać `Optional.empty()`.
+
+### 7. Wyniki i wyszukiwanie: `@ResourceRef` w rekordach, `QueryScope`
+
+Narzędzie wyszukujące zwraca rekordy, których komponent z identyfikatorem ma `@ResourceRef`; elementy listy niedozwolone dla
+wywołującego są usuwane po wykonaniu narzędzia (zgłoszenie z `DEF` podlinkowane w wyszukiwaniu `ABC` znika, gdy link
+wirtualnego serwera zawęża do `ABC`):
+
+```java
+public record IssueHit(@ResourceRef(type = "Jira::Issue") String key, String summary) { }
+public record SearchResult(List<IssueHit> hits, int total) { }
+
+@Tool(name = "search_issues", description = "Searches issues.")
+@ToolRisk(RiskLevel.READ_ONLY)
+@ToolTitle("Search issues")
+public SearchResult searchIssues(@ArgumentLimits(maxLength = 500) String jql) {
+    QueryScope scope = policy.queryScope("Jira::Project");                    // ResourcePolicy wstrzyknięte w konstruktorze
+    String forced = QueryScope.restrictJql(scope.jqlProjectClause(), jql);   // project in ("ABC") AND (jql) ORDER BY ...
+    return toResult(jira.search(forced));
+}
+```
+
+`restrictJql` odrzuca JQL z niezamkniętym nawiasem lub cudzysłowem (`IllegalArgumentException` -> `invalid_argument`). Własny kod
+sklejania `project in (...)` zastąp `QueryScope`; identyfikatory są cytowane przez `QueryScope.quote`. Dla Confluence
+`scope.cqlSpaceClause()`, dla OpenSearch `scope.opensearchIndexPatterns()` (pary `p` i `p-*`) i **brak zapytania, gdy
+`scope.grantsNothing()`**. `total` i inne liczniki z systemu nie są poprawiane po filtrowaniu: nie pokazuj ich, jeśli mają być
+zgodne z widoczną listą. Wynik, który nie jest rekordem z oznaczonym komponentem, filtruj przez
+`policy.retainAllowedById("Jira::Issue", items, Item::key)` albo `policy.retainAllowed(items, item -> resolvedResource)`.
+
+### 8. Testy serwera
+
+```java
+static final TestGateway GATEWAY = TestGateway.start("mcp-jira");          // bez zmian
+
+@DynamicPropertySource
+static void gateway(DynamicPropertyRegistry registry) {
+    GATEWAY.serverProperties().forEach((name, value) -> registry.add(name, () -> value));   // teraz także policy.* i manifest.*
+}
+
+McpSyncClient client = ...httpRequestCustomizer(GATEWAY.asGateway(
+        user -> user.groups(List.of("mcp-jira-read")).virtualServer("abc-only", Map.of("jiraProjects", List.of("ABC"))),
+        "Bearer test-jira-pat")).build();
+```
+
+- Wywołanie narzędzia wymaga teraz grupy zgodnej z ryzykiem w przykładowych politykach kontraktów (`mcp-jira-read`,
+  `mcp-jira-write`, `mcp-jira-destructive`, zakres `mcp-jira-proj-ABC`); domyślny token ma `mcp-jira-read`. Testy
+  `DESTRUCTIVE` ustawiają też `mfaAgeSeconds(60)` (reguła `destructive-requires-fresh-mfa` jest w paczkach testowych, nie w
+  produkcyjnej paczce `ws-09`).
+- Test odmowy zasobu: zgłoszenie, które sztuczna Jira oddaje jako przeniesione do projektu z kategorią `Restricted`, daje
+  `not_found_or_denied` (wzór: `ResourcePolicyTest` w `mcp-platform-test`); test wyniku: wyszukiwanie z linkiem zawężonym do jednego
+  projektu zwraca tylko jego zgłoszenia.
+- Paczkę zmienia się w teście: `GATEWAY.main().publish("20261026130000-b2c3d4e")`, zły podpis `publish(rewizja, "policies-....tar.gz.sig-by-overrides-key")`,
+  `offline(true)`.
+- **Test manifestu serwera** (nowy, wzór `ManifestTest` w `mcp-platform-test`): pobierz `/mcp-manifest` z tokenem serwisowym
+  (`GATEWAY.service().mint().headers()`) i sprawdź `ManifestRules.violations(manifest)` pusty, definicje równe wpisom `tools/list` i
+  `risk` narzędzi `DESTRUCTIVE`. Starter robi to samo przy starcie (poza `dev` błąd zatrzymuje serwer), test pilnuje, że nikt tego
+  nie wyłączył.
+
+### 9. Manifest, rejestracja i `DESTRUCTIVE`
+
+`GET /mcp-manifest` i opcjonalny plik (`manifest.output-file: target/mcp-manifest.json`) dają manifest do rejestracji w
+gateway'u (`PUT /admin/v1/registry/servers/{serverId}`). Zamiast generatora w czasie budowy (adnotacje + plugin Maven) manifest
+powstaje przy starcie z tego, co serwer naprawdę publikuje, więc `definitionHash` zawsze zgadza się z `tools/list`.
+
+Narzędzie jest `DESTRUCTIVE` w manifeście wyłącznie przez `@ToolRisk(RiskLevel.DESTRUCTIVE)`. Serwer nie pyta o potwierdzenie
+(gateway, kod TOTP), ale starter pilnuje spójności: ten sam `risk` w manifeście, `destructiveHint: true` w `tools/list`,
+akcja `delete` (lub jawnie `admin`) w Cedar, nazwa z `delete`/`drop`/`purge`/... nie przejdzie jako `UPDATE`. Narzędzie `delete_issue`
+dla dema M3 wygląda tak:
+
+```java
+@Tool(name = "delete_issue", description = "Deletes an issue.")
+@ToolRisk(RiskLevel.DESTRUCTIVE)
+@ToolTitle("Delete issue")
+public DeleteResult deleteIssue(@ArgumentLimits(maxLength = 16, contractPattern = "JiraIssueKey")
+                                @ResourceRef(type = "Jira::Issue") String issueKey) { ... }
+```
+
+### 10. Pozostałe zmiany
+
+- `ToolErrorCode`: usunięte `CONFIRMATION_DECLINED` (kontrakt 3.0.0), dodane `CONFIRMATION_SUPERSEDED`, `CONFIRMATION_CANCELLED`,
+  `CONFIRMATION_BLOCKED`. Serwer nie zwraca żadnego z nich; zmienia się tylko lista, którą akceptuje `ToolErrorMapping`.
+- Audyt: nowe zdarzenie `policy_decision` (odmowa polityki) obok `tool_call`; `resource.id` pomijane, gdy zawiera znak niedozwolony
+  w polu logu (kontrakty 3.0.2).
+- Bean `policyEngine` i `resourcePolicy` nie są punktami rozszerzenia (jak `internalJwtVerifier`): własny bean o tej nazwie
+  zatrzymuje start; wykluczenie `PlatformPolicyAutoConfiguration` też.
+- Zależność natywna: `mcp-cedar-entities` wciąga `cedar-java` (biblioteki dla macOS i Linuksa z glibc). Obraz serwera nie może być
+  oparty o Alpine/musl (`eclipse-temurin:25-jre`, nie `-alpine`).
+- Zbuduj: `JAVA_HOME` na Javę 25, `./mvnw -B verify`.
+
 ## Jak przejść z alpha-11 (albo alpha-12) na 3.0.0-alpha-14
 
 Jedna lista dla serwera i dla template'u; szczegóły i uzasadnienia są w sekcjach "Zmiany w 3.0.0-alpha-12" i
@@ -537,7 +822,7 @@ mówią wprost.
   klienta (`mtls.allowed-client-names`).
 - Zaufanie do JWKS gateway'a: bundle SSL Springa w `internal-jwt.jwks-ssl-bundle`.
 
-## Dopiero w beta i 3.0.0
+## Dopiero w 3.0.0
 
-`@ResourceRef` i `ResourceResolver`, `PolicyEngine` (Cedar, paczki C7), `QueryScope`, generator manifestu C6 i
-`GET /mcp-manifest` (beta); `ResultFilter` (3.0.0). Ten dokument zostanie uzupełniony o ich użycie.
+Dokumentacja końcowa i recenzje; kod z tej listy: `@ResourceRef`, `ResourceResolver`, `PolicyEngine`, `QueryScope`, `ResultFilter`,
+manifest C6 i `GET /mcp-manifest` są w beta-1 (sekcja "Z alpha-14 na beta-1").

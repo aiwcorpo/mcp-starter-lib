@@ -5,8 +5,8 @@ gateway'em: nie loguje użytkowników, nie decyduje o uprawnieniach do narzędzi
 robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadczenie do systemu docelowego,
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
-Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 2.2.5.
-Wersja: **3.0.0-alpha-14** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 3.1.0.
+Wersja: **3.0.0-beta-1** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
 
@@ -16,7 +16,7 @@ Wersja: **3.0.0-alpha-14** (stan i plan w `STATUS.md`, zmiany względem 2.x w `M
 | `pl.aiwcorpo.mcp:mcp-platform-starter` | auto-konfiguracja (niżej) i transport MCP (streamable HTTP) | `compile` |
 | `pl.aiwcorpo.mcp:mcp-platform-test` | `TestGateway`: JWKS i wewnętrzne JWT z kluczy testowych kontraktów | **tylko `test`** |
 
-Wersja linii `mcp-platform` (3.x) nie ma związku z wersją kontraktów (2.x).
+Wersja linii `mcp-platform` (3.x) nie ma związku z wersją kontraktów (BOM zarządza obiema).
 
 ## Co robi starter na każdym żądaniu
 
@@ -25,7 +25,9 @@ gateway --mTLS + JWT C2 + X-MCP-Credential--> SecurityHeadersFilter
   -> CorrelationIdFilter     X-Request-Id -> MDC requestId
   -> InternalJwtFilter       certyfikat gateway'a, JWT C2 związany z żądaniem -> CallerContext; inaczej 401
   -> CredentialHeaderFilter  X-MCP-Credential(-Type) -> CredentialContext; nagłówki ukryte przed resztą
-  -> transport MCP -> AuditingToolCallback -> [ToolCallInterceptor...] -> @Tool serwera
+  -> transport MCP -> AuditingToolCallback -> walidacja argumentów -> ResourcePolicy (Cedar: call, zasoby z @ResourceRef)
+                                           -> [ToolCallInterceptor...] -> @Tool serwera -> filtr wyniku
+  GET /mcp-manifest (JWT C2, bez tool) -> manifest C6 zbudowany ze startu serwera
 ```
 
 **`InternalJwtFilter` (C2).** Przepuszcza tylko żądanie z certyfikatem klienta o CN `mcp-gateway` i poprawnym
@@ -36,7 +38,7 @@ obecny dokładnie przy `tools/call` i równy `params.name`, wariant serwisowy ty
 `server/discover`, `tools/list`, `ping` i `GET /mcp-manifest`. Klucze z identyfikatorem `test-*` i opublikowane klucze testowe
 (rozpoznawane po SPKI z `mcp-contracts/security/published-test-keys.json`) są odrzucane, chyba że
 `allow-test-keys=true` w profilu `dev`. Kolejność kontroli i powody odrzucenia są jak w referencyjnym
-odbiorcy kontraktów, więc wszystkie 51 wektorów `test-vectors/jwt` dają ten sam wynik i powód.
+odbiorcy kontraktów, więc wszystkie 57 wektorów `test-vectors/jwt` dają ten sam wynik i powód.
 
 Odrzucenie: `401 {"error":"unauthenticated",...}` z `WWW-Authenticate: Bearer`, powód tylko w logu
 (`event=internal_jwt_rejected reason=<kod>`). Niedostępny JWKS albo Redis: `503 upstream_unavailable`, nigdy
@@ -52,7 +54,7 @@ znormalizowaną przez kontener i tylko wtedy, gdy surowe URI jest dokładnie tą
 **`CallerContext`.** Zweryfikowane claimy bieżącego żądania: `subject`, `username`, `groups`, `client`,
 `virtualServer`, `virtualServerScopes` (`vsc`), `tool`, `requestId`, `policyRevision`, `mfaAgeSeconds`.
 `CallerContext.current()` na wątku żądania. Pola odpowiadają wejściu entity buildera Cedar z
-`mcp-cedar-entities`, z którego skorzysta silnik polityk (beta).
+`mcp-cedar-entities`; z niego `ResourcePolicy` buduje wywołującego (`vs` i `vsc` z JWT trafiają do `context.vsScopes`).
 
 **`CredentialContext` (C3).** Poświadczenie do systemu docelowego, wstrzyknięte przez gateway:
 
@@ -132,6 +134,29 @@ aiwcorpo.mcp.platform:
     allowed-client-names: [mcp-gateway]
   credential:
     connect-url: http://localhost:18090/connections?system={system}   # wymagane, do credential_required
+  policy:                                                 # paczka polityk C7, ta sama co w gateway'u (niżej, "Zasoby i polityki")
+    main:
+      url: https://policies.internal/policies/main/latest.json   # wymagane; https poza dev
+      key-id: policies-main-2026                          # wymagane; test-* tylko z allow-test-keys w dev
+      public-key-file: /etc/mcp/policies-main.pub.pem     # albo public-key: <PEM>; Ed25519, SPKI
+      refresh-interval: 30s                               # domyślnie 30 s
+      minimum-revision: 20261001000000-0000000            # opcjonalnie, najniższa kiedykolwiek przyjęta (CC-066)
+    overrides:                                            # opcjonalna paczka awaryjna, osobny klucz i adres
+      url: https://policies.internal/policies/overrides/latest.json
+      key-id: policies-overrides-2026
+      public-key-file: /etc/mcp/policies-overrides.pub.pem
+      refresh-interval: 5s                                # domyślnie 5 s
+    state-dir: /var/lib/mcp/policy-state                  # wymagane poza dev: ochrona przed cofnięciem po restarcie
+    allow-test-keys: false                                # true tylko w profilu dev
+    startup-timeout: 30s                                  # tyle czeka start na pierwszą paczkę (bez niej serwer nie wstaje)
+    overrides-grace: 2m                                   # po restarcie czekamy na paczkę awaryjną, która była aktywna
+    ssl-bundle: mcp-internal-ca                           # opcjonalnie, zaufanie do repozytorium paczek
+  manifest:                                               # manifest C6 (GET /mcp-manifest)
+    version: 1.4.0                                        # wymagane, SemVer serwera
+    internal-url: https://mcp-jira.internal:8443/mcp      # wymagane, https; informacyjny (gateway ma własną konfigurację)
+    credential-required: true
+    accepted-credential-types: [user-oauth, user-secret]  # wymagane przy credential-required
+    output-file: target/mcp-manifest.json                 # opcjonalnie: zapis manifestu przy starcie (rejestracja w gateway'u)
   tools.unclassified: fail                                # fail | destructive
   tools.max-result-size: 1MB                              # większy wynik narzędzia = internal_error
 spring.ai.mcp.server.name: mcp-jira                      # protocol/type/endpoint ustawia starter
@@ -152,6 +177,14 @@ Serwer nie wstaje, gdy:
   klienta jako `internal_error`, bo nie przechodzi walidacji C10;
 - `unauthenticated-paths` zawiera coś spoza `/actuator/health`, `/actuator/health/liveness`,
   `/actuator/health/readiness`; protokół MCP jest inny niż `STREAMABLE`;
+- brakuje `policy.main.url`, `key-id` albo klucza publicznego (`public-key` albo `public-key-file`), `manifest.version`
+  (SemVer), `manifest.internal-url` (https) albo `manifest.accepted-credential-types` przy `credential-required`; poza
+  `dev` brakuje `policy.state-dir`, adres paczki nie jest https albo `policy.allow-test-keys=true`;
+- nie da się załadować pierwszej paczki polityk w `startup-timeout` (brak repozytorium, zły podpis, klucz `test-*` bez
+  `allow-test-keys`, rewizja niższa od zapisanej w `state-dir`): serwer bez podpisanej polityki nie wstaje;
+- manifest serwera nie przechodzi schematu `server-manifest.schema.json` ani reguł mcp-manifest (poza `dev`, gdzie jest
+  ostrzeżenie `event=manifest_rejected_by_rules`): np. narzędzie bez `@ToolTitle`, schemat bez limitu, `confirmation_code`
+  w argumentach;
 - zostały ustawienia 2.x (`guard.*`, `pat-header-prefix`);
 - w profilu `dev` `server.address` nie jest adresem pętli zwrotnej (`127.0.0.1`, `::1`, `localhost`); starter
   ustawia w `dev` domyślnie `127.0.0.1`, więc odmowa dotyczy jawnego nadpisania (np. `SERVER_ADDRESS=0.0.0.0`).
@@ -234,7 +267,7 @@ poniżej `$JAVA_HOME/bin/java` (`JAVA_HOME` wskazuje JDK 25).
             <dependency>
                 <groupId>pl.aiwcorpo.mcp</groupId>
                 <artifactId>mcp-platform-bom</artifactId>
-                <version>3.0.0-alpha-14</version>
+                <version>3.0.0-beta-1</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -259,7 +292,11 @@ poniżej `$JAVA_HOME/bin/java` (`JAVA_HOME` wskazuje JDK 25).
 ```
 
 `src/main/resources/application.yml`: konfiguracja z sekcji "Konfiguracja" powyżej (do uruchomienia w `dev` wystarczą
-`server-id`, `internal-jwt.jwks-uri` i `credential.connect-url`; reszta ma wartości domyślne albo jest w `dev` zdejmowana).
+`server-id`, `internal-jwt.jwks-uri`, `credential.connect-url`, `policy.main.*` (adres, `key-id`, klucz publiczny; w `dev` z
+`policy.allow-test-keys: true`) i `manifest.*` (wersja, `internal-url`, typy poświadczeń); reszta ma wartości domyślne albo jest w
+`dev` zdejmowana). Serwer bez paczki polityk nie wstaje, więc przy pierwszym starcie lokalnym potrzebne jest repozytorium
+paczek (`mcp-platform-dev`: `http://127.0.0.1:18747/policies/main/latest.json`, klucz `test-policies-main-dev` z
+`mcp-policies/keys/dev/`); w testach robi to `TestGateway`.
 
 `src/main/java/jira/JiraServer.java`. Narzędzia rejestruje się beanem `ToolCallbackProvider`; sam bean z metodami `@Tool`
 nie wystarcza (Spring AI odpowiada wtedy `Unknown tool`):
@@ -274,6 +311,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
 import pl.aiwcorpo.mcp.platform.guard.ToolRisk;
+import pl.aiwcorpo.mcp.platform.guard.ToolTitle;
 import pl.aiwcorpo.mcp.platform.input.ArgumentLimits;
 import pl.aiwcorpo.mcp.platform.input.SchemaLimitedToolCallbacks;
 import pl.aiwcorpo.mcp.platform.security.CredentialContext;
@@ -294,6 +332,7 @@ public class JiraServer {
 
         @Tool(name = "get_issue", description = "Returns an issue by key.")
         @ToolRisk(RiskLevel.READ_ONLY)
+        @ToolTitle("Get issue")
         public String getIssue(@ArgumentLimits(maxLength = 16, contractPattern = "JiraIssueKey") String issueKey) {
             // A real adapter calls Jira with: .headers(CredentialContext.require("jira")::applyTo)
             return issueKey + " read with a " + CredentialContext.require("jira").scheme().wireName() + " credential";
@@ -458,12 +497,148 @@ customizer (`PlatformMcpServerCustomizer`, `@Primary`), który:
 Serwer dopisuje swoje ustawienia zwykłym beanem `McpSyncServerCustomizer` **bez `@Primary`**. Customizer z
 `@Primary` zatrzymuje start (`ForeignPrimaryCustomizerCheck`, na definicjach beanów, z komunikatem co zrobić).
 
-## Identyfikatory zasobów a `mcp-cedar-entities`
+## Zasoby i polityki
 
-BOM zarządza wersją `mcp-cedar-entities` (ta sama co `mcp-contracts`), żeby gateway, starter i serwer używały
-jednej. Serwery **nie** powinny go dodawać tylko po wzorce identyfikatorów: wciąga natywne `cedar-java` (uber jar
-z bibliotekami dla macOS i Linuksa). Wzorce dostają przez `@ArgumentLimits(contractPattern = ...)`. Moduł będzie
-potrzebny dopiero przy `@ResourceRef` i silniku polityk (beta), po stronie startera.
+Serwer ocenia politykę na **zasobach**, tak jak gateway ocenia ją na narzędziach: z tej samej podpisanej paczki Cedar
+(C7), tym samym entity builderem (`mcp-cedar-entities`), z tymi samymi wektorami kontraktów. Nic z tego nie wymaga kodu
+w narzędziu poza deklaracją, co jest zasobem.
+
+### Paczka polityk
+
+`PolicyEngine` pobiera `latest.json` (z `ETag`, co 30 s) i pliki, które wskazuje (limit 16 MiB, bez przekierowań, nazwy
+plików tylko obok `latest.json`), a `PolicyStore` z `mcp-policy-bundle` sprawdza podpis Ed25519 (klucz `test-*` i
+opublikowane klucze testowe tylko z `allow-test-keys` w `dev`), ścisłą kolejność rewizji, schemat równy schematowi
+kontraktów, polityki względem schematu i `static.json`, po czym podmienia migawkę atomowo. Rewizja niższa albo równa
+załadowanej jest odrzucana, także po restarcie (`state-dir`, CC-066).
+
+- Błąd (zły podpis, starsza rewizja, uszkodzona zawartość, repozytorium niedostępne) **zostawia poprzednią paczkę**:
+  log `event=policy_bundle_rejected channel=main revision=... reason=bad_signature` albo `event=policy_bundle_fetch_failed`,
+  licznik `mcp_server_policy_bundle_rejected_total{channel,reason}` albo `mcp_server_policy_bundle_fetch_failed_total{channel,reason}`.
+  Odrzucona rewizja jest zgłaszana raz, nie przy każdym pobraniu.
+- Start bez paczki kończy się odmową. Bez żadnej polityki serwer nie podejmuje decyzji: wywołanie wymagające decyzji
+  dostaje `upstream_unavailable`, nigdy zgody.
+- Paczka awaryjna (`overrides`, osobny klucz, tylko `forbid`, co 5 s) jest ładowana na wierzch. Jeśli przed restartem była
+  aktywna, a po restarcie jej nie ma, wywołania są odmawiane do `overrides-grace` (potem serwer działa i loguje
+  `event=policy_overrides_missing_alarm`): reguły wyłącznika nie znikają po cichu.
+- `prv` w tokenie nowszy niż załadowana rewizja wymusza natychmiastowe pobranie (najwyżej co 2 s), więc serwer nie odmawia
+  tego, co gateway właśnie dopuścił. `prv` `00000000000000-0000000` (gateway bez paczki) niczego nie wymusza.
+
+### `@ResourceRef` i `ResourceResolver`
+
+```java
+@Component
+class JiraIssueResolver implements ResourceResolver<JiraIssue> {
+    public String resourceType() { return "Jira::Issue"; }
+
+    public Optional<JiraIssue> fetch(String key) {          // wołanie Jiry poświadczeniem wywołującego
+        return jira.issue(key);                              // pusty dla 404 i 403; wyjątek dla awarii systemu
+    }
+
+    public ResolvedResource describe(JiraIssue issue) {      // kanoniczny id, rodzic i klasyfikacja Z SYSTEMU
+        return ResolvedResource.of("Jira::Issue", issue.key(), Map.of("key", issue.key()))
+                .withParent(ResolvedResource.of("Jira::Project", issue.projectKey(),
+                        Map.of("key", issue.projectKey(), "category", issue.projectCategory())));   // "" gdy brak
+    }
+}
+
+@Tool(name = "get_issue", description = "Returns an issue by key.")
+@ToolRisk(RiskLevel.READ_ONLY)
+@ToolTitle("Get issue")
+public IssueView getIssue(@ArgumentLimits(maxLength = 16, contractPattern = "JiraIssueKey")
+                          @ResourceRef(type = "Jira::Issue") String issueKey) { ... }
+```
+
+Przed uruchomieniem narzędzia starter, w tej kolejności i z jednej paczki:
+
+1. `Action::"call"` na narzędziu, zbudowane z claimów tokenu (`sub`, `grp`, `azp`, `mfa`, `vs` i `vsc`) i argumentów tak
+   jak robi to gateway. Odmowa: `access_denied`, zdarzenie `policy_decision` w audycie.
+2. Dla argumentów z `@ResourceRef` **każda wartość każdego argumentu** (każdy element listy; źródło i cel transferu) jest
+   rozwiązywana przez resolver i oceniana akcją narzędzia (`read`, `update`, `delete`, `admin`) na zasobie takim, jakim
+   zwraca go system. Pierwsza wartość, której nie da się rozwiązać albo której polityka nie dopuszcza, kończy wywołanie
+   `not_found_or_denied`: ta sama odpowiedź, co dla zasobu, którego nie ma. Narzędzie, które deklaruje `@ResourceRef` i nie
+   dostało żadnej wartości, jest odrzucane (puste `resourceRefs` na bramce nie oznaczają "wszystko wolno").
+
+Zasady resolvera (GitLab: `attrs.ancestorClassifications`, mapa `<ścieżka grupy-przodka> -> topics` dla projektu i dla jego grupy-rodzica,
+CC-129; opis w `MIGRATION-3.0.md`): id i rodzic w wyniku pochodzą z systemu, nigdy z argumentu (zgłoszenie `ABC-123` przeniesione do `HR` ma
+projekt `HR`, a jego klasyfikacja `restricted` zamyka dostęp mimo argumentu, który wygląda na `ABC`); `Jira::Project.category`
+(`""` gdy brak), `Confluence::Space.labels` i `OpenSearch::Index.tags` są obowiązkowe, a zasób bez nich nie jest budowany, więc
+jest odrzucany, tak samo jak jego element w wyniku; `fetch` zwraca pusty `Optional` dla "nie ma" i "nie wolno użytkownikowi"
+(404 i 403), a **rzuca** dla awarii systemu: to `upstream_unavailable` (albo `credential_required`), nie odmowa. Wynik
+`fetch` i `describe` jest w pamięci podręcznej na czas wywołania; narzędzie czyta go z
+`ResourceContext.current().orElseThrow().fetched("Jira::Issue", key, JiraIssue.class)` bez ponownego wołania systemu.
+Resolver jest beanem; przy jednym resolverze typu `@ResourceRef(type = ...)` wystarcza, przy kilku `resolver = X.class`.
+Brak resolvera, zły typ albo niejednoznaczność zatrzymują start.
+
+Typy dozwolone w `type`: `ResourceType` kontraktów (`Jira::Project`, `Jira::Issue`, `Confluence::Space`, `Confluence::Page`,
+`GitLab::Group`, `GitLab::Project`, `OpenSearch::Index`, `ServiceDesk::Queue`, `ServiceDesk::Ticket`). Parametr to `String`,
+liczba całkowita albo lista lub tablica takich wartości. Akcja Cedar narzędzia to `@ToolRisk(action = ...)`; domyślnie `read`
+dla `READ_ONLY`, `update` dla `UPDATE`, `delete` dla `DESTRUCTIVE`, `ToolAction.ADMIN` ustawia się jawnie. Akcja sprzeczna z
+ryzykiem zatrzymuje start.
+
+### Wyniki: `ResultFilter`
+
+Rekord zwracany z narzędzia (bezpośrednio, w liście albo zagnieżdżony) z komponentem `@ResourceRef` jest sprawdzany po
+wykonaniu narzędzia: każdy element **listy** o takim komponencie jest rozwiązywany tym samym resolverem i oceniany, a
+niedozwolone elementy są usuwane z wyniku (to nie błąd wywołania). Rekord, który nie jest elementem listy, a nie jest
+dozwolony, kończy wywołanie `not_found_or_denied`. Liczników z systemu (`total`) starter nie poprawia.
+
+```java
+public record IssueHit(@ResourceRef(type = "Jira::Issue") String key, String summary) {}
+public record SearchResult(List<IssueHit> hits, int total) {}
+```
+
+Dla wyniku innego kształtu wstrzyknij `ResourcePolicy` (implementuje `ResultFilter`):
+`retainAllowed(items, item -> resolvedResource)` albo `retainAllowedById("Jira::Issue", items, Item::key)`;
+`allows(resource)` i `require(resource)` dla zasobu, który narzędzie znajduje samo (projekt, w którym tworzy zgłoszenie). Elementy,
+których nie da się rozwiązać, zbudować ani ocenić, są usuwane. Metody działają tylko w trakcie wywołania narzędzia.
+
+### `QueryScope`: ograniczenie zapytania
+
+`policy.queryScope("Jira::Project")` (typy z zakresami: `Jira::Project`, `Confluence::Space`, `Confluence::Page`,
+`GitLab::Group`, `OpenSearch::Index`, `ServiceDesk::Queue`) daje to, do czego wolno ograniczyć wyszukiwanie: `linkIds()`
+(zawężenie linku wirtualnego serwera z `vsc` tokenu, zawsze do zapytania) i `grantedIds()` (zakresy z grup w paczce). Gotowe
+elementy:
+
+```java
+QueryScope scope = policy.queryScope("Jira::Project");
+String jql = QueryScope.restrictJql(scope.jqlProjectClause(), userJql);
+// project in ("ABC", "DEF") AND (<userJql>) ORDER BY ...   (bez linku: userJql bez zmian)
+```
+
+- identyfikatory są cytowane (`QueryScope.quote`), nigdy sklejane; `restrictJql` odmawia zapytania z niezamkniętym nawiasem
+  albo cudzysłowem (inaczej `a = 1) OR (project = HR` zamykałoby grupę z ograniczeniem) i zostawia `ORDER BY` na końcu;
+- `cqlSpaceClause()` dla Confluence; `opensearchIndexPatterns()` daje pary `p` i `p-*` (nigdy `p*`), a dla linku i grup
+  tylko część wspólną;
+- gdzie system sam stosuje prawa użytkownika (Jira, Confluence, GitLab z jego tokenem), wystarczy zawężenie linku; gdzie nie
+  (OpenSearch, konto serwisowe) zapytanie ogranicza się do `grantedIds()`, a **puste `grantsNothing()` znaczy: nie wykonuj
+  zapytania**, nigdy "bez filtra". Ograniczenie zapytania nie zastępuje filtrowania wyniku.
+
+### Audyt
+
+Odmowa polityki to zdarzenie `policy_decision` (C8) z `decision: deny`, `reason` (`policy_forbid` albo `not_granted`), typem i
+id zasobu, jeśli id jest bezpieczne w logu, `policyRevision` paczki serwera i `errorCode`; zwykłe wywołanie to `tool_call`.
+
+## Manifest C6 i narzędzia DESTRUCTIVE
+
+`GET /mcp-manifest` (JWT C2 w wariancie użytkownika albo serwisowym, bez `tool`) zwraca manifest serwera. Starter buduje go
+po starcie z **tego, co serwer naprawdę publikuje**: definicje to dokładnie wpisy `tools/list` (więc `definitionHash` jest
+hashem tego, co widzi klient i co gateway przypina), `risk`, `action` i `resourceRefs` pochodzą z adnotacji, reszta z
+`aiwcorpo.mcp.platform.manifest.*`. Przed udostępnieniem manifest przechodzi `server-manifest.schema.json` i reguły
+`mcp-manifest` (zamknięty i ograniczony `inputSchema`, `title`, istniejące argumenty `resourceRefs`, hash), czyli kontrole
+gateway'a przy rejestracji; manifest, który by ich nie przeszedł, zatrzymuje serwer (w `dev` ostrzeżenie). Z `output-file`
+trafia też do pliku dla kroku rejestracji.
+
+Wymagania wobec narzędzia: `@ToolTitle` (CC-115, niepusty, do 100 znaków, bez znaków ukrytych), `@ToolRisk`, schemat bez
+`$ref`, typów łączonych i map (`SchemaLimitedToolCallbacks` generuje taki), argument nie nazywa się `confirmation_code`
+(gateway dodaje go do `tools/list` i zdejmuje przed wywołaniem). Wzorzec `OpenSearchIndexPrefix` z kontraktów ma
+alternację na wierzchu (`^a$|^b$`); starter publikuje go jako `^(?:a|b)$`, żeby przeszedł regułę zakotwiczenia.
+
+**DESTRUCTIVE.** Serwer nie pyta o potwierdzenie (robi to gateway, kodem TOTP, C11); musi tylko prawdziwie powiedzieć, że
+narzędzie potwierdzenia wymaga. Jedyny mechanizm to `@ToolRisk(RiskLevel.DESTRUCTIVE)`, a starter pilnuje, żeby ta
+deklaracja trafiła wszędzie tak samo: `risk` w manifeście, `destructiveHint: true` i `readOnlyHint: false` w `tools/list`, pole
+`risk` w audycie, akcja `delete` (albo jawnie `admin`) w Cedar. Nazwa z `delete`, `drop`, `remove`, `purge`, `truncate`,
+`destroy`, `wipe`, `erase` nie przejdzie jako `READ_ONLY` ani `UPDATE`. Przy generowaniu manifestu `risk` i podpowiedzi
+`tools/list` są porównywane i rozjazd zatrzymuje serwer.
 
 ## Testy serwera bez gateway'a
 
@@ -626,6 +801,17 @@ Pojedyncze tokeny do testów odrzuceń: `GATEWAY.user().tool("get_issue").mint()
 `GATEWAY.service().mint()`, z ustawieniami `audience`, `lifetime`, `requestId`, `jti`, ... Wynik narzędzia
 zwracającego `String` przychodzi w `TextContent` jako napis JSON (w cudzysłowach), stąd `contains` w przykładzie.
 
+**Paczka polityk w testach.** `GATEWAY.serverProperties()` zawiera już `policy.*` (adresy, klucz `test-policy-bundle` i
+`allow-test-keys`) i `manifest.*`. `TestGateway` serwuje kanał główny i awaryjny z podpisanych paczek z `test-vectors/bundles/files`
+kontraktów: `GATEWAY.main().publish("20261026130000-b2c3d4e")` (przykładowe polityki kontraktów, grupy `mcp-jira-read`,
+`mcp-jira-write`, `mcp-jira-destructive`, `mcp-jira-proj-ABC`, ...; ta paczka jest domyślna), `publish(rewizja, plikPodpisu)`
+(np. `policies-...tar.gz.sig-by-overrides-key` = zły podpis), `offline(true)`, `GATEWAY.overrides().publish("20261026121500-d4e5f60")`
+(przed `serverProperties()`, żeby serwer go pobierał). Test zasobu przez prawdziwy transport z resolverem na sztucznym systemie:
+`mcp-platform-test/src/test/java/pl/aiwcorpo/mcp/platform/test/resource/ResourcePolicyTest.java`, manifest:
+`ManifestTest`. `PolicyEngine.create(policy, null, meterRegistry)` pozwala sprawdzić samo pobieranie paczek (`PolicyEngineTest`).
+Przykładowe polityki wymagają w tokenie testowym grupy (`user.groups(List.of("mcp-jira-read"))`), a dla `DESTRUCTIVE` także
+`mfaAgeSeconds(60)` (reguła `destructive-requires-fresh-mfa` jest w paczkach testowych kontraktów, nie w produkcyjnej).
+
 ## Budowa
 
 ```bash
@@ -639,7 +825,7 @@ Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera t
 ```xml
 <dependency>
   <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-  <version>3.0.0-alpha-14</version><type>pom</type><scope>import</scope>
+  <version>3.0.0-beta-1</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
 

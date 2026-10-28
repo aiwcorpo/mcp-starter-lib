@@ -133,7 +133,7 @@ class ManifestTest {
         assertThat(tool(manifest, "find_issues").get("resourceRefs")).isEmpty();
         List<String> types = new ArrayList<>();
         manifest.get("resourceTypes").forEach(type -> types.add(type.get("type").asString()));
-        assertThat(types).containsExactlyInAnyOrder("Jira::Project", "Jira::Issue");
+        assertThat(types).containsExactlyInAnyOrder("Jira::Project", "Jira::Issue", "GitLab::Project", "GitLab::Group");
     }
 
     @Test

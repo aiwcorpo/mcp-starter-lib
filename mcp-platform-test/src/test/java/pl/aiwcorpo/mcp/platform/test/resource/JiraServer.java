@@ -56,6 +56,11 @@ public class JiraServer {
     }
 
     @Bean
+    GitLabProjectResolver gitLabProjectResolver() {
+        return new GitLabProjectResolver();
+    }
+
+    @Bean
     JiraProjectResolver jiraProjectResolver() {
         return new JiraProjectResolver();
     }
@@ -117,6 +122,52 @@ public class JiraServer {
         }
     }
 
+    /**
+     * A GitLab project as the fake GitLab returns it: the topics of the project and of every group above it, by group path
+     * (CC-129). A project in a restricted group is protected through the ancestors, however deep it is.
+     */
+    public record GitLabProject(String path, Map<String, List<String>> ancestorTopics) {
+    }
+
+    /** Resolves a project path and gives the policy the topics of all ancestor groups. */
+    public static final class GitLabProjectResolver implements ResourceResolver<GitLabProject> {
+
+        private final Map<String, GitLabProject> projects = Map.of(
+                "team-a/sub/app", new GitLabProject("team-a/sub/app", Map.of("team-a", List.of(), "team-a/sub", List.of())),
+                "hr/payroll/app", new GitLabProject("hr/payroll/app", Map.of("hr", List.of("Restricted"), "hr/payroll", List.of())),
+                "solo/app", new GitLabProject("solo/app", Map.of("solo", List.of())),
+                "bad/app", new GitLabProject("bad/app", null));
+
+        @Override
+        public String resourceType() {
+            return "GitLab::Project";
+        }
+
+        @Override
+        public Optional<GitLabProject> fetch(String path) {
+            return Optional.ofNullable(projects.get(path));
+        }
+
+        @Override
+        public ResolvedResource describe(GitLabProject project) {
+            String group = project.path().substring(0, project.path().lastIndexOf('/'));
+            Map<String, Object> projectAttributes = new java.util.LinkedHashMap<>();
+            projectAttributes.put("path", project.path());
+            projectAttributes.put("classification", List.of());
+            Map<String, Object> groupAttributes = new java.util.LinkedHashMap<>();
+            groupAttributes.put("path", group);
+            groupAttributes.put("classification", List.of());
+            if (project.ancestorTopics() != null) {
+                projectAttributes.put("ancestorClassifications", project.ancestorTopics());
+                Map<String, List<String>> aboveGroup = new java.util.LinkedHashMap<>(project.ancestorTopics());
+                aboveGroup.remove(group);
+                groupAttributes.put("ancestorClassifications", aboveGroup);
+            }
+            return ResolvedResource.of("GitLab::Project", project.path(), projectAttributes)
+                    .withParent(ResolvedResource.of("GitLab::Group", group, groupAttributes));
+        }
+    }
+
     public record IssueView(@ResourceRef(type = "Jira::Issue") String key, String project) {
     }
 
@@ -143,6 +194,14 @@ public class JiraServer {
             JiraIssue issue = ResourceContext.current().orElseThrow().fetched("Jira::Issue", issueKey, JiraIssue.class)
                     .orElseThrow();
             return new IssueView(issue.key(), issue.projectKey());
+        }
+
+        @Tool(name = "get_project", description = "Returns a GitLab project by path.")
+        @ToolRisk(RiskLevel.READ_ONLY)
+        @ToolTitle("Get project")
+        public String getProject(@ArgumentLimits(maxLength = 1024, contractPattern = "GitLabProjectPath")
+                                 @ResourceRef(type = "GitLab::Project") String path) {
+            return "project " + path;
         }
 
         @Tool(name = "count_issues", description = "Counts the given issues.")
