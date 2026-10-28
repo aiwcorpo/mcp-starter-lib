@@ -43,8 +43,8 @@ import tools.jackson.databind.node.ObjectNode;
  * <p>Before the tool runs, in this order, all from the one bundle the gateway decides with:
  * <ol>
  *   <li>{@code Action::"call"} on the tool, built from the token's claims and the arguments exactly like the gateway
- *       does it; a refusal is {@code access_denied}. The token's {@code prv} newer than the loaded bundle makes the
- *       server pull first.</li>
+ *       does it; a refusal is {@code access_denied}. The token's {@code prv} newer than the loaded bundle asks the
+ *       engine to pull in the background; this call is decided with the bundle loaded now.</li>
  *   <li>For a tool with {@link ResourceRef} arguments: <b>every value of every such argument</b> (each element of a list;
  *       the source and the target of a transfer) is resolved by its {@link ResourceResolver} and evaluated with the
  *       tool's action on the resource as the system reports it, with its parent. The first value that is not allowed, or
@@ -292,11 +292,11 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         } catch (JacksonException ex) {
             throw new IllegalStateException("the result of tool '" + toolName + "' has resource components but is not JSON");
         }
-        JsonNode filtered = apply(shape, root, toolName);
+        JsonNode filtered = apply(shape, root, toolName, new int[1]);
         return JSON.writeValueAsString(filtered);
     }
 
-    private JsonNode apply(ResourceRefs.ResultShape shape, JsonNode node, String tool) {
+    private JsonNode apply(ResourceRefs.ResultShape shape, JsonNode node, String tool, int[] checked) {
         if (node == null || node.isNull()) {
             return node;
         }
@@ -305,8 +305,11 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
                 if (!(node instanceof ArrayNode array)) {
                     throw unexpected(tool, "a list was expected");
                 }
-                if (array.size() > maxFilteredElements) {
-                    throw new ToolResultRejectedException("The result of tool '" + tool + "' has " + array.size()
+                if (many.element() instanceof ResourceRefs.Element) {
+                    checked[0] += array.size();
+                }
+                if (checked[0] > maxFilteredElements) {
+                    throw new ToolResultRejectedException("The result of tool '" + tool + "' has " + checked[0]
                             + " elements to check against the policy, over the limit of " + maxFilteredElements
                             + " (aiwcorpo.mcp.platform.tools.max-filtered-elements); return a page of results.");
                 }
@@ -315,7 +318,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
                 int dropped = 0;
                 for (JsonNode element : array) {
                     if (keeps(many.element(), element)) {
-                        kept.add(apply(many.element(), element, tool));
+                        kept.add(apply(many.element(), element, tool, checked));
                     } else {
                         dropped++;
                         auditDropped(many.element(), element, dropped);
@@ -335,7 +338,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
                             ToolErrorCode.NOT_FOUND_OR_DENIED.code());
                     throw notFound();
                 }
-                return apply(element.inside(), node, tool);
+                return apply(element.inside(), node, tool, checked);
             }
             case ResourceRefs.Fields fields -> {
                 requireKnownFields(fields, node, tool);
@@ -343,7 +346,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
                 for (Map.Entry<String, ResourceRefs.ResultShape> field : fields.fields().entrySet()) {
                     JsonNode value = object.get(field.getKey());
                     if (value != null && !value.isNull()) {
-                        object.set(field.getKey(), apply(field.getValue(), value, tool));
+                        object.set(field.getKey(), apply(field.getValue(), value, tool, checked));
                     }
                 }
                 return node;

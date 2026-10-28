@@ -45,6 +45,11 @@ class AuditingToolCallbackTest {
         }
 
         @Override
+        public boolean resultWithoutResources() {
+            return true;
+        }
+
+        @Override
         public ToolDefinition getToolDefinition() {
             return DefaultToolDefinition.builder().name(name).description("test").inputSchema("{\"type\":\"object\",\"properties\":{\"issueKey\":{\"type\":\"string\",\"maxLength\":64}},\"additionalProperties\":false}").build();
         }

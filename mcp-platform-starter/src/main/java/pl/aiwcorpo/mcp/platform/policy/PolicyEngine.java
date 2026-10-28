@@ -309,8 +309,18 @@ public final class PolicyEngine implements AutoCloseable {
         ScheduledExecutorService pool = scheduler;
         if (pool != null && now - last >= HINT_PULL_MIN_NANOS && lastHintPull.compareAndSet(last, now)
                 && !locks.get(Channel.MAIN).isLocked()) {
-            // Not on the request thread: a repository that answers slowly must not hold up the calls.
-            pool.execute(() -> refresh(Channel.MAIN));
+            // Not on the request thread: a repository that answers slowly must not hold up the calls. tryLock, not lock: when
+            // the scheduled pull of the channel has just taken it, this one is not needed and must not wait on it.
+            pool.execute(() -> {
+                ReentrantLock lock = locks.get(Channel.MAIN);
+                if (lock.tryLock()) {
+                    try {
+                        pull(Channel.MAIN);
+                    } finally {
+                        lock.unlock();
+                    }
+                }
+            });
         }
     }
 

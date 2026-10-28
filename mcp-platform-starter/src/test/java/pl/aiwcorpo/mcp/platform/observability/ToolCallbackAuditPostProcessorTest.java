@@ -72,6 +72,11 @@ class ToolCallbackAuditPostProcessorTest {
             return "Test tool";
         }
 
+        @Override
+        public boolean resultWithoutResources() {
+            return true;
+        }
+
             @Override
             public ToolDefinition getToolDefinition() {
                 return DefaultToolDefinition.builder().name(name).description("d").inputSchema("{\"type\":\"object\",\"properties\":{\"issueKey\":{\"type\":\"string\",\"maxLength\":64}},\"additionalProperties\":false}").build();

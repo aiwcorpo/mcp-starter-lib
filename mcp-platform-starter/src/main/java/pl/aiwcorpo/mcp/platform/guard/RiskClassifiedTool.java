@@ -18,6 +18,15 @@ public interface RiskClassifiedTool {
         return java.util.List.of();
     }
 
+    /**
+     * Whether the result holds no resources the policy must filter, or the callback filters them itself: the declaration a
+     * {@code @Tool} method makes with {@code @ResultWithoutResources}. A hand-written callback has no method whose result type the
+     * platform could read, so without this declaration it stops the server (it would return unfiltered resources).
+     */
+    default boolean resultWithoutResources() {
+        return false;
+    }
+
     /** The title shown by clients; required, a tool without one stops the server. */
     default String title() {
         return null;

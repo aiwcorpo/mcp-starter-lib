@@ -197,6 +197,11 @@ class ForeignToolPolicyCheckTest {
         }
 
         @Override
+        public boolean resultWithoutResources() {
+            return true;
+        }
+
+        @Override
         public ToolDefinition getToolDefinition() {
             return DefaultToolDefinition.builder().name("open_tool").description("d")
                     .inputSchema("{\"type\":\"object\",\"properties\":{\"q\":{\"type\":\"string\"}}}").build();

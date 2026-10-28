@@ -38,6 +38,26 @@ class ResourceRefsTest {
         public List<Update> updates;
     }
 
+    public static class Base {
+        public List<Update> inherited;
+    }
+
+    public static class Derived extends Base {
+        public String name;
+    }
+
+    public sealed interface Change permits Rename, Other {
+    }
+
+    public record Rename(@ResourceRef(type = "Jira::Issue") String key) implements Change {
+    }
+
+    public record Other(String note) implements Change {
+    }
+
+    public record Deep(Optional<List<List<List<List<List<List<List<List<Update>>>>>>>>> tooDeep) {
+    }
+
     public static class Pojo {
         public List<Hit> hits;
     }
@@ -61,6 +81,34 @@ class ResourceRefsTest {
 
         public String text() {
             return null;
+        }
+
+        @ResultWithoutResources
+        public String declaredText() {
+            return null;
+        }
+
+        public List<String> texts() {
+            return null;
+        }
+
+        public Optional<String> optionalText() {
+            return null;
+        }
+
+        public byte[] bytes() {
+            return null;
+        }
+
+        public CharSequence chars() {
+            return null;
+        }
+
+        public Map<Hit, Long> keyed() {
+            return null;
+        }
+
+        public void nothing() {
         }
 
         public Plain plain() {
@@ -130,6 +178,18 @@ class ResourceRefsTest {
             return null;
         }
 
+        public String updateInherited(Derived argument) {
+            return null;
+        }
+
+        public String updatePolymorphic(Change change) {
+            return null;
+        }
+
+        public String updateTooDeep(Deep deep) {
+            return null;
+        }
+
         public String twoResolvers(@ResourceRef(type = "Jira::Issue", resolver = String.class) String a,
                                    @ResourceRef(type = "Jira::Issue", resolver = Integer.class) String b) {
             return null;
@@ -172,14 +232,14 @@ class ResourceRefsTest {
 
     @Test
     void resultsWithoutResourcesNeedNothing() {
-        for (String name : new String[] {"text", "plain", "scalarMap"}) {
+        for (String name : new String[] {"declaredText", "plain", "scalarMap", "nothing"}) {
             assertThat(ResourceRefs.result(method(name))).as(name).isInstanceOf(ResourceRefs.None.class);
         }
     }
 
     @Test
     void aResultThePlatformCannotSeeIntoStopsTheServerUnlessDeclared() {
-        for (String name : new String[] {"map", "pojo", "json", "anything"}) {
+        for (String name : new String[] {"map", "pojo", "json", "anything", "text", "texts", "optionalText", "bytes", "chars", "keyed"}) {
             assertThatThrownBy(() -> ResourceRefs.result(method(name))).as(name).isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("@ResultWithoutResources").hasMessageContaining(name);
         }
@@ -202,10 +262,16 @@ class ResourceRefsTest {
     @Test
     void aResourceRefBelowTheTopLevelOfAnArgumentStopsTheServer() {
         for (String name : new String[] {"updateIssue", "updateMany", "updateOptional", "updateMap", "updateNestedOptionalInRecord",
-                "updatePojo"}) {
+                "updatePojo", "updateInherited", "updatePolymorphic"}) {
             assertThatThrownBy(() -> ResourceRefs.arguments(method(name))).as(name).isInstanceOf(IllegalStateException.class)
                     .hasMessageContaining("not on a component of an argument record");
         }
+    }
+
+    @Test
+    void anArgumentNestedTooDeepToBeCheckedStopsTheServerInsteadOfPassingSilently() {
+        assertThatThrownBy(() -> ResourceRefs.arguments(method("updateTooDeep"))).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("nested deeper");
     }
 
     @Test

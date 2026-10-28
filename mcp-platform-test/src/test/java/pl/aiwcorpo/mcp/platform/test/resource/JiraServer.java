@@ -231,6 +231,7 @@ public class JiraServer {
         @Tool(name = "get_project", description = "Returns a GitLab project by path.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Get project")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String getProject(@ArgumentLimits(maxLength = 1024, contractPattern = "GitLabProjectPath")
                                  @ResourceRef(type = "GitLab::Project") String path) {
             return "project " + path;
@@ -239,6 +240,7 @@ public class JiraServer {
         @Tool(name = "count_issues", description = "Counts the given issues.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Count issues")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String countIssues(@ArgumentLimits(maxItems = 5, maxLength = 16, contractPattern = "JiraIssueKey")
                                   @ResourceRef(type = "Jira::Issue") List<String> issueKeys) {
             return "counted " + issueKeys.size();
@@ -265,6 +267,7 @@ public class JiraServer {
         @Tool(name = "find_issues", description = "Finds issues; the server builds the query and limits it to the allowed projects.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Find issues")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String findIssues(IssueFilter filter) {
             QueryScope scope = policy.queryScope("Jira::Project");
             return scope.jql(Set.of("status", "text", "created"))
@@ -276,6 +279,7 @@ public class JiraServer {
         @Tool(name = "pick_issues", description = "Returns the keys of the given issues the caller may see.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Pick issues")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public List<String> pickIssues(@ArgumentLimits(maxItems = 8, maxLength = 16) List<String> candidates) {
             return policy.retainAllowedById("Jira::Issue", candidates, key -> key);
         }
@@ -293,6 +297,7 @@ public class JiraServer {
         @Tool(name = "delete_issue", description = "Deletes an issue.")
         @ToolRisk(RiskLevel.DESTRUCTIVE)
         @ToolTitle("Delete issue")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String deleteIssue(@ArgumentLimits(maxLength = 16, contractPattern = "JiraIssueKey")
                                   @ResourceRef(type = "Jira::Issue") String issueKey) {
             return "deleted " + issueKey;

@@ -44,6 +44,7 @@ public class ProbeServer {
         @Tool(name = "lookup_issue", description = "Looks an issue up by key.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Test tool")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String lookupIssue(
                 @ToolParam(description = "Issue key, e.g. ABC-1")
                 @ArgumentLimits(maxLength = 16, pattern = "^[A-Z]+-[0-9]+$") String issueKey,
@@ -112,6 +113,7 @@ public class ProbeServer {
         @Tool(name = "probe_credential", description = "Returns the credential this call can see.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Test tool")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String probeCredential() {
             BackendCredential credential = CredentialContext.require("jira");
             return credential.type().wireName() + " " + credential.authorizationValue();
@@ -120,6 +122,7 @@ public class ProbeServer {
         @Tool(name = "probe_caller", description = "Returns the verified caller.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Test tool")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String probeCaller() {
             CallerContext caller = CallerContext.current().orElseThrow();
             return caller.username() + "|" + caller.tool() + "|" + caller.requestId();
@@ -128,6 +131,7 @@ public class ProbeServer {
         @Tool(name = "get_issue", description = "Reads an issue from the backend with the caller's credential.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Test tool")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String getIssue(String issueKey) {
             return backend.get().uri("/rest/api/2/issue/{key}", issueKey)
                     .headers(CredentialContext.require("jira")::applyTo)
@@ -137,6 +141,7 @@ public class ProbeServer {
         @Tool(name = "get_issue_fields", description = "Reads an issue and parses it into fields.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Test tool")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String getIssueFields(String issueKey) {
             java.util.Map<?, ?> fields = backend.get().uri("/rest/api/2/issue/{key}", issueKey)
                     .headers(CredentialContext.require("jira")::applyTo)
@@ -147,6 +152,7 @@ public class ProbeServer {
         @Tool(name = "leaky_tool", description = "Puts the credential into an exception message, as careless code would.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Test tool")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String leakyTool() {
             throw new InvalidToolArgumentException("token " + CredentialContext.require("jira").value() + " rejected");
         }

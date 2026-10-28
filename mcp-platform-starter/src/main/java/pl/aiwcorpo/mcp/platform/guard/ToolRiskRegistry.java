@@ -91,10 +91,19 @@ public class ToolRiskRegistry {
         String title = titleOf(callback);
         noConfirmationCode(callback);
         Optional<ObjectNode> outputSchema = ToolMethods.methodOf(callback).flatMap(ToolOutputSchemas::forMethod);
+        Optional<Method> method = ToolMethods.methodOf(callback);
+        if (method.isEmpty() && callback instanceof org.springframework.ai.tool.method.MethodToolCallback) {
+            throw new IllegalStateException("Tool '" + name + "': the @Tool method behind the callback cannot be read (Spring AI "
+                    + "changed MethodToolCallback?), so its @ResourceRef arguments and result shape cannot be checked");
+        }
+        if (method.isEmpty() && !(callback instanceof RiskClassifiedTool classified && classified.resultWithoutResources())) {
+            throw new IllegalStateException("Tool '" + name + "' is not a @Tool method, so the platform cannot see whether its "
+                    + "result holds resources it must filter. A callback that returns none, or filters them itself, declares "
+                    + "it: RiskClassifiedTool#resultWithoutResources() returns true.");
+        }
         List<ResourceBinding> refs = callback instanceof RiskClassifiedTool classified ? classified.resourceRefs()
-                : ToolMethods.methodOf(callback).map(ResourceRefs::arguments).orElse(List.of());
-        ResourceRefs.ResultShape shape = ToolMethods.methodOf(callback).map(ResourceRefs::result)
-                .orElse(new ResourceRefs.None());
+                : method.map(ResourceRefs::arguments).orElse(List.of());
+        ResourceRefs.ResultShape shape = method.map(ResourceRefs::result).orElse(new ResourceRefs.None());
         Registered previous = registered.putIfAbsent(name,
                 new Registered(callback, risk, action, title, refs, shape, outputSchema));
         if (previous != null && previous.tool() != callback) {

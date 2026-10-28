@@ -45,6 +45,11 @@ class RegisteredToolsCheckTest {
         }
 
         @Override
+        public boolean resultWithoutResources() {
+            return true;
+        }
+
+        @Override
         public ToolDefinition getToolDefinition() {
             return DefaultToolDefinition.builder().name(name).description("d").inputSchema("{\"type\":\"object\",\"properties\":{\"issueKey\":{\"type\":\"string\"}},\"additionalProperties\":false}").build();
         }

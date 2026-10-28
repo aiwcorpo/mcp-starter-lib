@@ -75,7 +75,8 @@ public final class ResourceRefs {
      */
     private static void nestedRefs(ResolvableType type, String where, int depth) {
         if (depth > MAX_DEPTH) {
-            return;
+            throw new IllegalStateException(where + ": the argument type is nested deeper than " + MAX_DEPTH + " levels, so the "
+                    + "platform cannot tell whether it holds a @ResourceRef (which would be ignored). Flatten the argument.");
         }
         Class<?> raw = type.resolve(Object.class);
         if (isScalar(raw)) {
@@ -96,15 +97,22 @@ public final class ResourceRefs {
                 }
                 nestedRefs(ResolvableType.forType(component.getGenericType(), type), where + "." + component.getName(), depth + 1);
             }
-        } else if (!raw.isInterface() && raw != Object.class && !raw.getName().startsWith("java.")) {
-            for (java.lang.reflect.Field field : raw.getDeclaredFields()) {
-                if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
-                    continue;
+        } else if (raw.isSealed() && raw.getPermittedSubclasses() != null) {
+            // Polymorphic arguments (Jackson subtypes): every permitted subtype is a possible argument.
+            for (Class<?> permitted : raw.getPermittedSubclasses()) {
+                nestedRefs(ResolvableType.forClass(permitted), where + "<" + permitted.getSimpleName() + ">", depth + 1);
+            }
+        } else if (raw != Object.class && !raw.getName().startsWith("java.")) {
+            for (Class<?> level = raw; level != null && level != Object.class; level = level.getSuperclass()) {
+                for (java.lang.reflect.Field field : level.getDeclaredFields()) {
+                    if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
+                        continue;
+                    }
+                    if (field.getAnnotation(ResourceRef.class) != null) {
+                        throw nestedRef(where + "." + field.getName());
+                    }
+                    nestedRefs(ResolvableType.forField(field, type), where + "." + field.getName(), depth + 1);
                 }
-                if (field.getAnnotation(ResourceRef.class) != null) {
-                    throw nestedRef(where + "." + field.getName());
-                }
-                nestedRefs(ResolvableType.forField(field, type), where + "." + field.getName(), depth + 1);
             }
         }
     }
@@ -128,7 +136,7 @@ public final class ResourceRefs {
      */
     public static ResultShape result(Method method) {
         Walk walk = new Walk();
-        ResultShape shape = walk.shape(ResolvableType.forMethodReturnType(method), "result", 0);
+        ResultShape shape = walk.shape(ResolvableType.forMethodReturnType(method), "result", 0, true);
         String where = "@Tool " + method.getName();
         if (!walk.unsupported.isEmpty()) {
             throw new IllegalStateException(where + ": the result cannot be filtered by the platform: " + walk.unsupported.get(0)
@@ -199,28 +207,35 @@ public final class ResourceRefs {
         final List<String> opaque = new ArrayList<>();
         final List<String> unsupported = new ArrayList<>();
 
-        ResultShape shape(ResolvableType type, String where, int depth) {
+        ResultShape shape(ResolvableType type, String where, int depth, boolean top) {
             if (depth > MAX_DEPTH) {
                 opaque.add(where + " is nested deeper than " + MAX_DEPTH + " levels");
                 return new None();
             }
             Class<?> raw = type.resolve(Object.class);
+            if (top && (CharSequence.class.isAssignableFrom(raw) || raw == byte[].class)) {
+                // Text or bytes as the result itself may be a finished JSON (a search response passed on as it came):
+                // the platform cannot see the resources in it, so the tool says it holds none or filters them itself.
+                opaque.add(where + " is " + (raw == byte[].class ? "a byte array" : "text") + " (it may be a ready JSON)");
+                return new None();
+            }
             if (raw == void.class || raw == Void.class || isScalar(raw)) {
                 return new None();
             }
             if (Optional.class.isAssignableFrom(raw)) {
-                return shape(type.getGeneric(0), where, depth + 1);
+                return shape(type.getGeneric(0), where, depth + 1, top);
             }
             if (raw.isArray()) {
-                return many(shape(type.getComponentType(), where + "[]", depth + 1));
+                return many(shape(type.getComponentType(), where + "[]", depth + 1, top));
             }
             if (Collection.class.isAssignableFrom(raw)) {
-                return many(shape(type.asCollection().getGeneric(0), where + "[]", depth + 1));
+                return many(shape(type.asCollection().getGeneric(0), where + "[]", depth + 1, top));
             }
             if (Map.class.isAssignableFrom(raw)) {
-                ResultShape inner = shape(type.asMap().getGeneric(1), where + "{}", depth + 1);
-                if (!(inner instanceof None) || containsOpaque(type.asMap().getGeneric(1))) {
-                    opaque.add(where + " is a Map (its values are not followed)");
+                ResultShape inner = shape(type.asMap().getGeneric(1), where + "{}", depth + 1, false);
+                if (!(inner instanceof None) || containsOpaque(type.asMap().getGeneric(1))
+                        || !isScalar(type.asMap().getGeneric(0).resolve(Object.class))) {
+                    opaque.add(where + " is a Map (its keys and values are not followed)");
                 }
                 return new None();
             }
@@ -251,7 +266,7 @@ public final class ResourceRefs {
                     continue;
                 }
                 ResultShape inner = shape(ResolvableType.forType(component.getGenericType(), type),
-                        where + "." + component.getName(), depth + 1);
+                        where + "." + component.getName(), depth + 1, false);
                 if (!(inner instanceof None)) {
                     fields.put(component.getName(), inner);
                 }

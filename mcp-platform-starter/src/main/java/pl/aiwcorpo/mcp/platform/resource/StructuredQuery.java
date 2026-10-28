@@ -26,8 +26,11 @@ import pl.aiwcorpo.mcp.platform.text.TextHygiene;
  *
  * <p>Only conjunction ({@code AND}) exists, so no precedence can be reinterpreted. A free text search is
  * {@link Operator#CONTAINS} on {@code text} (or {@code summary}, {@code title}, ...); the characters Lucene gives a meaning
- * to ({@code * ? " ~ ( ) [ ] { } + - ! ^ : / & | \}) are escaped, so the value is literal text and not a wildcard or
- * proximity expression. Values may not contain the characters the text hygiene of the contracts forbids (CC-121).
+ * to ({@code * ? " ~ ( ) [ ] { } + - ! ^ : / & | \}) are escaped, so the value cannot be a wildcard, a phrase or a proximity
+ * expression. The words {@code AND}, {@code OR} and {@code NOT} inside a text value are still read by the search engine as
+ * operators between terms of that one search; they stay inside the field and cannot widen the scope. There is no way to express
+ * {@code IS EMPTY}, {@code membersOf(...)} or date functions: add them to the tool as dedicated, fixed filters if needed, not by
+ * letting a value carry them. Values may not contain the characters the text hygiene of the contracts forbids (CC-121).
  */
 public final class StructuredQuery {
 

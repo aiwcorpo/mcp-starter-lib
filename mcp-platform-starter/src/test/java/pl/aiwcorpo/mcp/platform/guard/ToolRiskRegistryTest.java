@@ -20,6 +20,7 @@ class ToolRiskRegistryTest {
         @Tool(name = "get_issue", description = "d")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Get issue")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String get(@ArgumentLimits(maxLength = 10) String key) {
             return key;
         }
@@ -27,6 +28,7 @@ class ToolRiskRegistryTest {
         @Tool(name = "rename_issue", description = "d")
         @ToolRisk(RiskLevel.UPDATE)
         @ToolTitle("Rename issue")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String rename(@ArgumentLimits(maxLength = 10) String key) {
             return key;
         }
@@ -34,6 +36,7 @@ class ToolRiskRegistryTest {
         @Tool(name = "erase_issue", description = "d")
         @ToolRisk(RiskLevel.DESTRUCTIVE)
         @ToolTitle("Erase issue")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String erase(@ArgumentLimits(maxLength = 10) String key) {
             return key;
         }
@@ -41,6 +44,7 @@ class ToolRiskRegistryTest {
         @Tool(name = "grant_access", description = "d")
         @ToolRisk(value = RiskLevel.DESTRUCTIVE, action = ToolAction.ADMIN)
         @ToolTitle("Grant access")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String grant(@ArgumentLimits(maxLength = 10) String key) {
             return key;
         }
@@ -58,6 +62,7 @@ class ToolRiskRegistryTest {
         @Tool(name = "get_issue", description = "d")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle(" ")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String blank() {
             return "";
         }
@@ -65,6 +70,7 @@ class ToolRiskRegistryTest {
         @Tool(name = "get_page", description = "d")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Get\u200b page")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String hidden() {
             return "";
         }
@@ -72,6 +78,7 @@ class ToolRiskRegistryTest {
         @Tool(name = "get_space", description = "d")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Get space\n")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String lineBreak() {
             return "";
         }
@@ -81,6 +88,7 @@ class ToolRiskRegistryTest {
         @Tool(name = "list_things", description = "d")
         @ToolRisk(value = RiskLevel.READ_ONLY, action = ToolAction.DELETE)
         @ToolTitle("List things")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String list() {
             return "";
         }
@@ -90,6 +98,7 @@ class ToolRiskRegistryTest {
         @Tool(name = "purge_things", description = "d")
         @ToolRisk(value = RiskLevel.DESTRUCTIVE, action = ToolAction.READ)
         @ToolTitle("Purge things")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String purge() {
             return "";
         }
@@ -99,6 +108,7 @@ class ToolRiskRegistryTest {
         @Tool(name = "rename_things", description = "d")
         @ToolRisk(value = RiskLevel.UPDATE, action = ToolAction.DELETE)
         @ToolTitle("Rename things")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String rename() {
             return "";
         }
@@ -108,6 +118,7 @@ class ToolRiskRegistryTest {
         @Tool(name = "close_issue", description = "d")
         @ToolRisk(RiskLevel.UPDATE)
         @ToolTitle("Close issue")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String close(@ArgumentLimits(maxLength = 6) String confirmation_code) {
             return "";
         }
@@ -198,6 +209,11 @@ class ToolRiskRegistryTest {
         @Override
         public ToolAction action() {
             return action == null ? ToolAction.AUTO : action;
+        }
+
+        @Override
+        public boolean resultWithoutResources() {
+            return true;
         }
 
         @Override

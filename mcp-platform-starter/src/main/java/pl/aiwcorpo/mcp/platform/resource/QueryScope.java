@@ -184,6 +184,58 @@ public final class QueryScope {
     }
 
     /**
+     * As {@link #cqlSpaceClause()} with the spaces the caller's groups grant, for a service account that sees more than the
+     * user may. Only for {@code Confluence::Space}: the grants of pages are subtree roots that CQL cannot express as a space list.
+     *
+     * @throws IllegalStateException when the caller is granted no space, or the scope is for pages
+     */
+    public Optional<String> cqlSpaceClause(boolean includeGrants) {
+        requireType("Confluence::Space", "Confluence::Page");
+        if (!includeGrants) {
+            return cqlSpaceClause();
+        }
+        if (!"Confluence::Space".equals(resourceType)) {
+            throw new IllegalStateException("the grants of pages are page subtrees: ask for the Confluence::Space scope to limit by grants");
+        }
+        if (grantedIds.isEmpty()) {
+            throw new IllegalStateException("the caller is granted no space: do not run the query (grantsNothing())");
+        }
+        String granted = inList("space", grantedIds);
+        return Optional.of(linkIds.map(ids -> inList("space", ids) + " AND " + granted).orElse(granted));
+    }
+
+    /** As {@link #cql(Set)}, with the granted spaces too (see {@link #cqlSpaceClause(boolean)}). */
+    public StructuredQuery.Builder cql(Set<String> fields, boolean includeGrants) {
+        return new StructuredQuery.Builder(fields, cqlSpaceClause(includeGrants));
+    }
+
+    /**
+     * Refuses a query that aggregates over an <em>alias</em> or a data stream: a pattern {@code p-*} also matches an alias named
+     * {@code p-...} that may point at indexes outside the scope, and filtering the hits cannot correct counts and aggregates.
+     * Call it with the body of {@code GET _resolve/index/<expression>} ({@link #opensearchIndexExpression()}) before an
+     * aggregating search, {@code _count} or a search that reports {@code hits.total}.
+     *
+     * @param resolveIndexResponse the JSON answer of OpenSearch: {@code {"indices":[...],"aliases":[...],"data_streams":[...]}}
+     * @throws pl.aiwcorpo.mcp.platform.error.SanitizedToolException {@code access_denied} when the answer lists an alias or a
+     *         data stream; {@link IllegalArgumentException} when it is not that JSON
+     */
+    public static void requireNoAliases(String resolveIndexResponse) {
+        tools.jackson.databind.JsonNode answer;
+        try {
+            answer = tools.jackson.databind.json.JsonMapper.builder().build().readTree(resolveIndexResponse);
+        } catch (RuntimeException ex) {
+            throw new IllegalArgumentException("the _resolve/index answer is not JSON");
+        }
+        if (!answer.isObject() || !answer.path("indices").isArray()) {
+            throw new IllegalArgumentException("the _resolve/index answer has no indices list");
+        }
+        if (answer.path("aliases").size() > 0 || answer.path("data_streams").size() > 0) {
+            throw new pl.aiwcorpo.mcp.platform.error.SanitizedToolException(new pl.aiwcorpo.mcp.platform.error.McpErrorMapper.SafeError(
+                    "access_denied", "Counts and aggregations are not available over aliases or data streams."));
+        }
+    }
+
+    /**
      * A JQL query built from structured filters, limited to the projects of the link (and, with {@code includeGrants},
      * to the granted ones): see {@link StructuredQuery}. The query is never taken from the model as text.
      *
