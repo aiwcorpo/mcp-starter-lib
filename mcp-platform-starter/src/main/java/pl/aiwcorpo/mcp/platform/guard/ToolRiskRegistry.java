@@ -1,6 +1,7 @@
 package pl.aiwcorpo.mcp.platform.guard;
 
 import java.lang.reflect.Method;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -10,6 +11,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.core.annotation.AnnotatedElementUtils;
+import pl.aiwcorpo.mcp.platform.resource.ResourceBinding;
+import pl.aiwcorpo.mcp.platform.resource.ResourceRefs;
 import pl.aiwcorpo.mcp.platform.text.TextHygiene;
 import pl.aiwcorpo.mcp.platform.text.ToolOutputSchemas;
 import tools.jackson.core.JacksonException;
@@ -61,6 +64,7 @@ public class ToolRiskRegistry {
     private final Map<String, Registered> registered = new ConcurrentHashMap<>();
 
     private record Registered(ToolCallback tool, RiskLevel risk, ToolAction action, String title,
+                              List<ResourceBinding> resourceRefs, ResourceRefs.ResultShape resultShape,
                               Optional<ObjectNode> outputSchema) {
     }
 
@@ -86,7 +90,12 @@ public class ToolRiskRegistry {
         String title = titleOf(callback);
         noConfirmationCode(callback);
         Optional<ObjectNode> outputSchema = ToolMethods.methodOf(callback).flatMap(ToolOutputSchemas::forMethod);
-        Registered previous = registered.putIfAbsent(name, new Registered(callback, risk, action, title, outputSchema));
+        List<ResourceBinding> refs = callback instanceof RiskClassifiedTool classified ? classified.resourceRefs()
+                : ToolMethods.methodOf(callback).map(ResourceRefs::arguments).orElse(List.of());
+        ResourceRefs.ResultShape shape = ToolMethods.methodOf(callback).map(ResourceRefs::result)
+                .orElse(new ResourceRefs.None());
+        Registered previous = registered.putIfAbsent(name,
+                new Registered(callback, risk, action, title, refs, shape, outputSchema));
         if (previous != null && previous.tool() != callback) {
             throw new IllegalStateException("Two tools are named '" + name + "'. Tool names must be unique.");
         }
@@ -100,6 +109,23 @@ public class ToolRiskRegistry {
     public Optional<RiskLevel> riskOf(String toolName) {
         Registered entry = registered.get(toolName);
         return entry == null ? Optional.empty() : Optional.of(entry.risk());
+    }
+
+    /** The {@code resourceRefs} of a registered tool (C6): its arguments marked with {@code @ResourceRef}. */
+    public List<ResourceBinding> resourceRefsOf(String toolName) {
+        Registered entry = registered.get(toolName);
+        return entry == null ? List.of() : entry.resourceRefs();
+    }
+
+    /** Which parts of the result of a registered tool are resources the platform filters. */
+    public ResourceRefs.ResultShape resultShapeOf(String toolName) {
+        Registered entry = registered.get(toolName);
+        return entry == null ? new ResourceRefs.None() : entry.resultShape();
+    }
+
+    /** Names of the registered tools, sorted. */
+    public List<String> toolNames() {
+        return registered.keySet().stream().sorted().toList();
     }
 
     /** The Cedar action of a registered tool (C6 {@code action}). */

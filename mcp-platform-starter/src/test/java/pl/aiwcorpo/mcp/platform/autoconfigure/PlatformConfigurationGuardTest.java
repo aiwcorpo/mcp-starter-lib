@@ -16,6 +16,13 @@ class PlatformConfigurationGuardTest {
         props.setServerId("mcp-jira");
         props.getInternalJwt().setJwksUri("https://mcp-gateway.internal:8443/.well-known/jwks.json");
         props.getCredential().setConnectUrl("http://localhost:18090/connections?system={system}");
+        props.getPolicy().getMain().setUrl("https://policies.internal/policies/main/latest.json");
+        props.getPolicy().getMain().setKeyId("policies-main-2026");
+        props.getPolicy().getMain().setPublicKeyFile("/etc/mcp/policies-main.pub.pem");
+        props.getPolicy().setStateDir("/var/lib/mcp/policy-state");
+        props.getManifest().setVersion("1.0.0");
+        props.getManifest().setInternalUrl("https://mcp-jira.internal:8443/mcp");
+        props.getManifest().setAcceptedCredentialTypes(java.util.List.of("user-secret"));
         return props;
     }
 
@@ -36,6 +43,57 @@ class PlatformConfigurationGuardTest {
     @Test
     void theProductionDefaultsStart() {
         assertThatCode(() -> check(valid(), production())).doesNotThrowAnyException();
+    }
+
+    @Test
+    void thePolicyBundleMustBeConfiguredAndIsHardenedOutsideDev() {
+        McpPlatformProperties none = valid();
+        none.getPolicy().getMain().setUrl(null);
+        none.getPolicy().getMain().setKeyId(null);
+        none.getPolicy().getMain().setPublicKeyFile(null);
+        assertThatThrownBy(() -> check(none, production())).hasMessageContaining("policy.main.url")
+                .hasMessageContaining("policy.main.key-id").hasMessageContaining("policy.main.public-key");
+
+        McpPlatformProperties http = valid();
+        http.getPolicy().getMain().setUrl("http://policies.internal/latest.json");
+        assertThatThrownBy(() -> check(http, production())).hasMessageContaining("policy.main.url must be an absolute https");
+
+        McpPlatformProperties noState = valid();
+        noState.getPolicy().setStateDir(null);
+        assertThatThrownBy(() -> check(noState, production())).hasMessageContaining("policy.state-dir is required");
+
+        McpPlatformProperties testKeys = valid();
+        testKeys.getPolicy().setAllowTestKeys(true);
+        assertThatThrownBy(() -> check(testKeys, production())).hasMessageContaining("policy.allow-test-keys");
+
+        McpPlatformProperties overridesWithoutKey = valid();
+        overridesWithoutKey.getPolicy().getOverrides().setUrl("https://policies.internal/overrides/latest.json");
+        assertThatThrownBy(() -> check(overridesWithoutKey, production())).hasMessageContaining("policy.overrides.key-id");
+    }
+
+    @Test
+    void devMayUseHttpTestKeysAndNoStateDirectory() {
+        McpPlatformProperties props = valid();
+        props.getPolicy().getMain().setUrl("http://127.0.0.1:18747/policies/main/latest.json");
+        props.getPolicy().setStateDir(null);
+        props.getPolicy().setAllowTestKeys(true);
+        props.getInternalJwt().setJwksUri("http://127.0.0.1:9/jwks.json");
+        props.getMtls().setRequired(false);
+
+        assertThatCode(() -> check(props, profiles("dev"))).doesNotThrowAnyException();
+    }
+
+    @Test
+    void theManifestDataMustBeSet() {
+        McpPlatformProperties props = valid();
+        props.getManifest().setVersion("1.0");
+        props.getManifest().setInternalUrl("http://mcp-jira.internal/mcp");
+        props.getManifest().setAcceptedCredentialTypes(java.util.List.of("password"));
+
+        assertThatThrownBy(() -> check(props, production())).hasMessageContaining("manifest.version")
+                .hasMessageContaining("manifest.internal-url").hasMessageContaining("'password'");
+        props.getManifest().setAcceptedCredentialTypes(java.util.List.of());
+        assertThatThrownBy(() -> check(props, production())).hasMessageContaining("accepted-credential-types must list");
     }
 
     @Test

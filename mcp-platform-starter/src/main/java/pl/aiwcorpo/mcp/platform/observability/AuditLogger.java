@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import pl.aiwcorpo.mcp.platform.auth.CallerContext;
 import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
+import pl.aiwcorpo.mcp.platform.text.TextHygiene;
 import tools.jackson.core.json.JsonFactory;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -73,6 +74,44 @@ public class AuditLogger {
         event.put("errorCode", errorCode);
         event.put("latencyMs", Math.max(0, latencyMs));
         event.put("argsLength", Math.max(0, argsLength));
+        write(event);
+    }
+
+    /**
+     * {@code event: policy_decision} for a denial made on this server: the resource or tool the policy refused (C8,
+     * {@code server-resource-denied}). Allowed calls are covered by {@code tool_call}.
+     *
+     * @param resourceType Cedar type of the resource, or {@code null} for a decision on the tool itself
+     * @param resourceId   canonical id, or {@code null}; left out when it contains characters C8 does not allow in a log field
+     * @param parent       {@code <Namespace>::<Type>::<id>} of the parent, or {@code null}
+     * @param reason       {@code policy_forbid} (the policy denied) or {@code not_granted} (not resolved, no resource)
+     * @param revision     revision of the bundle that decided
+     */
+    public void policyDenied(CallerContext caller, String tool, RiskLevel risk, String resourceType, String resourceId,
+                             String parent, String reason, String revision, String errorCode) {
+        Map<String, Object> event = base("policy_decision", caller);
+        event.put("server", componentId);
+        event.put("tool", tool);
+        if (risk != null) {
+            event.put("risk", risk.name());
+        }
+        if (resourceType != null && resourceId != null && !resourceId.isEmpty() && resourceId.length() <= 512
+                && TextHygiene.firstProblem(resourceId, true) == null) {
+            Map<String, Object> resource = new LinkedHashMap<>();
+            resource.put("type", resourceType);
+            resource.put("id", resourceId);
+            if (parent != null && parent.length() <= 600 && TextHygiene.firstProblem(parent, true) == null) {
+                resource.put("parent", parent);
+            }
+            event.put("resource", resource);
+        }
+        event.put("decision", "deny");
+        event.put("reason", reason);
+        if (revision != null) {
+            event.put("policyRevision", revision);
+        }
+        event.put("outcome", "denied");
+        event.put("errorCode", errorCode);
         write(event);
     }
 

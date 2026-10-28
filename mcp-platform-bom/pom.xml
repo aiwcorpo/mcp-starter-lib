@@ -21,7 +21,7 @@
 
     <properties>
         <spring-ai.version>2.0.0</spring-ai.version>
-        <mcp-contracts.version>3.0.1</mcp-contracts.version>
+        <mcp-contracts.version>3.0.2</mcp-contracts.version>
     </properties>
 
     <dependencyManagement>
@@ -49,6 +49,16 @@
             <dependency>
                 <groupId>pl.aiwcorpo.mcp</groupId>
                 <artifactId>mcp-cedar-entities</artifactId>
+                <version>${mcp-contracts.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>pl.aiwcorpo.mcp</groupId>
+                <artifactId>mcp-policy-bundle</artifactId>
+                <version>${mcp-contracts.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>pl.aiwcorpo.mcp</groupId>
+                <artifactId>mcp-manifest</artifactId>
                 <version>${mcp-contracts.version}</version>
             </dependency>
             <!-- Test keys and vectors. Never outside <scope>test</scope>. -->

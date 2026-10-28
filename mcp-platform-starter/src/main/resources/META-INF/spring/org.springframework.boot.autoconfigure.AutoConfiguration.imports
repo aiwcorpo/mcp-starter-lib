@@ -3,3 +3,5 @@ pl.aiwcorpo.mcp.platform.auth.PlatformAuthAutoConfiguration
 pl.aiwcorpo.mcp.platform.observability.PlatformObservabilityAutoConfiguration
 pl.aiwcorpo.mcp.platform.error.PlatformErrorAutoConfiguration
 pl.aiwcorpo.mcp.platform.server.PlatformMcpServerAutoConfiguration
+pl.aiwcorpo.mcp.platform.policy.PlatformPolicyAutoConfiguration
+pl.aiwcorpo.mcp.platform.manifest.PlatformManifestAutoConfiguration

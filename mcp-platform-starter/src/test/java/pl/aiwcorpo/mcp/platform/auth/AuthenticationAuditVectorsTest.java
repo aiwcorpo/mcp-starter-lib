@@ -29,22 +29,14 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * The {@code audit-events} vectors of mcp-contracts 3.0.1 against the schema the starter validates its own events with,
+ * The {@code audit-events} vectors of mcp-contracts 3.0.2 against the schema the starter validates its own events with,
  * and what the starter emits for every reason of {@code authentication} that concerns a receiver of the internal JWT
  * (CC-071, CC-120).
  */
 class AuthenticationAuditVectorsTest {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
-    private static final int EXPECTED_VECTORS = 78;
-
-    /**
-     * Files that the 3.0.1 test-vectors jar carries but the v3.0.1 tag does not (the jar was staged from a build directory
-     * that still held vectors removed in 3.0.0): they contradict the released rules, for example a gateway that emits
-     * replay_store_unavailable (CC-125).
-     */
-    private static final Set<String> STALE_IN_JAR = Set.of("gateway-authentication-denied-replay-store-unavailable.json",
-            "gateway-confirmation-preview-not-viewed.json");
+    private static final int EXPECTED_VECTORS = 96;
 
     /** The reasons CC-120 gives errorCode upstream_unavailable, written out so the test does not use the starter's own predicate. */
     private static final Set<String> UPSTREAM_UNAVAILABLE = Set.of("jwks_unavailable", "replay_store_unavailable");
@@ -61,9 +53,6 @@ class AuthenticationAuditVectorsTest {
                 .getResources("classpath*:mcp-contracts/test-vectors/audit-events/*.json");
         List<Vector> vectors = new ArrayList<>();
         for (Resource resource : resources) {
-            if (STALE_IN_JAR.contains(resource.getFilename())) {
-                continue;
-            }
             try (InputStream in = resource.getInputStream()) {
                 vectors.add(new Vector(resource.getFilename(), JSON.readTree(in)));
             }

@@ -12,7 +12,7 @@ import pl.aiwcorpo.mcp.platform.server.ForeignPrimaryCustomizerCheck;
 
 /**
  * Refuses to start when the beans that guard the server are not defined at all:
- * the configuration guard, the internal JWT verifier and filter, the audit post-processor and the MCP server
+ * the configuration guard, the internal JWT verifier and filter, the audit post-processor, the policy engine and the resource checks, and the MCP server
  * customizer (without it the SDK validates the input itself, before the audit wrapper, and the audit and error
  * contracts do not hold). They are missing when
  * their auto-configurations are excluded, which {@code @SpringBootApplication(exclude = ...)} does without a property
@@ -29,7 +29,8 @@ public class PlatformPresenceCheck implements ApplicationContextInitializer<Conf
     /** Public for {@code DevProfileGuardAssertions}, which checks the same list in the server's own test context. */
     public static final List<String> REQUIRED_BEANS = List.of(ForeignToolPolicyCheck.CONFIGURATION_GUARD_BEAN,
             ForeignToolPolicyCheck.JWT_VERIFIER_BEAN, ForeignToolPolicyCheck.JWT_FILTER_BEAN,
-            ForeignToolPolicyCheck.AUDIT_POST_PROCESSOR_BEAN, ForeignPrimaryCustomizerCheck.STARTER_BEAN);
+            ForeignToolPolicyCheck.AUDIT_POST_PROCESSOR_BEAN, ForeignToolPolicyCheck.POLICY_ENGINE_BEAN,
+            ForeignToolPolicyCheck.RESOURCE_POLICY_BEAN, ForeignPrimaryCustomizerCheck.STARTER_BEAN);
 
     @Override
     public void initialize(ConfigurableApplicationContext context) {

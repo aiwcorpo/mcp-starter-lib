@@ -1,7 +1,9 @@
 package pl.aiwcorpo.mcp.platform.observability;
 
 import java.nio.charset.StandardCharsets;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.UnaryOperator;
@@ -18,10 +20,16 @@ import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
 import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
 import pl.aiwcorpo.mcp.platform.input.ToolInputValidator;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
+import pl.aiwcorpo.mcp.platform.resource.ResourceContext;
+import pl.aiwcorpo.mcp.platform.resource.ResourcePolicy;
 import pl.aiwcorpo.mcp.platform.security.BackendCredential;
 import pl.aiwcorpo.mcp.platform.security.CredentialContext;
 import pl.aiwcorpo.mcp.platform.text.ToolResultRejectedException;
 import pl.aiwcorpo.mcp.platform.text.ToolResultValidator;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Wraps every tool the server exposes (applied by {@link ToolCallbackAuditPostProcessor}, servers do not wire
@@ -34,8 +42,12 @@ import pl.aiwcorpo.mcp.platform.text.ToolResultValidator;
  *   <li><b>Arguments.</b> Validated against the tool's {@code inputSchema} ({@link ToolInputValidator}); a
  *       violation is {@code invalid_argument} (C10) without the offending value. The MCP SDK's own validation
  *       is off because it answers before this class, with a text that is not C10 and no audit event.</li>
+ *   <li><b>Policy.</b> {@code Action::"call"} on the tool and, for every {@code @ResourceRef} argument, the tool's action
+ *       on every resource it names ({@link ResourcePolicy#authorizeCall}); a refusal is {@code access_denied} or
+ *       {@code not_found_or_denied} and the tool does not run.</li>
  *   <li><b>Interceptors</b> ({@link ToolCallInterceptor}), then the tool.</li>
- *   <li><b>Result.</b> A result larger than {@code tools.max-result-size} is {@code internal_error} before it is
+ *   <li><b>Result.</b> Elements of the result that are resources the caller may not see are removed
+ *       ({@link ResourcePolicy#filterResult}). A result larger than {@code tools.max-result-size} is {@code internal_error} before it is
  *       parsed. A tool that publishes an {@code outputSchema} ({@code UntrustedText} in its result) has
  *       its result checked against it ({@link ToolResultValidator}) before the audit event is written; a
  *       mismatch is {@code internal_error} and {@code outcome=error}, not an SDK error after an {@code ok} event.</li>
@@ -49,6 +61,8 @@ import pl.aiwcorpo.mcp.platform.text.ToolResultValidator;
  */
 public final class AuditingToolCallback implements ToolCallback {
 
+    private static final JsonMapper JSON = JsonMapper.builder().build();
+
     private static final Set<String> DENIAL_CODES = Set.of(ToolErrorCode.UNAUTHENTICATED.code(),
             ToolErrorCode.ACCESS_DENIED.code(), ToolErrorCode.NOT_FOUND_OR_DENIED.code(),
             ToolErrorCode.TOOL_DISABLED.code());
@@ -61,6 +75,7 @@ public final class AuditingToolCallback implements ToolCallback {
     private final ToolInputValidator inputValidator;
     private final ToolResultValidator resultValidator;
     private final long maxResultBytes;
+    private final ResourcePolicy resourcePolicy;
 
     /**
      * Not public: a wrapper built by a server would carry its own interceptors and input policy and then be taken
@@ -69,13 +84,24 @@ public final class AuditingToolCallback implements ToolCallback {
     AuditingToolCallback(ToolCallback delegate, AuditLogger auditLogger, McpErrorMapper errorMapper,
                          ToolRiskRegistry registry, List<ToolCallInterceptor> interceptors) {
         this(delegate, auditLogger, errorMapper, registry, interceptors, ToolInputPolicy.STRICT,
-                McpPlatformProperties.DEFAULT_MAX_RESULT_SIZE.toBytes());
+                McpPlatformProperties.DEFAULT_MAX_RESULT_SIZE.toBytes(), null);
     }
 
     AuditingToolCallback(ToolCallback delegate, AuditLogger auditLogger, McpErrorMapper errorMapper,
                          ToolRiskRegistry registry, List<ToolCallInterceptor> interceptors,
                          ToolInputPolicy inputPolicy, long maxResultBytes) {
+        this(delegate, auditLogger, errorMapper, registry, interceptors, inputPolicy, maxResultBytes, null);
+    }
+
+    /**
+     * @param resourcePolicy the policy checks around the tool; {@code null} only in tests of the wrapper itself, the
+     *                       platform's auto-configuration always supplies one ({@code PlatformPresenceCheck})
+     */
+    AuditingToolCallback(ToolCallback delegate, AuditLogger auditLogger, McpErrorMapper errorMapper,
+                         ToolRiskRegistry registry, List<ToolCallInterceptor> interceptors,
+                         ToolInputPolicy inputPolicy, long maxResultBytes, ResourcePolicy resourcePolicy) {
         this.maxResultBytes = maxResultBytes;
+        this.resourcePolicy = resourcePolicy;
         this.delegate = delegate;
         this.auditLogger = auditLogger;
         this.errorMapper = errorMapper;
@@ -123,11 +149,17 @@ public final class AuditingToolCallback implements ToolCallback {
             throw refused;
         }
         CallerContext caller = bound.get();
-        try {
+        try (ResourceContext resources = ResourceContext.open(caller, name, arguments(toolInput))) {
             inputValidator.validate(toolInput);
+            if (resourcePolicy != null) {
+                resourcePolicy.authorizeCall();
+            }
             String result = chain(0, new ToolCallInterceptor.Invocation(name, risk, toolInput, caller), tool)
                     .proceed(toolInput);
             checkSize(name, result);
+            if (resourcePolicy != null) {
+                result = resourcePolicy.filterResult(name, result);
+            }
             if (resultValidator != null) {
                 resultValidator.validate(result);
             }
@@ -137,6 +169,20 @@ public final class AuditingToolCallback implements ToolCallback {
             McpErrorMapper.SafeError error = errorMapper.map(ex);
             audit(caller, name, toolInput, error.code(), start);
             throw new SanitizedToolException(error);
+        }
+    }
+
+    /** The arguments as a map for the policy; the validator has judged them already, an unparsable text gives none. */
+    private static Map<String, Object> arguments(String toolInput) {
+        if (toolInput == null || toolInput.isBlank()) {
+            return Map.of();
+        }
+        try {
+            JsonNode node = JSON.readTree(toolInput);
+            return node.isObject() ? JSON.convertValue(node, new TypeReference<LinkedHashMap<String, Object>>() { })
+                    : Map.of();
+        } catch (JacksonException ex) {
+            return Map.of();
         }
     }
 

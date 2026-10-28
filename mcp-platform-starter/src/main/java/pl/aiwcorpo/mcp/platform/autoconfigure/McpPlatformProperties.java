@@ -26,6 +26,16 @@ import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
  *         allowed-client-names: [mcp-gateway]
  *       credential:
  *         connect-url: http://localhost:18090/connections?system={system}   # portal in mcp-platform-dev
+ *       policy:
+ *         main:
+ *           url: https://policies.internal/policies/main/latest.json   # C7, pulled with ETag
+ *           key-id: policies-main-2026
+ *           public-key-file: /etc/mcp/policies-main.pub.pem            # Ed25519, SPKI PEM
+ *         overrides:                                                   # optional emergency bundle
+ *           url: https://policies.internal/policies/overrides/latest.json
+ *           key-id: policies-overrides-2026
+ *           public-key-file: /etc/mcp/policies-overrides.pub.pem
+ *         state-dir: /var/lib/mcp/policy-state                         # rollback protection across restarts
  * </pre>
  */
 @ConfigurationProperties("aiwcorpo.mcp.platform")
@@ -51,6 +61,8 @@ public class McpPlatformProperties {
     private final Credential credential = new Credential();
     private final DevPat devPat = new DevPat();
     private final Tools tools = new Tools();
+    private final Policy policy = new Policy();
+    private final Manifest manifest = new Manifest();
 
     /** The backend system this server serves: {@code server-id} without the {@code mcp-} prefix. */
     public String system() {
@@ -306,6 +318,230 @@ public class McpPlatformProperties {
         }
     }
 
+    /** One policy bundle channel (C7): where it is pulled from and the key that signs it. */
+    public static class PolicyChannel {
+
+        /** URL of {@code latest.json}; {@code url} and {@code sigUrl} in it are file names next to it. */
+        private String url;
+
+        /** Id of the signing key; {@code test-*} only with {@code policy.allow-test-keys} in the dev profile. */
+        private String keyId;
+
+        /** The Ed25519 public key as SPKI PEM text. */
+        private String publicKey;
+
+        /** File with the public key, used when {@code public-key} is not set. */
+        private String publicKeyFile;
+
+        /** Lowest revision ever accepted on this channel (CC-066), for example raised after an incident. */
+        private String minimumRevision;
+
+        /** How often the channel is pulled; the platform default is 30 s for main and 5 s for overrides. */
+        private Duration refreshInterval;
+
+        public String getUrl() {
+            return url;
+        }
+
+        public void setUrl(String url) {
+            this.url = url;
+        }
+
+        public String getKeyId() {
+            return keyId;
+        }
+
+        public void setKeyId(String keyId) {
+            this.keyId = keyId;
+        }
+
+        public String getPublicKey() {
+            return publicKey;
+        }
+
+        public void setPublicKey(String publicKey) {
+            this.publicKey = publicKey;
+        }
+
+        public String getPublicKeyFile() {
+            return publicKeyFile;
+        }
+
+        public void setPublicKeyFile(String publicKeyFile) {
+            this.publicKeyFile = publicKeyFile;
+        }
+
+        public String getMinimumRevision() {
+            return minimumRevision;
+        }
+
+        public void setMinimumRevision(String minimumRevision) {
+            this.minimumRevision = minimumRevision;
+        }
+
+        public Duration getRefreshInterval() {
+            return refreshInterval;
+        }
+
+        public void setRefreshInterval(Duration refreshInterval) {
+            this.refreshInterval = refreshInterval;
+        }
+    }
+
+    /** {@code aiwcorpo.mcp.platform.policy.*}: the policy bundle the server evaluates resources with (C7). */
+    public static class Policy {
+
+        private final PolicyChannel main = new PolicyChannel();
+        private final PolicyChannel overrides = new PolicyChannel();
+
+        /**
+         * Directory for the rollback protection across restarts (CC-066): the last revision and archive hash per
+         * channel. One directory per instance. Required outside the {@code dev} profile.
+         */
+        private String stateDir;
+
+        /** Accept bundles signed with the published test keys. Allowed only with the {@code dev} profile. */
+        private boolean allowTestKeys = false;
+
+        /** How long the start waits for the first main bundle (and for the overrides bundle, if one is configured). */
+        private Duration startupTimeout = Duration.ofSeconds(30);
+
+        /**
+         * After a restart in which the overrides bundle was active, how long calls are refused until it is loaded again
+         * (the emergency forbid rules must not vanish silently). After that the server serves with an alarm in the log.
+         */
+        private Duration overridesGrace = Duration.ofMinutes(2);
+
+        private Duration connectTimeout = Duration.ofSeconds(2);
+        private Duration readTimeout = Duration.ofSeconds(10);
+
+        /** Name of a Spring SSL bundle that trusts the bundle repository; JVM default when unset. */
+        private String sslBundle;
+
+        public PolicyChannel getMain() {
+            return main;
+        }
+
+        public PolicyChannel getOverrides() {
+            return overrides;
+        }
+
+        public String getStateDir() {
+            return stateDir;
+        }
+
+        public void setStateDir(String stateDir) {
+            this.stateDir = stateDir;
+        }
+
+        public boolean isAllowTestKeys() {
+            return allowTestKeys;
+        }
+
+        public void setAllowTestKeys(boolean allowTestKeys) {
+            this.allowTestKeys = allowTestKeys;
+        }
+
+        public Duration getStartupTimeout() {
+            return startupTimeout;
+        }
+
+        public void setStartupTimeout(Duration startupTimeout) {
+            this.startupTimeout = startupTimeout;
+        }
+
+        public Duration getOverridesGrace() {
+            return overridesGrace;
+        }
+
+        public void setOverridesGrace(Duration overridesGrace) {
+            this.overridesGrace = overridesGrace;
+        }
+
+        public Duration getConnectTimeout() {
+            return connectTimeout;
+        }
+
+        public void setConnectTimeout(Duration connectTimeout) {
+            this.connectTimeout = connectTimeout;
+        }
+
+        public Duration getReadTimeout() {
+            return readTimeout;
+        }
+
+        public void setReadTimeout(Duration readTimeout) {
+            this.readTimeout = readTimeout;
+        }
+
+        public String getSslBundle() {
+            return sslBundle;
+        }
+
+        public void setSslBundle(String sslBundle) {
+            this.sslBundle = sslBundle;
+        }
+    }
+
+    /** {@code aiwcorpo.mcp.platform.manifest.*}: what the C6 manifest says about this server. */
+    public static class Manifest {
+
+        /** SemVer of the server, {@code version} of the manifest. Required. */
+        private String version;
+
+        /** {@code https://} URL of the MCP endpoint as the gateway reaches it; informational (the gateway has its own). Required. */
+        private String internalUrl;
+
+        /** {@code credential.required}: whether every tool needs a backend credential. */
+        private boolean credentialRequired = true;
+
+        /** {@code credential.acceptedTypes}: {@code user-oauth}, {@code user-secret}, {@code token-exchange}, {@code service-account}. */
+        private List<String> acceptedCredentialTypes = new ArrayList<>();
+
+        /** Where to write the manifest at startup (for the registration step of a build or deployment); unset = nowhere. */
+        private String outputFile;
+
+        public String getVersion() {
+            return version;
+        }
+
+        public void setVersion(String version) {
+            this.version = version;
+        }
+
+        public String getInternalUrl() {
+            return internalUrl;
+        }
+
+        public void setInternalUrl(String internalUrl) {
+            this.internalUrl = internalUrl;
+        }
+
+        public boolean isCredentialRequired() {
+            return credentialRequired;
+        }
+
+        public void setCredentialRequired(boolean credentialRequired) {
+            this.credentialRequired = credentialRequired;
+        }
+
+        public List<String> getAcceptedCredentialTypes() {
+            return acceptedCredentialTypes;
+        }
+
+        public void setAcceptedCredentialTypes(List<String> acceptedCredentialTypes) {
+            this.acceptedCredentialTypes = acceptedCredentialTypes;
+        }
+
+        public String getOutputFile() {
+            return outputFile;
+        }
+
+        public void setOutputFile(String outputFile) {
+            this.outputFile = outputFile;
+        }
+    }
+
     /** Default of {@code tools.max-result-size}: well above a page of results, far below what exhausts the heap. */
     public static final DataSize DEFAULT_MAX_RESULT_SIZE = DataSize.ofMegabytes(1);
 
@@ -389,5 +625,13 @@ public class McpPlatformProperties {
 
     public Tools getTools() {
         return tools;
+    }
+
+    public Policy getPolicy() {
+        return policy;
+    }
+
+    public Manifest getManifest() {
+        return manifest;
     }
 }

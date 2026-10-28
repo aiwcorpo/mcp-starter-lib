@@ -13,6 +13,11 @@ public interface RiskClassifiedTool {
         return ToolAction.AUTO;
     }
 
+    /** The arguments that carry resource identifiers (what {@code @ResourceRef} declares on a method). */
+    default java.util.List<pl.aiwcorpo.mcp.platform.resource.ResourceBinding> resourceRefs() {
+        return java.util.List.of();
+    }
+
     /** The title shown by clients; required, a tool without one stops the server. */
     default String title() {
         return null;

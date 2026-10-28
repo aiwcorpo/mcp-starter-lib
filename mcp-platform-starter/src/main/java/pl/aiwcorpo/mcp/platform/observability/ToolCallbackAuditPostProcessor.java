@@ -10,6 +10,7 @@ import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 import pl.aiwcorpo.mcp.platform.error.McpErrorMapper;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
+import pl.aiwcorpo.mcp.platform.resource.ResourcePolicy;
 
 /**
  * Wraps every {@link ToolCallbackProvider} bean (and every stand-alone {@link ToolCallback} bean) in
@@ -31,12 +32,14 @@ public final class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
     private final ObjectProvider<ToolCallInterceptor> interceptors;
     private final ToolInputPolicy inputPolicy;
     private final long maxResultBytes;
+    private final ObjectProvider<ResourcePolicy> resourcePolicy;
 
     ToolCallbackAuditPostProcessor(ObjectProvider<AuditLogger> auditLogger,
                                    ObjectProvider<McpErrorMapper> errorMapper,
                                    ObjectProvider<ToolRiskRegistry> registry,
                                    ObjectProvider<ToolCallInterceptor> interceptors) {
-        this(auditLogger, errorMapper, registry, interceptors, null, McpPlatformProperties.DEFAULT_MAX_RESULT_SIZE.toBytes());
+        this(auditLogger, errorMapper, registry, interceptors, null, McpPlatformProperties.DEFAULT_MAX_RESULT_SIZE.toBytes(),
+                null);
     }
 
     /**
@@ -48,8 +51,10 @@ public final class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
                                    ObjectProvider<McpErrorMapper> errorMapper,
                                    ObjectProvider<ToolRiskRegistry> registry,
                                    ObjectProvider<ToolCallInterceptor> interceptors,
-                                   ToolInputPolicy inputPolicy, long maxResultBytes) {
+                                   ToolInputPolicy inputPolicy, long maxResultBytes,
+                                   ObjectProvider<ResourcePolicy> resourcePolicy) {
         this.maxResultBytes = maxResultBytes;
+        this.resourcePolicy = resourcePolicy;
         this.inputPolicy = inputPolicy == null ? ToolInputPolicy.STRICT : inputPolicy;
         this.auditLogger = auditLogger;
         this.errorMapper = errorMapper;
@@ -74,7 +79,8 @@ public final class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
         }
         List<ToolCallInterceptor> chain = interceptors.orderedStream().toList();
         return new AuditingToolCallback(callback, auditLogger.getObject(), errorMapper.getObject(),
-                registry.getObject(), chain, inputPolicy, maxResultBytes);
+                registry.getObject(), chain, inputPolicy, maxResultBytes,
+                resourcePolicy == null ? null : resourcePolicy.getIfAvailable());
     }
 
     /** Marker + decorator; the marker keeps a second post-processing pass from double-wrapping. */

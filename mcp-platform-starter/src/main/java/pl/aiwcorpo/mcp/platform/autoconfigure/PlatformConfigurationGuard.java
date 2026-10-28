@@ -146,6 +146,9 @@ public class PlatformConfigurationGuard implements InitializingBean {
                     + "account, with {system} as placeholder (sent in credential_required)");
         }
 
+        policyProblems(properties.getPolicy(), dev, problems);
+        manifestProblems(properties.getManifest(), problems);
+
         if (!dev) {
             if (properties.getMtls().isRequired()
                     && !"need".equalsIgnoreCase(environment.getProperty("server.ssl.client-auth", "").trim())) {
@@ -178,6 +181,74 @@ public class PlatformConfigurationGuard implements InitializingBean {
 
         if (!problems.isEmpty()) {
             throw new IllegalStateException("Invalid MCP platform configuration:\n - " + String.join("\n - ", problems));
+        }
+    }
+
+    private static void policyProblems(McpPlatformProperties.Policy policy, boolean dev, List<String> problems) {
+        channelProblems("main", policy.getMain(), true, dev, problems);
+        channelProblems("overrides", policy.getOverrides(), !isBlank(policy.getOverrides().getUrl()), dev, problems);
+        if (!dev) {
+            if (isBlank(policy.getStateDir())) {
+                problems.add("aiwcorpo.mcp.platform.policy.state-dir is required outside the 'dev' profile: without it a "
+                        + "restart accepts an older signed bundle again (rollback protection, CC-066)");
+            }
+            if (policy.isAllowTestKeys()) {
+                problems.add("aiwcorpo.mcp.platform.policy.allow-test-keys=true is allowed only with the 'dev' profile");
+            }
+        }
+        if (!policy.getStartupTimeout().isPositive() || !policy.getOverridesGrace().isPositive()) {
+            problems.add("aiwcorpo.mcp.platform.policy.startup-timeout and overrides-grace must be positive");
+        }
+    }
+
+    private static void channelProblems(String name, McpPlatformProperties.PolicyChannel channel, boolean required,
+                                        boolean dev, List<String> problems) {
+        String prefix = "aiwcorpo.mcp.platform.policy." + name;
+        if (!required) {
+            return;
+        }
+        if (isBlank(channel.getUrl())) {
+            problems.add(prefix + ".url must point at the latest.json of the " + name + " policy bundle (C7)");
+        } else if (!absoluteUrl(channel.getUrl(), dev ? Set.of("http", "https") : Set.of("https"))) {
+            problems.add(prefix + ".url must be an absolute " + (dev ? "http(s)" : "https") + " URL"
+                    + (dev ? "" : " outside the 'dev' profile"));
+        }
+        if (isBlank(channel.getKeyId())) {
+            problems.add(prefix + ".key-id must name the signing key (test-* keys only with policy.allow-test-keys in 'dev')");
+        }
+        if (isBlank(channel.getPublicKey()) && isBlank(channel.getPublicKeyFile())) {
+            problems.add(prefix + ".public-key or " + prefix + ".public-key-file must hold the Ed25519 public key (SPKI PEM)");
+        }
+        if (channel.getMinimumRevision() != null
+                && !channel.getMinimumRevision().matches("^[0-9]{14}-[0-9a-f]{7}$")) {
+            problems.add(prefix + ".minimum-revision must look like 20261028194138-ad20673");
+        }
+        if (channel.getRefreshInterval() != null && !channel.getRefreshInterval().isPositive()) {
+            problems.add(prefix + ".refresh-interval must be positive");
+        }
+    }
+
+    private static final Pattern SEMVER = Pattern.compile(
+            "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$");
+    private static final Set<String> CREDENTIAL_TYPES =
+            Set.of("user-oauth", "user-secret", "token-exchange", "service-account");
+
+    private static void manifestProblems(McpPlatformProperties.Manifest manifest, List<String> problems) {
+        if (manifest.getVersion() == null || !SEMVER.matcher(manifest.getVersion()).matches()) {
+            problems.add("aiwcorpo.mcp.platform.manifest.version must be the SemVer of this server (C6), for example 1.4.0");
+        }
+        if (isBlank(manifest.getInternalUrl()) || !absoluteUrl(manifest.getInternalUrl(), Set.of("https"))) {
+            problems.add("aiwcorpo.mcp.platform.manifest.internal-url must be the https URL the gateway reaches this server at (C6)");
+        }
+        if (manifest.isCredentialRequired() && manifest.getAcceptedCredentialTypes().isEmpty()) {
+            problems.add("aiwcorpo.mcp.platform.manifest.accepted-credential-types must list at least one of "
+                    + CREDENTIAL_TYPES + " when credential-required is true (C6)");
+        }
+        for (String type : manifest.getAcceptedCredentialTypes()) {
+            if (!CREDENTIAL_TYPES.contains(type)) {
+                problems.add("aiwcorpo.mcp.platform.manifest.accepted-credential-types: '" + type + "' is not one of "
+                        + CREDENTIAL_TYPES);
+            }
         }
     }
 

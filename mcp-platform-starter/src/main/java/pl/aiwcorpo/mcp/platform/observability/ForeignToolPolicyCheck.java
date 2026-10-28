@@ -14,6 +14,8 @@ import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
 import pl.aiwcorpo.mcp.platform.guard.RegisteredToolsCheck;
 import pl.aiwcorpo.mcp.platform.guard.ToolHintsPostProcessor;
 import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
+import pl.aiwcorpo.mcp.platform.policy.PolicyEngine;
+import pl.aiwcorpo.mcp.platform.resource.ResourcePolicy;
 
 /**
  * Outside the {@code dev} profile, refuses to start when a server declares its own {@link ToolInputPolicy},
@@ -49,6 +51,8 @@ public class ForeignToolPolicyCheck implements BeanFactoryPostProcessor, Environ
     public static final String CONFIGURATION_GUARD_BEAN = "platformConfigurationGuard";
     public static final String JWT_VERIFIER_BEAN = "internalJwtVerifier";
     public static final String JWT_FILTER_BEAN = "internalJwtFilter";
+    public static final String POLICY_ENGINE_BEAN = "policyEngine";
+    public static final String RESOURCE_POLICY_BEAN = "resourcePolicy";
 
     @Override
     public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) throws BeansException {
@@ -56,9 +60,11 @@ public class ForeignToolPolicyCheck implements BeanFactoryPostProcessor, Environ
         collect(beanFactory, PlatformConfigurationGuard.class, CONFIGURATION_GUARD_BEAN, weakened);
         collect(beanFactory, InternalJwtVerifier.class, JWT_VERIFIER_BEAN, weakened);
         collect(beanFactory, InternalJwtFilter.class, JWT_FILTER_BEAN, weakened);
+        collect(beanFactory, PolicyEngine.class, POLICY_ENGINE_BEAN, weakened);
+        collect(beanFactory, ResourcePolicy.class, RESOURCE_POLICY_BEAN, weakened);
         if (!weakened.isEmpty()) {
-            throw new IllegalStateException("Bean(s) " + weakened + " replace the configuration guard or the internal "
-                    + "JWT check. They are not extension points in any profile: the 'dev' relaxations are tied to the "
+            throw new IllegalStateException("Bean(s) " + weakened + " replace the configuration guard, the internal "
+                    + "JWT check or the policy engine and the resource checks. They are not extension points in any profile: the 'dev' relaxations are tied to the "
                     + "guard's loopback check and the JWT check is what every request passes. Replace GatewayKeys or "
                     + "JtiReplayStore instead. See MIGRATION-3.0.md.");
         }

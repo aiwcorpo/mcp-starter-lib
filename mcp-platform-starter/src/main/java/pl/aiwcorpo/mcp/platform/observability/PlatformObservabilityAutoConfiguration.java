@@ -19,6 +19,7 @@ import pl.aiwcorpo.mcp.platform.guard.RegisteredToolsCheck;
 import pl.aiwcorpo.mcp.platform.guard.ToolHintsPostProcessor;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
+import pl.aiwcorpo.mcp.platform.resource.ResourcePolicy;
 
 /**
  * Audit (C8), request id, tool registry and the decorator applied to every tool. A server may override the audit
@@ -59,14 +60,14 @@ public class PlatformObservabilityAutoConfiguration {
     static ToolCallbackAuditPostProcessor toolCallbackAuditPostProcessor(
             ObjectProvider<AuditLogger> auditLogger, ObjectProvider<McpErrorMapper> errorMapper,
             ObjectProvider<ToolRiskRegistry> registry, ObjectProvider<ToolCallInterceptor> interceptors,
-            Environment environment) {
+            ObjectProvider<ResourcePolicy> resourcePolicy, Environment environment) {
         DataSize maxResult = Binder.get(environment).bind("aiwcorpo.mcp.platform.tools.max-result-size", DataSize.class)
                 .orElse(McpPlatformProperties.DEFAULT_MAX_RESULT_SIZE);
         if (maxResult.toBytes() <= 0) {
             throw new IllegalStateException("aiwcorpo.mcp.platform.tools.max-result-size must be positive");
         }
         return new ToolCallbackAuditPostProcessor(auditLogger, errorMapper, registry, interceptors,
-                policyFor(environment), maxResult.toBytes());
+                policyFor(environment), maxResult.toBytes(), resourcePolicy);
     }
 
     /** Only the one-and-only {@code dev} profile may run a tool without a closed inputSchema. */
