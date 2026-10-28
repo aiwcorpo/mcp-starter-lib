@@ -36,7 +36,7 @@ class StartupRefusalTest {
     @Test
     void testKeysWithoutTheDevProfile() {
         assertThatThrownBy(() -> start(Map.of(), "prod")).rootCause()
-                .hasMessageContaining("allow-test-keys=true is allowed only with the 'dev' profile")
+                .hasMessageContaining("allow-test-keys=true is allowed only with the 'dev' or the 'devstack' profile")
                 .hasMessageContaining("replay-store=memory").hasMessageContaining("mtls.required=false");
     }
 
@@ -173,7 +173,7 @@ class StartupRefusalTest {
         prod.put("spring.main.lazy-initialization", "true");
         assertThatThrownBy(() -> new SpringApplicationBuilder(OwnFilterServer.class).web(WebApplicationType.SERVLET)
                 .properties(prod).properties("server.port=0").profiles("prod").run().close()).rootCause()
-                .hasMessageContaining("allow-test-keys=true is allowed only with the 'dev' profile")
+                .hasMessageContaining("allow-test-keys=true is allowed only with the 'dev' or the 'devstack' profile")
                 .hasMessageContaining("replay-store=memory").hasMessageContaining("mtls.required=false")
                 .hasMessageContaining("jwks-uri must be an absolute https URL");
         Map<String, Object> async = new HashMap<>(GATEWAY.serverProperties());
