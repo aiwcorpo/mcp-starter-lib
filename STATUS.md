@@ -3,6 +3,14 @@
 Linia `pl.aiwcorpo.mcp:mcp-platform*` 3.x (niezależna od wersji kontraktów). Kontrakty:
 `pl.aiwcorpo.mcp:mcp-contracts:3.1.0` od beta-1 (2.2.5 w alpha-12 ... alpha-14, 2.1.1 od alpha-7, 2.0.2 do alpha-6).
 
+3.0.0-beta-2: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-2`, tag `v3.0.0-beta-2` (praca na `3.0.0-beta-2-SNAPSHOT`, po wydaniu `3.0.0-beta-3-SNAPSHOT`). Poprawki recenzji Opus i smoke Haiku beta-1 (0 CRITICAL, 2 HIGH, 3 MEDIUM, 7 LOW) oraz dopiski ws-03. Instrukcja: `MIGRATION-3.0.md`, sekcja "Z beta-1 na beta-2".
+- H1: usunięte `QueryScope.restrictJql` (surowy JQL od modelu; obejście `\"` poza cudzysłowem). Zastąpione `StructuredQuery` (`scope.jql(pola)`, `scope.cql(pola)`): pola z białej listy, zamknięty zbiór operatorów, tylko `AND`, wartości zawsze cytowane i escapowane wg JQL/CQL, tekst Lucene escapowany; testy z lekserem czytającym ucieczki jak Jira na 60 wrogich wartościach x 10 operatorów (backslash, cudzysłowy, nawiasy, ORDER BY, funkcje, komentarze, Unicode).
+- H2: wynik śledzony przez `ResolvableType` (rekordy generyczne, `Optional`, zbiory, tablice); nieśledzony kształt (`Map`, nie-rekord, `Object`, `JsonNode`) albo adnotacja Jacksona na rekordzie z zasobami zatrzymuje start, chyba że `@ResultWithoutResources`; pole poza komponentami rekordu w JSON i nie-lista w miejscu listy kończą wywołanie `internal_error`.
+- M1: `@ResourceRef` na komponencie rekordu-argumentu zatrzymuje start. M2: limit czasu całego żądania (z treścią), pobieranie kanałów niezależne (blokady per kanał, 2 wątki), `prv` zleca pobranie wątkowi silnika. M3: `opensearchIndexPatterns()` rzuca przy pustym wyniku (`nothingToQuery()`, `opensearchIndexExpression()`), `OPENSEARCH_SEARCH_PARAMETERS`, aliasy opisane (README).
+- LOW: L1 tryb manifestu z profili, L2 awaria resolvera usuwa element, `fetchAll` (jedno wołanie na listę) i limit `tools.max-filtered-elements`, L3 `evaluation_error`/`resource_id_invalid`/`resource_type_mismatch` to `internal_error`, L4 dwa resolvery jednego typu w narzędziu = błąd startu, L5 `policy_decision` dla odmowy elementu (do 20 na wywołanie), L6 tripwire (`del`, `rm`, `revoke`, `unlink`, `kill`, `terminate`, `reset`, `clear`), L7 interceptor nie zmienia identyfikatorów po autoryzacji.
+- Smoke: komunikaty i kody błędów resolvera (`ABC-SLOW` nie pasuje do wzorca klucza: `invalid_argument` było poprawne, opisane), `ResourceContext.required()` z instrukcją i `TestResourceContext` w mcp-platform-test, importy, pełna konfiguracja `dev`, baza ścieżki klucza, wersja manifestu w testach.
+- ws-03: `TestGateway.start("mcp-example")` generuje podpisaną paczkę z politykami `call` dla `mcp-example-read|write|destructive`; manifest takiego serwera jest odrzucany przez schemat (`serverId` to enum), w `dev` ostrzeżenie.
+
 3.0.0-beta-1: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-1`, tag `v3.0.0-beta-1` (praca na `3.0.0-alpha-15-SNAPSHOT`; alpha-15 i alpha-16 nie wydane). Kontrakty 3.1.0 (CC-129; BOM, starter i test). Razem 668 testów (starter 552, mcp-platform-test 116). Instrukcja dla template'u i serwerów: `MIGRATION-3.0.md`, sekcja "Z alpha-14 na beta-1". Kamienie pośrednie:
 1. Kontrakty 3.0.1 (potem 3.0.2 i 3.1.0), higiena tekstu CC-121/122 (`TextHygiene`: 79 wektorów; `mentionFiltered` na `@ArgumentLimits`), zamknięty i ograniczony `inputSchema` zgodny z regułami mcp-manifest (CC-078/123; test na 27 wektorach `manifests/`), `@ToolTitle` obowiązkowy (CC-115), `ToolAction` w `@ToolRisk`, lista `$defs` (CC-079) pilnowana testem, kody C10 bez `confirmation_declined` (commit f775e9e).
 2. Silnik polityk: `PolicyEngine` (pull `latest.json` z ETag, `PolicyStore` z mcp-policy-bundle, rollback po restarcie, kanał `overrides`, `prv` jako podpowiedź do natychmiastowego pobrania), `@ResourceRef` + `ResourceResolver` (S1: każda wartość każdego refa; S2: zasób bez wymaganej klasyfikacji = odmowa), `Action::"call"` oceniana w starterze z tej samej paczki, `ResultFilter` (adnotacja na komponencie rekordu wyniku i `ResourcePolicy.retainAllowed*`), `QueryScope` (JQL/CQL/wzorce OpenSearch, odmowa JQL z niezamkniętym nawiasem), `vsScopes` z `vs`/`vsc` JWT, zdarzenie audytu `policy_decision`.
@@ -429,6 +437,13 @@ Nowe w beta-1 (numeracja robocza):
   nierozwiązanego): kontrakt wymienia wartości, ale nie rozróżnia przypadków serwera.
 - **Beta-E: `BundleFetcher` w `mcp-policy-bundle`** (CC-132 odłożone): `PolicyBundleClient` startera i klient gateway'a to dwie
   implementacje tego samego protokołu bez wspólnych wektorów.
+- **Beta-F: `SystemId` i `ServerId` w kontrakcie to enum pięciu systemów**, więc serwer przykładowy (`mcp-example` w template) nie może mieć ważnego
+  manifestu ani paczki polityk nie jest dla niego zdefiniowana; template i testy udają `mcp-jira` albo działają w `dev` z ostrzeżeniem. Propozycja:
+  `ServerId` dopuszcza wzorzec `^mcp-[a-z0-9]+$` poza listą systemów (z wyjątkiem rejestru produkcyjnego), albo kontrakt mówi wprost, że przykład
+  nie jest rejestrowalny.
+- **Beta-G: tekstowe zapytanie od modelu.** Kontrakt (entity-builder.md, sekcja 8) mówi o cytowaniu identyfikatorów w JQL/CQL, ale nie zabrania
+  surowego zapytania od modelu; recenzja pokazała, że nie da się go bezpiecznie ograniczyć po stronie serwera. Propozycja: zapisać w sekcji 8, że
+  zapytanie buduje serwer ze struktury.
 - Zgłoszone koordynatorowi (naprawione w 3.0.2): jary `test-vectors` 3.0.0 i 3.0.1 miały nieaktualne pliki.
 
 Stan po kontraktach 2.2.5: punkty 1, 2 i 6 przyjęte jako CC-123, CC-121 i CC-122 (3.0.0), punkt 3 jako CC-112 (2.2.4), punkt 4 jako CC-120 (2.2.5).

@@ -71,7 +71,7 @@ public class PlatformObservabilityAutoConfiguration {
     }
 
     /** Only the one-and-only {@code dev} profile may run a tool without a closed inputSchema. */
-    static ToolInputPolicy policyFor(Environment environment) {
+    public static ToolInputPolicy policyFor(Environment environment) {
         boolean dev = List.of(environment.getActiveProfiles()).equals(List.of(PlatformConfigurationGuard.DEV_PROFILE));
         return dev ? ToolInputPolicy.DEV : ToolInputPolicy.STRICT;
     }

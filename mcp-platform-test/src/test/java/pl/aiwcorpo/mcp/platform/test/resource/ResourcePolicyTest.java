@@ -56,6 +56,8 @@ class ResourcePolicyTest {
         return client;
     }
 
+    private static final tools.jackson.databind.json.JsonMapper JSON = tools.jackson.databind.json.JsonMapper.builder().build();
+
     static McpSchema.CallToolResult call(McpSyncClient client, String tool, Map<String, Object> arguments) {
         return client.callTool(McpSchema.CallToolRequest.builder(tool).arguments(arguments).build());
     }
@@ -107,12 +109,12 @@ class ResourcePolicyTest {
     }
 
     @Test
-    void aResourceWithoutItsClassificationIsDenied() {
+    void aResourceWithoutItsClassificationIsRefusedAsInternalError() {
         try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
             McpSchema.CallToolResult result = call(client, "get_issue", Map.of("issueKey", "NOC-1"));
 
             assertThat(result.isError()).isTrue();
-            assertThat(text(result)).contains("\"error\":\"not_found_or_denied\"");
+            assertThat(text(result)).contains("\"error\":\"internal_error\"");
         }
     }
 
@@ -126,12 +128,12 @@ class ResourcePolicyTest {
     }
 
     @Test
-    void aGitLabProjectWithoutTheTopicsOfItsAncestorsIsDenied() {
+    void aGitLabProjectWithoutTheTopicsOfItsAncestorsIsRefusedAsInternalError() {
         try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read", "mcp-gitlab-read")))) {
             McpSchema.CallToolResult result = call(client, "get_project", Map.of("path", "bad/app"));
 
             assertThat(result.isError()).isTrue();
-            assertThat(text(result)).contains("\"error\":\"not_found_or_denied\"");
+            assertThat(text(result)).contains("\"error\":\"internal_error\"");
         }
     }
 
@@ -179,6 +181,61 @@ class ResourcePolicyTest {
     }
 
     @Test
+    void anInterceptorCannotSwapTheResourceAfterThePolicyJudgedIt() {
+        try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
+            McpSchema.CallToolResult result = call(client, "get_issue", Map.of("issueKey", "ABC-2"));
+
+            assertThat(result.isError()).isTrue();
+            assertThat(text(result)).contains("\"error\":\"internal_error\"").doesNotContain("HR-5");
+        }
+    }
+
+    @Test
+    void aRemovedElementLeavesAPolicyDecisionEventAndAnUnknownProjectsAreNotInIt() {
+        ch.qos.logback.classic.Logger audit = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("pl.aiwcorpo.mcp.audit");
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> lines = new ch.qos.logback.core.read.ListAppender<>();
+        lines.start();
+        audit.addAppender(lines);
+        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read"))
+                .virtualServer("abc-only", Map.of("jiraProjects", List.of("ABC"))))) {
+            call(client, "search_issues", Map.of("projectKeys", List.of("ABC")));
+
+            List<String> events = pl.aiwcorpo.mcp.platform.test.CapturedLogs.snapshot(lines).stream()
+                    .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage).toList();
+            assertThat(events).anySatisfy(event -> assertThat(event).contains("\"event\":\"policy_decision\"")
+                    .contains("\"decision\":\"deny\"").contains("\"id\":\"DEF-7\"").contains("\"errorCode\":\"not_found_or_denied\""));
+            assertThat(events).noneSatisfy(event -> assertThat(event).contains("test-jira-pat"));
+        } finally {
+            audit.detachAppender(lines);
+        }
+    }
+
+    @Test
+    void theElementsOfAResultAreFetchedWithOneBulkCallNotOnePerHit() {
+        jira.calls.clear();
+        jira.bulkCalls.clear();
+        try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
+            McpSchema.CallToolResult result = call(client, "search_issues", Map.of("projectKeys", List.of("ABC")));
+
+            assertThat(result.isError()).isNotEqualTo(true);
+            assertThat(jira.bulkCalls).hasSize(1);
+            assertThat(jira.bulkCalls.getFirst()).containsExactlyInAnyOrder("ABC-1", "DEF-7", "HR-5", "ABC-2");
+            assertThat(jira.calls).as("no single fetch for a hit").isEmpty();
+        }
+    }
+
+    @Test
+    void aGenericPageIsFilteredLikeAnyOtherResultShape() {
+        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read"))
+                .virtualServer("abc-only", Map.of("jiraProjects", List.of("ABC"))))) {
+            McpSchema.CallToolResult result = call(client, "search_page", Map.of("projectKeys", List.of("ABC")));
+
+            assertThat(result.isError()).isNotEqualTo(true);
+            assertThat(text(result)).contains("ABC-1").doesNotContain("DEF-7").doesNotContain("HR-5");
+        }
+    }
+
+    @Test
     void anIssueOfAnotherProjectLinkedInTheSearchIsRemovedWhenTheVirtualServerNarrowsToAbc() {
         try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read"))
                 .virtualServer("abc-only", Map.of("jiraProjects", List.of("ABC"))))) {
@@ -200,14 +257,18 @@ class ResourcePolicyTest {
     }
 
     @Test
-    void theQueryIsLimitedToTheProjectsOfTheLinkAndLeftAloneWithoutOne() {
+    void theQueryIsBuiltByTheServerAndLimitedToTheProjectsOfTheLink() throws Exception {
         try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read"))
                 .virtualServer("two", Map.of("jiraProjects", List.of("ABC", "DEF"))))) {
-            assertThat(text(call(client, "find_issues", Map.of("jql", "status = Open ORDER BY created DESC"))))
-                    .isEqualTo("\"project in (\\\"ABC\\\", \\\"DEF\\\") AND (status = Open) ORDER BY created DESC\"");
+            assertThat(JSON.readTree(text(call(client, "find_issues", Map.of("filter", Map.of("status", "Open"))))).asString())
+                    .isEqualTo("project in (\"ABC\", \"DEF\") AND status = \"Open\" ORDER BY created DESC");
+            String hostile = "x\\\" ) OR project = HR OR ( text ~ \"y";
+            String built = JSON.readTree(text(call(client, "find_issues", Map.of("filter", Map.of("status", hostile))))).asString();
+            assertThat(built).startsWith("project in (\"ABC\", \"DEF\") AND status = \"x\\\\\\\" ) OR project = HR OR ( text ~ \\\"y\"");
         }
         try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
-            assertThat(text(call(client, "find_issues", Map.of("jql", "status = Open")))).isEqualTo("\"status = Open\"");
+            assertThat(JSON.readTree(text(call(client, "find_issues", Map.of("filter", Map.of("text", "a*"))))).asString())
+                    .isEqualTo("text ~ \"a\\\\*\" ORDER BY created DESC");
         }
     }
 

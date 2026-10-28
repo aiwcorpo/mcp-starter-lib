@@ -19,6 +19,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.atomic.AtomicLong;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -67,6 +68,8 @@ public final class PolicyEngine implements AutoCloseable {
     private final PolicyBundleClient client;
     private final Map<Channel, Source> sources = new EnumMap<>(Channel.class);
     private final Map<Channel, ChannelState> states = new EnumMap<>(Channel.class);
+    /** One pull of a channel at a time, and a stuck channel does not hold up the other. */
+    private final Map<Channel, ReentrantLock> locks = new EnumMap<>(Channel.class);
     private final Duration startupTimeout;
     private final Duration overridesGrace;
     private final MeterRegistry meters;
@@ -89,6 +92,8 @@ public final class PolicyEngine implements AutoCloseable {
         }
         states.put(Channel.MAIN, new ChannelState());
         states.put(Channel.OVERRIDES, new ChannelState());
+        locks.put(Channel.MAIN, new ReentrantLock());
+        locks.put(Channel.OVERRIDES, new ReentrantLock());
         this.startupTimeout = startupTimeout;
         this.overridesGrace = overridesGrace;
         this.meters = meters;
@@ -165,7 +170,7 @@ public final class PolicyEngine implements AutoCloseable {
             }
         }
         startedNanos = System.nanoTime();
-        scheduler = Executors.newSingleThreadScheduledExecutor(task -> {
+        scheduler = Executors.newScheduledThreadPool(2, task -> {
             Thread thread = new Thread(task, "policy-bundle-pull");
             thread.setDaemon(true);
             return thread;
@@ -184,7 +189,17 @@ public final class PolicyEngine implements AutoCloseable {
     }
 
     /** One pull of a channel; never throws: a failure leaves the active bundle in place. */
-    public synchronized void refresh(Channel channel) {
+    public void refresh(Channel channel) {
+        ReentrantLock lock = locks.get(channel);
+        lock.lock();
+        try {
+            pull(channel);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    private void pull(Channel channel) {
         Source source = sources.get(channel);
         if (source == null) {
             return;
@@ -277,8 +292,9 @@ public final class PolicyEngine implements AutoCloseable {
     }
 
     /**
-     * Pulls the main bundle now when the caller's token names a newer revision than the loaded one (at most every two
-     * seconds). The all-zero revision of a gateway without a bundle never triggers it.
+     * Asks for a pull of the main bundle when the caller's token names a newer revision than the loaded one (at most every
+     * two seconds), and returns at once: the pull runs on a thread of the engine, so the call that carries the hint is decided
+     * with the bundle loaded now. The all-zero revision of a gateway without a bundle never triggers it.
      */
     public void hintRevision(String policyRevision) {
         if (policyRevision == null || ZERO_REVISION.equals(policyRevision) || !Revisions.isValid(policyRevision)) {
@@ -290,8 +306,11 @@ public final class PolicyEngine implements AutoCloseable {
         }
         long now = System.nanoTime();
         long last = lastHintPull.get();
-        if (now - last >= HINT_PULL_MIN_NANOS && lastHintPull.compareAndSet(last, now)) {
-            refresh(Channel.MAIN);
+        ScheduledExecutorService pool = scheduler;
+        if (pool != null && now - last >= HINT_PULL_MIN_NANOS && lastHintPull.compareAndSet(last, now)
+                && !locks.get(Channel.MAIN).isLocked()) {
+            // Not on the request thread: a repository that answers slowly must not hold up the calls.
+            pool.execute(() -> refresh(Channel.MAIN));
         }
     }
 

@@ -167,6 +167,45 @@ class PolicyEngineTest {
         }
     }
 
+    private static java.util.Optional<String> awaitMainRevision(PolicyEngine engine, String revision) throws InterruptedException {
+        for (int i = 0; i < 100 && !engine.mainRevision().equals(java.util.Optional.of(revision)); i++) {
+            Thread.sleep(50);
+        }
+        return engine.mainRevision();
+    }
+
+    @Test
+    void aRepositoryThatStopsInTheMiddleOfTheBodyEndsThePullAtTheTimeLimitAndTheHintDoesNotWait() throws Exception {
+        gateway.main().publish(A);
+        McpPlatformProperties.Policy policy = policy(null);
+        policy.setReadTimeout(Duration.ofMillis(800));
+        policy.getMain().setRefreshInterval(Duration.ofHours(1));
+        gateway.overrides().publish(OVERRIDES);
+        McpPlatformProperties.Policy withOverrides = policy(null);
+        withOverrides.setReadTimeout(Duration.ofMillis(800));
+        withOverrides.getMain().setRefreshInterval(Duration.ofHours(1));
+        try (PolicyEngine engine = PolicyEngine.create(withOverrides, null, meters)) {
+            gateway.main().publish(B).stall(true);
+
+            long start = System.nanoTime();
+            engine.hintRevision(B);
+            assertThat(Duration.ofNanos(System.nanoTime() - start)).as("the hint returns at once").isLessThan(Duration.ofMillis(300));
+
+            start = System.nanoTime();
+            engine.refresh(Channel.MAIN);
+            assertThat(Duration.ofNanos(System.nanoTime() - start)).as("a stalled body ends at the limit")
+                    .isLessThan(Duration.ofSeconds(3));
+            assertThat(engine.mainRevision()).contains(A);
+            gateway.overrides().publish("20261026121700-f607182");
+            start = System.nanoTime();
+            engine.refresh(Channel.OVERRIDES);
+            assertThat(Duration.ofNanos(System.nanoTime() - start)).as("a stuck main does not hold up overrides")
+                    .isLessThan(Duration.ofSeconds(3));
+        } finally {
+            gateway.main().stall(false);
+        }
+    }
+
     @Test
     void aTokenNamingANewerRevisionMakesTheServerPullAtOnce() throws Exception {
         gateway.main().publish(A);
@@ -179,7 +218,7 @@ class PolicyEngineTest {
             assertThat(engine.mainRevision()).as("the all-zero revision of a gateway without bundle is no hint").contains(A);
             engine.hintRevision(B);
 
-            assertThat(engine.mainRevision()).contains(B);
+            assertThat(awaitMainRevision(engine, B)).contains(B);
         }
     }
 }

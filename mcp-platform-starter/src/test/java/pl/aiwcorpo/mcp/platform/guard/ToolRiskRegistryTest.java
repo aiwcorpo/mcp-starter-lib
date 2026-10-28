@@ -177,6 +177,16 @@ class ToolRiskRegistryTest {
     }
 
     @Test
+    void theShortAndRareWordsOfDestructionAreCaughtToo() {
+        for (String name : new String[] {"del_issue", "rm_branch", "revoke_token", "unlink_page", "kill_job",
+                "terminate_instance", "reset_password", "clear_cache"}) {
+            assertThatThrownBy(() -> registry.register(new Hand(name, RiskLevel.UPDATE, null, "Title")))
+                    .as(name).hasMessageContaining("DESTRUCTIVE");
+        }
+        registry.register(new Hand("clear_cache", RiskLevel.DESTRUCTIVE, null, "Clear cache"));
+    }
+
+    @Test
     void theNameOfADestructiveToolCannotBeFlaggedMilder() {
         assertThatThrownBy(() -> registry.register(new Hand("delete_issue", RiskLevel.UPDATE, null, "Delete issue")))
                 .hasMessageContaining("DESTRUCTIVE");

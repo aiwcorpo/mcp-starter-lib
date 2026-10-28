@@ -56,6 +56,8 @@ public final class TestGateway implements AutoCloseable {
     public static final String SERVICE_SUBJECT = "system:mcp-gateway";
     public static final String DEFAULT_POLICY_REVISION = "20261026120000-a1b2c3d";
 
+    private static final java.util.Set<String> SYSTEM_SERVERS = java.util.Set.of("mcp-jira", "mcp-confluence", "mcp-gitlab",
+            "mcp-servicedesk", "mcp-opensearch");
     private static final String KEYS = "mcp-contracts/test-vectors/keys/";
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
@@ -99,11 +101,22 @@ public final class TestGateway implements AutoCloseable {
                 }
             });
             TestGateway gateway = new TestGateway(serverId, server, key);
-            gateway.main.publish("20261026130000-b2c3d4e");
+            if (SYSTEM_SERVERS.contains(serverId)) {
+                gateway.main.publish("20261026130000-b2c3d4e");
+            } else {
+                // A server of none of the five systems (the template's mcp-example): the example policies of the contracts
+                // know only those five, so the bundle is generated for this server id.
+                gateway.main.publishGenerated("20261026130000-0e0e0e0", serverId);
+            }
             server.createContext("/policies/main/", exchange -> gateway.main.handle(exchange,
                     exchange.getRequestURI().getPath().substring("/policies/main/".length())));
             server.createContext("/policies/overrides/", exchange -> gateway.overrides.handle(exchange,
                     exchange.getRequestURI().getPath().substring("/policies/overrides/".length())));
+            server.setExecutor(java.util.concurrent.Executors.newCachedThreadPool(task -> {
+                Thread thread = new Thread(task, "test-gateway");
+                thread.setDaemon(true);
+                return thread;
+            }));
             server.start();
             return gateway;
         } catch (IOException ex) {

@@ -8,7 +8,8 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
-import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
+import org.springframework.core.env.Environment;
+import pl.aiwcorpo.mcp.platform.observability.PlatformObservabilityAutoConfiguration;
 
 /** The C6 manifest: built and checked at startup, served at {@code GET /mcp-manifest}. */
 @AutoConfiguration
@@ -18,8 +19,10 @@ public class PlatformManifestAutoConfiguration {
 
     @Bean
     ManifestCheck manifestCheck(ObjectProvider<McpSyncServer> servers, McpPlatformProperties props, ToolRiskRegistry registry,
-                          ToolInputPolicy inputPolicy) {
-        return new ManifestCheck(servers, props, registry, inputPolicy.requireBoundedSchema());
+                          Environment environment) {
+        // From the profiles, like the wrapper's policy: a bean cannot relax the check of the manifest.
+        return new ManifestCheck(servers, props, registry,
+                PlatformObservabilityAutoConfiguration.policyFor(environment).requireBoundedSchema());
     }
 
     @Bean

@@ -6,7 +6,7 @@ robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadc
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
 Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 3.1.0.
-Wersja: **3.0.0-beta-1** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+Wersja: **3.0.0-beta-2** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
 
@@ -150,6 +150,8 @@ aiwcorpo.mcp.platform:
     allow-test-keys: false                                # true tylko w profilu dev
     startup-timeout: 30s                                  # tyle czeka start na pierwszą paczkę (bez niej serwer nie wstaje)
     overrides-grace: 2m                                   # po restarcie czekamy na paczkę awaryjną, która była aktywna
+    connect-timeout: 2s
+    read-timeout: 10s                                     # czas jednego żądania w całości, z treścią (zawieszone repozytorium nie blokuje wątków)
     ssl-bundle: mcp-internal-ca                           # opcjonalnie, zaufanie do repozytorium paczek
   manifest:                                               # manifest C6 (GET /mcp-manifest)
     version: 1.4.0                                        # wymagane, SemVer serwera
@@ -158,6 +160,7 @@ aiwcorpo.mcp.platform:
     accepted-credential-types: [user-oauth, user-secret]  # wymagane przy credential-required
     output-file: target/mcp-manifest.json                 # opcjonalnie: zapis manifestu przy starcie (rejestracja w gateway'u)
   tools.unclassified: fail                                # fail | destructive
+  tools.max-filtered-elements: 200                        # najdłuższa lista w wyniku sprawdzana politycznie (dłuższa = internal_error)
   tools.max-result-size: 1MB                              # większy wynik narzędzia = internal_error
 spring.ai.mcp.server.name: mcp-jira                      # protocol/type/endpoint ustawia starter
 spring.data.redis:                                        # magazyn jti
@@ -267,7 +270,7 @@ poniżej `$JAVA_HOME/bin/java` (`JAVA_HOME` wskazuje JDK 25).
             <dependency>
                 <groupId>pl.aiwcorpo.mcp</groupId>
                 <artifactId>mcp-platform-bom</artifactId>
-                <version>3.0.0-beta-1</version>
+                <version>3.0.0-beta-2</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -520,8 +523,9 @@ załadowanej jest odrzucana, także po restarcie (`state-dir`, CC-066).
 - Paczka awaryjna (`overrides`, osobny klucz, tylko `forbid`, co 5 s) jest ładowana na wierzch. Jeśli przed restartem była
   aktywna, a po restarcie jej nie ma, wywołania są odmawiane do `overrides-grace` (potem serwer działa i loguje
   `event=policy_overrides_missing_alarm`): reguły wyłącznika nie znikają po cichu.
-- `prv` w tokenie nowszy niż załadowana rewizja wymusza natychmiastowe pobranie (najwyżej co 2 s), więc serwer nie odmawia
-  tego, co gateway właśnie dopuścił. `prv` `00000000000000-0000000` (gateway bez paczki) niczego nie wymusza.
+- `prv` w tokenie nowszy niż załadowana rewizja zleca natychmiastowe pobranie (najwyżej co 2 s, na wątku silnika: wywołanie z hintem
+  nie czeka i jest oceniane załadowaną paczką), więc następne wywołania nie są odmawiane tego, co gateway właśnie dopuścił. Każde żądanie
+  do repozytorium ma limit czasu na całość, z treścią (`read-timeout`), a kanały `main` i `overrides` są pobierane niezależnie. `prv` `00000000000000-0000000` (gateway bez paczki) niczego nie wymusza.
 
 ### `@ResourceRef` i `ResourceResolver`
 
@@ -561,11 +565,18 @@ Przed uruchomieniem narzędzia starter, w tej kolejności i z jednej paczki:
 Zasady resolvera (GitLab: `attrs.ancestorClassifications`, mapa `<ścieżka grupy-przodka> -> topics` dla projektu i dla jego grupy-rodzica,
 CC-129; opis w `MIGRATION-3.0.md`): id i rodzic w wyniku pochodzą z systemu, nigdy z argumentu (zgłoszenie `ABC-123` przeniesione do `HR` ma
 projekt `HR`, a jego klasyfikacja `restricted` zamyka dostęp mimo argumentu, który wygląda na `ABC`); `Jira::Project.category`
-(`""` gdy brak), `Confluence::Space.labels` i `OpenSearch::Index.tags` są obowiązkowe, a zasób bez nich nie jest budowany, więc
-jest odrzucany, tak samo jak jego element w wyniku; `fetch` zwraca pusty `Optional` dla "nie ma" i "nie wolno użytkownikowi"
+(`""` gdy brak), `Confluence::Space.labels` i `OpenSearch::Index.tags` są obowiązkowe, a zasób bez nich nie jest budowany: wywołanie
+kończy się `internal_error` (kontrakt, entity-builder.md sekcja 6; w logu `event=resource_refused reason=evaluation_error type=...`), a
+element wyniku jest usuwany. To samo dla id niezgodnego ze wzorcem typu i dla zasobu innego typu niż w `@ResourceRef`.
+`ResolvedResource.of` pomija atrybuty o wartości `null` (brak atrybutu), a `Map.of(..., null)` rzuca NPE: użyj `HashMap` albo
+`""` dla kategorii projektu. `fetch` zwraca pusty `Optional` dla "nie ma" i "nie wolno użytkownikowi"
 (404 i 403), a **rzuca** dla awarii systemu: to `upstream_unavailable` (albo `credential_required`), nie odmowa. Wynik
 `fetch` i `describe` jest w pamięci podręcznej na czas wywołania; narzędzie czyta go z
-`ResourceContext.current().orElseThrow().fetched("Jira::Issue", key, JiraIssue.class)` bez ponownego wołania systemu.
+`ResourceContext.required().fetched("Jira::Issue", key, JiraIssue.class)` bez ponownego wołania systemu (w teście jednostkowym,
+który woła metodę narzędzia bez platformy: `TestResourceContext.open(...)` z `mcp-platform-test`). Identyfikator musi pasować do
+wzorca typu z kontraktów (np. klucz zgłoszenia Jiry `ABC-123`, nie `ABC-SLOW`); niepasujący to `invalid_argument` przed
+jakimkolwiek wołaniem resolvera. Wyniki listy rozwiązuje jedno wołanie `fetchAll(ids)` (domyślnie pętla po `fetch`; nadpisz
+je wołaniem zbiorczym systemu).
 Resolver jest beanem; przy jednym resolverze typu `@ResourceRef(type = ...)` wystarcza, przy kilku `resolver = X.class`.
 Brak resolvera, zły typ albo niejednoznaczność zatrzymują start.
 
@@ -577,41 +588,66 @@ ryzykiem zatrzymuje start.
 
 ### Wyniki: `ResultFilter`
 
-Rekord zwracany z narzędzia (bezpośrednio, w liście albo zagnieżdżony) z komponentem `@ResourceRef` jest sprawdzany po
-wykonaniu narzędzia: każdy element **listy** o takim komponencie jest rozwiązywany tym samym resolverem i oceniany, a
-niedozwolone elementy są usuwane z wyniku (to nie błąd wywołania). Rekord, który nie jest elementem listy, a nie jest
-dozwolony, kończy wywołanie `not_found_or_denied`. Liczników z systemu (`total`) starter nie poprawia.
+Rekord zwracany z narzędzia z komponentem `@ResourceRef` jest sprawdzany po wykonaniu narzędzia: każdy element **listy** o takim
+komponencie jest rozwiązywany tym samym resolverem (jedno `fetchAll` na listę) i oceniany, a niedozwolone elementy są usuwane z
+wyniku (to nie błąd wywołania; zdarzenie `policy_decision` dla pierwszych 20, licznik w logu `result_elements_removed`). Element,
+którego nie da się rozwiązać (awaria systemu, brak), też jest usuwany. Rekord, który nie jest elementem listy, a nie jest
+dozwolony, kończy wywołanie `not_found_or_denied`. Lista dłuższa niż `tools.max-filtered-elements` (200) kończy wywołanie
+`internal_error`: zwracaj strony. Liczników z systemu (`total`) starter nie poprawia. Wynik narzędzia zapisującego jest oceniany
+akcją narzędzia, a odmowa wyniku nie cofa zmiany, która już zaszła.
 
 ```java
 public record IssueHit(@ResourceRef(type = "Jira::Issue") String key, String summary) {}
 public record SearchResult(List<IssueHit> hits, int total) {}
+public record Page<T>(List<T> items, int total) {}       // Page<IssueHit>, Optional<List<IssueHit>>, IssueHit[] też
 ```
 
-Dla wyniku innego kształtu wstrzyknij `ResourcePolicy` (implementuje `ResultFilter`):
-`retainAllowed(items, item -> resolvedResource)` albo `retainAllowedById("Jira::Issue", items, Item::key)`;
-`allows(resource)` i `require(resource)` dla zasobu, który narzędzie znajduje samo (projekt, w którym tworzy zgłoszenie). Elementy,
-których nie da się rozwiązać, zbudować ani ocenić, są usuwane. Metody działają tylko w trakcie wywołania narzędzia.
+**Co starter potrafi śledzić:** rekordy (także generyczne, rozwiązywane z typu zwracanego), listy, zbiory, tablice i `Optional`,
+w dowolnym zagnieżdżeniu. **Czego nie:** `Map`, klas, które nie są rekordami, `Object`, `JsonNode`, `Stream`, rekordów z adnotacjami
+Jacksona (`@JsonProperty`, `@JsonUnwrapped`, `@JsonIgnore`, ...: zmieniają nazwy pól, pod którymi filtr szuka danych). Wynik z taką częścią
+zatrzymuje start (komunikat podaje metodę i część), chyba że metoda ma `@ResultWithoutResources`: wynik nie zawiera zasobów albo
+narzędzie filtruje je samo przed zwróceniem. JSON z polem, którego nie ma wśród komponentów rekordu (globalna strategia nazw w
+Jacksonie), kończy wywołanie `internal_error` zamiast przepuścić nieprzefiltrowane dane. Wynik typu `String` jest przekazywany
+bez zmian: narzędzie, które zwraca zasoby, zwraca typowane rekordy, nie gotowy JSON.
 
-### `QueryScope`: ograniczenie zapytania
+Dla wyniku budowanego inaczej wstrzyknij `ResourcePolicy` (implementuje `ResultFilter`): `retainAllowed(items, item -> resolvedResource)` albo
+`retainAllowedById("Jira::Issue", items, Item::key)`; `allows(resource)` i `require(resource)` dla zasobu, który narzędzie znajduje samo
+(projekt, w którym tworzy zgłoszenie). `@ResourceRef` wolno dać tylko na parametrze metody `@Tool` i na komponencie rekordu wyniku;
+na komponencie rekordu będącego argumentem zatrzymuje start (byłby pominięty, a narzędzie działałoby bez kontroli).
 
-`policy.queryScope("Jira::Project")` (typy z zakresami: `Jira::Project`, `Confluence::Space`, `Confluence::Page`,
-`GitLab::Group`, `OpenSearch::Index`, `ServiceDesk::Queue`) daje to, do czego wolno ograniczyć wyszukiwanie: `linkIds()`
-(zawężenie linku wirtualnego serwera z `vsc` tokenu, zawsze do zapytania) i `grantedIds()` (zakresy z grup w paczce). Gotowe
-elementy:
+### `QueryScope` i `StructuredQuery`: zapytanie buduje serwer
+
+Model **nie podaje tekstu zapytania**. JQL i CQL budujesz z ustrukturyzowanych filtrów; starter dokleja zakres i cytuje
+wartości według gramatyki, więc wartość nie zamknie cudzysłowu ani nawiasu, nie wywoła funkcji (`currentUser()`), nie doda
+`OR project = HR`. Poprzednie `restrictJql(clause, userJql)` (surowy JQL od modelu) nie istnieje: jego wykrywanie nawiasów dawało się
+obejść ucieczką `\"` poza cudzysłowem, której lekser Jiry też używa.
 
 ```java
-QueryScope scope = policy.queryScope("Jira::Project");
-String jql = QueryScope.restrictJql(scope.jqlProjectClause(), userJql);
-// project in ("ABC", "DEF") AND (<userJql>) ORDER BY ...   (bez linku: userJql bez zmian)
+QueryScope scope = policy.queryScope("Jira::Project");     // zakres z tokenu (link vsc) i grup z paczki
+String jql = scope.jql(Set.of("status", "assignee", "labels", "text", "created"))     // pola, po których wolno filtrować i sortować
+        .where("status", Operator.EQUALS, filter.status())        // null albo pusta lista = filtr pominięty
+        .where("labels", Operator.IN, filter.labels())
+        .where("text", Operator.CONTAINS, filter.text())          // tekst literalny: * ? " ~ ( ) ... są escapowane
+        .orderBy("created", Direction.DESC).build();
+// project in ("ABC", "DEF") AND status = "Open" AND labels in ("a", "b") AND text ~ "x" ORDER BY created DESC
 ```
 
-- identyfikatory są cytowane (`QueryScope.quote`), nigdy sklejane; `restrictJql` odmawia zapytania z niezamkniętym nawiasem
-  albo cudzysłowem (inaczej `a = 1) OR (project = HR` zamykałoby grupę z ograniczeniem) i zostawia `ORDER BY` na końcu;
-- `cqlSpaceClause()` dla Confluence; `opensearchIndexPatterns()` daje pary `p` i `p-*` (nigdy `p*`), a dla linku i grup
-  tylko część wspólną;
+- pola z białej listy autora narzędzia (`^[A-Za-z][A-Za-z0-9_.]{0,63}$` albo `cf[n]`), operatory z zamkniętego zbioru
+  (`EQUALS`, `NOT_EQUALS`, `IN`, `NOT_IN`, `CONTAINS`, `NOT_CONTAINS`, `GREATER(_OR_EQUAL)`, `LESS(_OR_EQUAL)`), tylko koniunkcja (`AND`);
+- wartość: 1 do 1000 znaków, bez znaków zakazanych przez higienę tekstu (CC-121; nowy wiersz i tab są escapowane), do 50 wartości w `IN`, do 30 filtrów;
+  naruszenie to `IllegalArgumentException` (platforma zgłasza `invalid_argument`);
+- `scope.cql(Set.of("title", "label", ...))` dla Confluence (zawężenie do przestrzeni linku); `scope.jql(fields, true)` dodaje zakresy
+  z grup (konto serwisowe);
+- `jqlProjectClause()`, `cqlSpaceClause()` zostają jako gotowe fragmenty (identyfikatory cytowane przez `QueryScope.quote`);
+- **OpenSearch:** `scope.opensearchIndexExpression()` (pary `p` i `p-*`, nigdy `p*`; dla linku i grup część wspólna) **rzuca wyjątek,
+  gdy nie ma czego pytać**, bo puste wyrażenie przeszukałoby wszystkie indeksy; sprawdź `scope.nothingToQuery()` i zwróć pusty wynik. Do
+  każdego żądania dodaj `QueryScope.OPENSEARCH_SEARCH_PARAMETERS` (`expand_wildcards=open`, `ignore_unavailable=true`,
+  `allow_no_indices=true`). Wzorzec `p-*` obejmuje też **aliasy** o takiej nazwie, a filtr wyniku nie poprawia agregatów, `hits.total` ani
+  `_count`: narzędzie agregujące odmawia, gdy `GET _resolve/index/<wyrażenie>` zwraca alias. DSL zapytania OpenSearch buduj tak samo
+  po stronie serwera, nie przyjmuj go od modelu;
 - gdzie system sam stosuje prawa użytkownika (Jira, Confluence, GitLab z jego tokenem), wystarczy zawężenie linku; gdzie nie
-  (OpenSearch, konto serwisowe) zapytanie ogranicza się do `grantedIds()`, a **puste `grantsNothing()` znaczy: nie wykonuj
-  zapytania**, nigdy "bez filtra". Ograniczenie zapytania nie zastępuje filtrowania wyniku.
+  (OpenSearch, konto serwisowe) zapytanie ogranicza się do `grantedIds()`, a puste `grantsNothing()` znaczy: nie wykonuj zapytania.
+  Ograniczenie zapytania nie zastępuje filtrowania wyniku.
 
 ### Audyt
 
@@ -825,7 +861,7 @@ Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera t
 ```xml
 <dependency>
   <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-  <version>3.0.0-beta-1</version><type>pom</type><scope>import</scope>
+  <version>3.0.0-beta-2</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
 

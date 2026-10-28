@@ -38,10 +38,14 @@ class QueryScopeTest {
     @Test
     void grantsThatAreEmptyNeverTurnIntoNoFilter() {
         QueryScope none = scope("Jira::Project", "Jira::Project", null, Set.of());
+        QueryScope noIndex = scope("OpenSearch::Index", "OpenSearch::Index", null, Set.of());
 
         assertThat(none.grantsNothing()).isTrue();
         assertThatThrownBy(() -> none.jqlProjectClause(true)).isInstanceOf(IllegalStateException.class);
-        assertThat(scope("OpenSearch::Index", "OpenSearch::Index", null, Set.of()).opensearchIndexPatterns()).isEmpty();
+        assertThat(noIndex.nothingToQuery()).isTrue();
+        assertThatThrownBy(noIndex::opensearchIndexPatterns).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("every index");
+        assertThatThrownBy(noIndex::opensearchIndexExpression).isInstanceOf(IllegalStateException.class);
     }
 
     @Test
@@ -59,38 +63,16 @@ class QueryScopeTest {
 
         assertThat(scope.opensearchIndexPatterns()).containsExactly("audit", "audit-*", "logs-team-a", "logs-team-a-*");
         assertThat(scope("OpenSearch::Index", "OpenSearch::Index", Set.of("logs-team-ab"), Set.of("logs-team-a"))
-                .opensearchIndexPatterns()).as("logs-team-ab is not inside logs-team-a").isEmpty();
+                .nothingToQuery()).as("logs-team-ab is not inside logs-team-a").isTrue();
+        assertThat(scope("OpenSearch::Index", "OpenSearch::Index", null, Set.of("logs", "audit")).opensearchIndexExpression())
+                .isEqualTo("audit,audit-*,logs,logs-*");
+        assertThat(QueryScope.OPENSEARCH_SEARCH_PARAMETERS).containsEntry("expand_wildcards", "open")
+                .containsEntry("allow_no_indices", "true");
     }
 
     @Test
     void aClauseForAnotherTypeIsAProgrammingError() {
         assertThatThrownBy(() -> scope("Confluence::Space", "Confluence::Space", null, Set.of()).jqlProjectClause())
                 .isInstanceOf(IllegalStateException.class);
-    }
-
-    @Test
-    void theJqlClauseIsPutInFrontAndOrderByStaysAtTheEnd() {
-        Optional<String> clause = Optional.of("project in (\"ABC\")");
-
-        assertThat(QueryScope.restrictJql(clause, "status = Open")).isEqualTo("project in (\"ABC\") AND (status = Open)");
-        assertThat(QueryScope.restrictJql(clause, "status = Open order   by created DESC"))
-                .isEqualTo("project in (\"ABC\") AND (status = Open) order   by created DESC");
-        assertThat(QueryScope.restrictJql(clause, "summary ~ \"order by me\" OR text ~ 'x'"))
-                .isEqualTo("project in (\"ABC\") AND (summary ~ \"order by me\" OR text ~ 'x')");
-        assertThat(QueryScope.restrictJql(clause, "")).isEqualTo("project in (\"ABC\")");
-        assertThat(QueryScope.restrictJql(clause, "ORDER BY created")).isEqualTo("project in (\"ABC\") ORDER BY created");
-        assertThat(QueryScope.restrictJql(clause, "a = 1 OR b = 2")).isEqualTo("project in (\"ABC\") AND (a = 1 OR b = 2)");
-        assertThat(QueryScope.restrictJql(Optional.empty(), " status = Open ")).isEqualTo("status = Open");
-    }
-
-    @Test
-    void aQueryThatClosesTheGroupOfTheClauseIsRefused() {
-        Optional<String> clause = Optional.of("project in (\"ABC\")");
-
-        for (String hostile : new String[] {"a = 1) OR (project = HR", "a = 1) OR project = HR OR (b = 2", "a = \"x", "(a = 1",
-                "a = 'x\\'"}) {
-            assertThatThrownBy(() -> QueryScope.restrictJql(clause, hostile)).as(hostile).isInstanceOf(IllegalArgumentException.class);
-        }
-        assertThat(QueryScope.restrictJql(clause, "summary ~ \"a) b\" AND (c = 1)")).contains("summary ~ \"a) b\"");
     }
 }

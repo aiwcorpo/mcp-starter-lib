@@ -50,8 +50,30 @@ public final class ResourceContext implements AutoCloseable {
     }
 
     static ResourceContext require() {
+        return required();
+    }
+
+    /**
+     * The context of the call in progress, for tool code that reads what the resolver fetched.
+     *
+     * @throws IllegalStateException outside a call; in a unit test that calls the tool method directly, open a context
+     *         first with {@code TestResourceContext.open(...)} of mcp-platform-test (or call the tool through the MCP
+     *         client of {@code TestGateway}, where the platform opens it)
+     */
+    public static ResourceContext required() {
         return current().orElseThrow(() -> new IllegalStateException(
-                "resource checks are available only while a tool runs (no call in progress on this thread)"));
+                "no tool call is in progress on this thread: ResourceContext exists only while the platform runs a tool. "
+                        + "In a unit test open one with TestResourceContext.open(...) (mcp-platform-test), or call the tool "
+                        + "through the MCP client of TestGateway"));
+    }
+
+    /**
+     * Records what a resolver would have fetched, for a test that calls the tool method without the platform
+     * ({@code TestResourceContext}); not for production code.
+     */
+    public ResourceContext withFetched(String type, String id, Object fetched, ResolvedResource resource) {
+        remember(type, id, new Resolved(fetched, resource));
+        return this;
     }
 
     public CallerContext caller() {

@@ -50,6 +50,24 @@ public interface ResourceResolver<T> {
      */
     Optional<T> fetch(String id) throws Exception;
 
+    /**
+     * Fetches many resources at once, for the elements of a result (one call to the system for a page of hits instead of one
+     * per hit). The default calls {@link #fetch} for each id; override it with a bulk call (a JQL {@code key in (...)}, a
+     * multi-get) when the system has one. Ids the system does not return, or the user may not see, are left out of the map.
+     * A failure is treated as for {@link #fetch}, except that elements of a result that could not be fetched are removed
+     * from it instead of ending the call.
+     *
+     * @param ids at most {@code tools.max-filtered-elements}, each already checked against the pattern of the type
+     * @return fetched objects by the id that was asked for
+     */
+    default java.util.Map<String, T> fetchAll(java.util.Collection<String> ids) throws Exception {
+        java.util.Map<String, T> fetched = new java.util.LinkedHashMap<>();
+        for (String id : ids) {
+            fetch(id).ifPresent(value -> fetched.put(id, value));
+        }
+        return fetched;
+    }
+
     /** The resource the policy is evaluated on, built from what {@link #fetch} returned. */
     ResolvedResource describe(T fetched);
 }

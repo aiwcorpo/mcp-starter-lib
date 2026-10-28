@@ -146,6 +146,9 @@ public class PlatformConfigurationGuard implements InitializingBean {
                     + "account, with {system} as placeholder (sent in credential_required)");
         }
 
+        if (properties.getTools().getMaxFilteredElements() < 1) {
+            problems.add("aiwcorpo.mcp.platform.tools.max-filtered-elements must be at least 1");
+        }
         policyProblems(properties.getPolicy(), dev, problems);
         manifestProblems(properties.getManifest(), problems);
 

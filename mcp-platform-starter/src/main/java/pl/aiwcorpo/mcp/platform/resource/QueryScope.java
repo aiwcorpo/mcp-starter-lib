@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import pl.aiwcorpo.mcp.cedar.entities.QueryConstraint;
@@ -109,9 +110,43 @@ public final class QueryScope {
      * The index patterns an OpenSearch query is limited to, as a list to join with commas: for each prefix {@code p} the
      * pair {@code p} and {@code p-*}, never {@code p*} (that would reach {@code logs-team-ab} for {@code logs-team-a}).
      * With a link that narrows, only what both the grants and the link cover is left (the longer prefix of a pair when one
-     * contains the other). Empty = nothing to query ({@link #grantsNothing()}, or the link and the grants do not meet).
+     * contains the other).
+     *
+     * @throws IllegalStateException when there is nothing to query ({@link #grantsNothing()}, or the link and the grants do
+     *         not meet): an empty expression would make OpenSearch search every index, so the call must end with no result
+     *         instead. Check {@link #nothingToQuery()} first.
      */
     public List<String> opensearchIndexPatterns() {
+        List<String> patterns = indexPatterns();
+        if (patterns.isEmpty()) {
+            throw new IllegalStateException("the caller may query no index (grantsNothing or the link and the grants do not "
+                    + "meet): do not run the query; an empty index expression would search every index");
+        }
+        return patterns;
+    }
+
+    /** The patterns joined with commas, for the path of a search request; throws like {@link #opensearchIndexPatterns()}. */
+    public String opensearchIndexExpression() {
+        return String.join(",", opensearchIndexPatterns());
+    }
+
+    /** True when an OpenSearch query for this scope must not run (no index is both granted and inside the link). */
+    public boolean nothingToQuery() {
+        requireType("OpenSearch::Index");
+        return indexPatterns().isEmpty();
+    }
+
+    /**
+     * Search parameters that keep a pattern from reaching beyond the indexes it names: only open indexes, no error for a
+     * pattern that matches nothing. Put them on every request that uses {@link #opensearchIndexExpression()}. A pattern
+     * {@code p-*} also matches an <em>alias</em> whose name starts with {@code p-}; the starter cannot see aliases, so a
+     * tool that aggregates ({@code aggs}, {@code _count}, {@code hits.total}), where filtering the result cannot correct
+     * the numbers, must refuse when {@code GET _resolve/index/<expression>} lists an alias.
+     */
+    public static final java.util.Map<String, String> OPENSEARCH_SEARCH_PARAMETERS = java.util.Map.of(
+            "expand_wildcards", "open", "ignore_unavailable", "true", "allow_no_indices", "true");
+
+    private List<String> indexPatterns() {
         requireType("OpenSearch::Index");
         SortedSet<String> prefixes = new TreeSet<>();
         if (linkIds.isEmpty()) {
@@ -149,86 +184,23 @@ public final class QueryScope {
     }
 
     /**
-     * The query the server runs: {@code clause AND (userJql)} with a trailing {@code ORDER BY} kept at the end. The
-     * clause is not optional: a call whose scope has nothing to add passes {@code userJql} through unchanged. A user query
-     * that is blank becomes the clause alone; one with unbalanced parentheses or quotes is refused.
+     * A JQL query built from structured filters, limited to the projects of the link (and, with {@code includeGrants},
+     * to the granted ones): see {@link StructuredQuery}. The query is never taken from the model as text.
      *
-     * @param clause for example {@link #jqlProjectClause()}; empty = no limit to add
+     * @param fields the fields the tool lets the model filter and sort on
      */
-    public static String restrictJql(Optional<String> clause, String userJql) {
-        String jql = userJql == null ? "" : userJql.strip();
-        if (clause.isEmpty()) {
-            return jql;
-        }
-        if (!balanced(jql)) {
-            throw new IllegalArgumentException("the query has unbalanced parentheses or quotes");
-        }
-        int orderBy = topLevelOrderBy(jql);
-        String filter = orderBy < 0 ? jql : jql.substring(0, orderBy).strip();
-        String order = orderBy < 0 ? "" : " " + jql.substring(orderBy);
-        return clause.get() + (filter.isEmpty() ? "" : " AND (" + filter + ")") + order;
+    public StructuredQuery.Builder jql(Set<String> fields) {
+        return new StructuredQuery.Builder(fields, jqlProjectClause());
     }
 
-    /**
-     * Parentheses open and close in order and quotes are closed: a user query like {@code a = 1) OR (project = HR} would
-     * otherwise end the group the clause is wrapped around and widen it. {@code restrictJql} refuses such a query with an
-     * {@link IllegalArgumentException}, which the platform reports as {@code invalid_argument}.
-     */
-    static boolean balanced(String jql) {
-        int depth = 0;
-        char quote = 0;
-        for (int i = 0; i < jql.length(); i++) {
-            char c = jql.charAt(i);
-            if (quote != 0) {
-                if (c == '\\') {
-                    i++;
-                } else if (c == quote) {
-                    quote = 0;
-                }
-            } else if (c == '"' || c == '\'') {
-                quote = c;
-            } else if (c == '(') {
-                depth++;
-            } else if (c == ')' && --depth < 0) {
-                return false;
-            }
-        }
-        return depth == 0 && quote == 0;
+    /** As {@link #jql(Set)}, with the granted projects too (see {@link #jqlProjectClause(boolean)}). */
+    public StructuredQuery.Builder jql(Set<String> fields, boolean includeGrants) {
+        return new StructuredQuery.Builder(fields, jqlProjectClause(includeGrants));
     }
 
-    /** Index of {@code ORDER BY} outside quotes and parentheses, or -1. */
-    static int topLevelOrderBy(String jql) {
-        int depth = 0;
-        char quote = 0;
-        for (int i = 0; i < jql.length(); i++) {
-            char c = jql.charAt(i);
-            if (quote != 0) {
-                if (c == '\\') {
-                    i++;
-                } else if (c == quote) {
-                    quote = 0;
-                }
-            } else if (c == '"' || c == '\'') {
-                quote = c;
-            } else if (c == '(') {
-                depth++;
-            } else if (c == ')') {
-                depth--;
-            } else if (depth == 0 && (i == 0 || Character.isWhitespace(jql.charAt(i - 1))
-                    || jql.charAt(i - 1) == ')') && jql.regionMatches(true, i, "order", 0, 5)) {
-                int j = i + 5;
-                int spaces = 0;
-                while (j < jql.length() && Character.isWhitespace(jql.charAt(j))) {
-                    j++;
-                    spaces++;
-                }
-                if (spaces > 0 && jql.regionMatches(true, j, "by", 0, 2)
-                        && (j + 2 == jql.length() || Character.isWhitespace(jql.charAt(j + 2)))) {
-                    return i;
-                }
-            }
-        }
-        return -1;
+    /** A CQL query built from structured filters, limited to the spaces of the link: see {@link StructuredQuery}. */
+    public StructuredQuery.Builder cql(Set<String> fields) {
+        return new StructuredQuery.Builder(fields, cqlSpaceClause());
     }
 
     private void requireType(String... allowed) {

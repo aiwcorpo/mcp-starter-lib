@@ -58,7 +58,8 @@ public class ToolRiskRegistry {
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     private static final Set<String> DESTRUCTIVE_WORDS =
-            Set.of("delete", "drop", "remove", "purge", "truncate", "destroy", "wipe", "erase");
+            Set.of("delete", "drop", "remove", "purge", "truncate", "destroy", "wipe", "erase", "del", "rm", "revoke",
+                    "unlink", "kill", "terminate", "reset", "clear");
 
     private final Unclassified unclassified;
     private final Map<String, Registered> registered = new ConcurrentHashMap<>();

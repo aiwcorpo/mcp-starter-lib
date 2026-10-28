@@ -308,6 +308,108 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
+## Z beta-1 na beta-2
+
+Zmiany po recenzji bezpieczeństwa i smoke teście beta-1. Dla serwera pisanego według sekcji "Z alpha-14 na beta-1" to: przepisanie
+wyszukiwania na `StructuredQuery`, kilka nowych błędów startu (wynik nieśledzony przez filtr, `@ResourceRef` w rekordzie argumentu) i
+mniej ciche zachowania. Wersje: `<version>3.0.0-beta-2</version>` w imporcie BOM (kontrakty 3.1.0 bez zmian).
+
+1. **Zapytania JQL i CQL buduje serwer.** `QueryScope.restrictJql` został usunięty (beta-1 przyjmował surowy JQL od modelu i
+   dawał się obejść przez `\"` poza cudzysłowem: Jira czyta tam ucieczkę, starter nie). Zamiast `restrictJql(scope.jqlProjectClause(), userJql)`:
+
+   ```java
+   // model podaje filtr, nie tekst zapytania
+   public record IssueFilter(@Nullable @ArgumentLimits(maxLength = 40) String status,
+                             @Nullable @ArgumentLimits(maxLength = 200) String text) { }
+
+   String jql = scope.jql(Set.of("status", "text", "created"))                     // import pl.aiwcorpo.mcp.platform.resource.StructuredQuery.Operator / Direction
+           .where("status", Operator.EQUALS, filter.status())
+           .where("text", Operator.CONTAINS, filter.text())
+           .orderBy("created", Direction.DESC).build();
+   ```
+
+   Pola z listy autora, operatory z zamkniętego zbioru, tylko `AND`, wartości zawsze w cudzysłowach i escapowane. Narzędzie, które brało
+   `String jql` od modelu, bierze strukturę (rekord z polami) albo parametry; jeśli produkt wymaga języka zapytań od modelu, to nie przechodzi
+   przez starter. `opensearchIndexPatterns()` rzuca wyjątek zamiast zwracać pustą listę, gdy nie ma czego pytać (pusta lista = wszystkie
+   indeksy); użyj `nothingToQuery()` i `opensearchIndexExpression()` oraz `QueryScope.OPENSEARCH_SEARCH_PARAMETERS`, aliasy: README.
+2. **Kształt wyniku musi być śledzony albo zadeklarowany.** Start zatrzymuje wynik z `Map`, klasą niebędącą rekordem, `Object`, `JsonNode`
+   i rekord z adnotacją Jacksona na komponencie, jeśli rekord (także przez `Page<T>`, `Optional`, listę) zawiera `@ResourceRef`; dla
+   wyniku bez zasobów, którego platforma nie umie obejrzeć, dodaj `@ResultWithoutResources` (`pl.aiwcorpo.mcp.platform.resource`):
+
+   ```java
+   @Tool(name = "get_stats", description = "Returns counters.")
+   @ToolRisk(RiskLevel.READ_ONLY)
+   @ToolTitle("Get stats")
+   @ResultWithoutResources            // Map<String, Long>: nie ma w niej zasobów
+   public Map<String, Long> getStats() { ... }
+   ```
+
+   Generyczne rekordy (`Page<IssueHit>`) i `Optional<List<IssueHit>>` działają bez zmian w kodzie. Lista dłuższa niż
+   `tools.max-filtered-elements` (200) w wyniku kończy wywołanie `internal_error`: zwracaj strony.
+3. **`@ResourceRef` poza parametrem metody.** Na komponencie rekordu będącego argumentem (`update_issue(IssueUpdate req)`) start jest
+   zatrzymywany (w beta-1 adnotacja była po cichu ignorowana). Podaj identyfikator jako osobny parametr:
+   `update_issue(@ResourceRef(type = "Jira::Issue") String issueKey, IssueChanges changes)`. Dwa argumenty tego samego typu muszą
+   mieć ten sam resolver.
+4. **Kody błędów resolvera.** Wyjątek z `fetch` albo `describe` (awaria systemu, `NullPointerException` z `Map.of(..., null)`) to
+   `upstream_unavailable` / `internal_error`, nie `invalid_argument`. `invalid_argument` dostaje tylko identyfikator niezgodny ze wzorcem typu
+   (np. `ABC-SLOW` nie jest kluczem zgłoszenia Jiry; w testach używaj `ABC-5`, `ABC-999`). Zasób bez wymaganej klasyfikacji, z id niezgodnym
+   z typem albo innym typem niż w `@ResourceRef` to `internal_error` (kontrakt), nie `not_found_or_denied`; element wyniku w takim stanie jest
+   usuwany. Awaria resolvera dla elementu wyniku usuwa element zamiast kończyć wywołanie. Wynik wielu elementów rozwiązuje jedno wołanie
+   `ResourceResolver#fetchAll(ids)` (domyślnie pętla po `fetch`; nadpisz wołaniem zbiorczym, np. `key in (...)`).
+5. **Test jednostkowy narzędzia z `@ResourceRef`.** Metoda, która czyta `ResourceContext.required().fetched(...)`, rzuca poza wywołaniem
+   platformy z instrukcją. W teście otwórz kontekst:
+
+   ```java
+   import pl.aiwcorpo.mcp.platform.resource.ResourceContext;
+   import pl.aiwcorpo.mcp.platform.test.TestResourceContext;
+
+   try (ResourceContext context = TestResourceContext.open("get_issue", Map.of("issueKey", "ABC-1"))
+           .withFetched("Jira::Issue", "ABC-1", new JiraIssue("ABC-1", "ABC"), null)) {
+       assertThat(tools.getIssue("ABC-1").project()).isEqualTo("ABC");
+   }
+   ```
+
+   Politykę sprawdza się przez klienta MCP z `TestGateway`, nie przez bezpośrednie wywołanie metody.
+6. **Serwer przykładowy (`mcp-example` w template).** `TestGateway.start("mcp-example")` generuje i podpisuje kluczem testowym paczkę z
+   politykami `call` dla grup `mcp-example-read`, `mcp-example-write`, `mcp-example-destructive` (nie trzeba udawać `mcp-jira`). Poza listą pięciu
+   systemów kontraktów: w `dev` start ostrzega (`SystemId`), a manifest nie przechodzi `server-manifest.schema.json` (`serverId` jest
+   enumem), co w `dev` jest ostrzeżeniem `event=manifest_rejected_by_rules`; poza `dev` taki serwer nie wstanie. Test `ManifestTest` w
+   template'cie zaplanuj więc tylko dla serwerów z listy kontraktów.
+7. **Pobieranie paczek.** `policy.read-timeout` to czas jednego żądania w całości (z treścią), a nie tylko do nagłówków; `prv` nowsze niż
+   załadowana rewizja zleca pobranie wątkowi silnika i nie blokuje wywołania. Zmiana tylko dla czytających kod.
+8. **Interceptory.** `ToolCallInterceptor`, który zmienia wartość argumentu `@ResourceRef` po autoryzacji, kończy wywołanie
+   `internal_error`; zmieniaj inne argumenty, nie identyfikatory zasobów.
+9. **Tripwire nazw** zna też `del`, `rm`, `revoke`, `unlink`, `kill`, `terminate`, `reset`, `clear`: narzędzie `clear_cache` oznaczone
+   `UPDATE` nie wystartuje (oznacz `DESTRUCTIVE` albo zmień nazwę).
+10. **Uzupełnienia sekcji "Z alpha-14 na beta-1"** (z smoke testu):
+    - importy do przykładów: `pl.aiwcorpo.mcp.platform.resource.{ResourceRef, ResourceResolver, ResourceContext, ResourcePolicy, QueryScope,
+      StructuredQuery}`, `pl.aiwcorpo.mcp.platform.input.ArgumentLimits`, `pl.aiwcorpo.mcp.platform.guard.{RiskLevel, ToolRisk, ToolTitle}`,
+      `pl.aiwcorpo.mcp.cedar.entities.ResolvedResource` (z `mcp-cedar-entities`, nie ze startera), `pl.aiwcorpo.mcp.platform.test.TestGateway`,
+      `java.util.{List, Map, Optional, Set}`, `java.util.Objects`;
+    - konfiguracja `dev` jest kompletna dopiero z `server-id`, `internal-jwt.jwks-uri` i `credential.connect-url`:
+
+      ```yaml
+      aiwcorpo.mcp.platform:
+        server-id: mcp-jira
+        internal-jwt.jwks-uri: http://127.0.0.1:18700/.well-known/jwks.json
+        credential.connect-url: http://localhost:18090/connections?system={system}
+        policy:
+          allow-test-keys: true
+          main:
+            url: http://127.0.0.1:18747/policies/main/latest.json
+            key-id: test-policies-main-dev
+            public-key-file: /abs/path/mcp-policies/keys/dev/test-policies-main-dev.public.pem
+        manifest:
+          version: 0.1.0
+          internal-url: https://mcp-jira.internal:8443/mcp
+          accepted-credential-types: [user-secret]
+      ```
+
+    - `public-key-file` jest czytany względem katalogu roboczego procesu (nie modułu): podawaj ścieżkę bezwzględną albo względną do miejsca
+      startu (`mvn spring-boot:run` z katalogu modułu, `java -jar` z dowolnego);
+    - `GATEWAY.serverProperties()` ustawia `manifest.version=1.0.0` i `internal-url` dla testów, więc wersja z `application.yml` nie jest w
+      testach widoczna; test manifestu porównuj z `1.0.0`, nie z wartością z pliku.
+
 ## Z alpha-14 na beta-1
 
 Lista dla template'u i pięciu serwerów (jira, confluence, gitlab, servicedesk, opensearch). Beta-1 przechodzi na
@@ -481,7 +583,7 @@ poddrzewo, więc schemat Cedar ma wymagany `inheritedClassification` na `GitLab:
 atrybutu `ancestorClassifications` podanego przez serwer. Starter nie ma na to osobnego API: to atrybut w `ResolvedResource`
 (mapa `<ścieżka grupy-przodka> -> topics`, dokładnie dla grup nad zasobem, dla projektu łącznie z jego rodzicem, `{}` jawnie dla grupy najwyższego poziomu), a **rodzic** projektu
 (grupa) dostaje swoją własną mapę (przodkowie grupy, bez niej samej). Brak mapy, brakujący albo nadmiarowy klucz (w tym sama grupa)
-lub topics niebędące listą napisów dają `internal_error`, czyli odmowę `not_found_or_denied` (zasób nie jest budowany). Resolver
+lub topics niebędące listą napisów dają `internal_error` (zasób nie jest budowany, wywołanie jest odrzucone). Resolver
 serwera GitLab pobiera topics każdej grupy na ścieżce (cache na czas wywołania):
 
 ```java
@@ -502,15 +604,16 @@ ws-09 na schemacie 3.1.0.
 `@ToolRisk(value = RiskLevel.UPDATE, action = ToolAction.ADMIN)` wybiera akcję Cedar `admin`; domyślnie `read`, `update`,
 `delete` wynikają z ryzyka, a sprzeczność (`READ_ONLY` z `delete`) zatrzymuje start.
 
-Co zmienia się w odpowiedziach: nieistniejący, niedostępny, przeniesiony do `restricted` i pozbawiony klasyfikacji zasób dają ten sam
-`not_found_or_denied` z tym samym tekstem; brak grupy narzędzia to `access_denied`; awaria systemu w resolverze to
+Co zmienia się w odpowiedziach: nieistniejący, niedostępny i przeniesiony do `restricted` zasób dają ten sam
+`not_found_or_denied` z tym samym tekstem (zasób bez wymaganej klasyfikacji: `internal_error`, od beta-2 zgodnie z kontraktem); brak grupy narzędzia to `access_denied`; awaria systemu w resolverze to
 `upstream_unavailable` (nie odmowa). Adapter, który tłumaczył 404 na własny błąd, powinien w resolverze zwracać `Optional.empty()`.
 
 ### 7. Wyniki i wyszukiwanie: `@ResourceRef` w rekordach, `QueryScope`
 
 Narzędzie wyszukujące zwraca rekordy, których komponent z identyfikatorem ma `@ResourceRef`; elementy listy niedozwolone dla
 wywołującego są usuwane po wykonaniu narzędzia (zgłoszenie z `DEF` podlinkowane w wyszukiwaniu `ABC` znika, gdy link
-wirtualnego serwera zawęża do `ABC`):
+wirtualnego serwera zawęża do `ABC`). Zapytanie buduje serwer ze struktury (beta-2; w beta-1 było tu `restrictJql` na surowym JQL od
+modelu, które dało się obejść, patrz "Z beta-1 na beta-2"):
 
 ```java
 public record IssueHit(@ResourceRef(type = "Jira::Issue") String key, String summary) { }
@@ -519,19 +622,20 @@ public record SearchResult(List<IssueHit> hits, int total) { }
 @Tool(name = "search_issues", description = "Searches issues.")
 @ToolRisk(RiskLevel.READ_ONLY)
 @ToolTitle("Search issues")
-public SearchResult searchIssues(@ArgumentLimits(maxLength = 500) String jql) {
+public SearchResult searchIssues(IssueFilter filter) {
     QueryScope scope = policy.queryScope("Jira::Project");                    // ResourcePolicy wstrzyknięte w konstruktorze
-    String forced = QueryScope.restrictJql(scope.jqlProjectClause(), jql);   // project in ("ABC") AND (jql) ORDER BY ...
-    return toResult(jira.search(forced));
+    String jql = scope.jql(Set.of("status", "labels", "text", "created"))
+            .where("status", Operator.EQUALS, filter.status())
+            .where("text", Operator.CONTAINS, filter.text())
+            .orderBy("created", Direction.DESC).build();                      // project in ("ABC") AND status = "Open" ...
+    return toResult(jira.search(jql));
 }
 ```
 
-`restrictJql` odrzuca JQL z niezamkniętym nawiasem lub cudzysłowem (`IllegalArgumentException` -> `invalid_argument`). Własny kod
-sklejania `project in (...)` zastąp `QueryScope`; identyfikatory są cytowane przez `QueryScope.quote`. Dla Confluence
-`scope.cqlSpaceClause()`, dla OpenSearch `scope.opensearchIndexPatterns()` (pary `p` i `p-*`) i **brak zapytania, gdy
-`scope.grantsNothing()`**. `total` i inne liczniki z systemu nie są poprawiane po filtrowaniu: nie pokazuj ich, jeśli mają być
-zgodne z widoczną listą. Wynik, który nie jest rekordem z oznaczonym komponentem, filtruj przez
-`policy.retainAllowedById("Jira::Issue", items, Item::key)` albo `policy.retainAllowed(items, item -> resolvedResource)`.
+Dla Confluence `scope.cql(...)`, dla OpenSearch `scope.opensearchIndexExpression()` (patrz README, "`QueryScope` i `StructuredQuery`"). `total` i inne
+liczniki z systemu nie są poprawiane po filtrowaniu: nie pokazuj ich, jeśli mają być zgodne z widoczną listą. Wynik, który nie jest rekordem z
+oznaczonym komponentem, filtruj przez `policy.retainAllowedById("Jira::Issue", items, Item::key)` albo
+`policy.retainAllowed(items, item -> resolvedResource)`.
 
 ### 8. Testy serwera
 

@@ -74,6 +74,33 @@ public final class ResourceResolvers {
         }
     }
 
+    /**
+     * Resolves the ids of the elements of a result with one {@link ResourceResolver#fetchAll} call and puts them in the cache
+     * of the call; what could not be fetched stays uncached, so each such element is tried alone and removed if it fails too.
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    void prefetch(ResourceResolver<?> resolver, String type, java.util.Collection<String> ids) {
+        ResourceContext context = ResourceContext.require();
+        java.util.List<String> missing = ids.stream().distinct().filter(id -> id != null && context.cached(type, id).isEmpty()).toList();
+        if (missing.size() < 2) {
+            return;
+        }
+        try {
+            java.util.Map<String, ?> fetched = resolver.fetchAll(missing);
+            for (String id : missing) {
+                Object value = fetched.get(id);
+                if (value == null) {
+                    context.remember(type, id, new ResourceContext.Resolved(null, null));
+                } else {
+                    context.remember(type, id, new ResourceContext.Resolved(value, ((ResourceResolver) resolver).describe(value)));
+                }
+            }
+        } catch (Exception ex) {
+            org.slf4j.LoggerFactory.getLogger(ResourceResolvers.class).warn("event=resolver_bulk_failed type={} detail=\"{}\"",
+                    type, ex.getClass().getName());
+        }
+    }
+
     /** The system could not answer; the cause is what the mapper of C10 classifies (credential missing, backend unavailable). */
     static final class ResolverFailedException extends RuntimeException {
         ResolverFailedException(Throwable cause) {

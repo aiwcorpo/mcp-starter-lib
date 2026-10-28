@@ -27,6 +27,7 @@ import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
 import pl.aiwcorpo.mcp.platform.policy.PolicyEngine;
 import pl.aiwcorpo.mcp.platform.policy.PolicyUnavailableException;
+import pl.aiwcorpo.mcp.platform.text.ToolResultRejectedException;
 import pl.aiwcorpo.mcp.policy.bundle.PolicyStore.Snapshot;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
@@ -58,6 +59,8 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
 
     private static final Logger LOG = LoggerFactory.getLogger(ResourcePolicy.class);
     private static final JsonMapper JSON = JsonMapper.builder().build();
+    /** Elements of a list that get an audit event when removed; the rest are only counted in the log. */
+    private static final int MAX_AUDITED_DROPS = 20;
     private static final String NOT_FOUND = "The resource does not exist or you do not have access to it.";
 
     private final PolicyEngine engine;
@@ -66,9 +69,11 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
     private final AuditLogger audit;
     private final String serverId;
     private final String system;
+    private final int maxFilteredElements;
 
     public ResourcePolicy(PolicyEngine engine, ResourceResolvers resolvers, ToolRiskRegistry registry, AuditLogger audit,
-                          String serverId, String system) {
+                          String serverId, String system, int maxFilteredElements) {
+        this.maxFilteredElements = maxFilteredElements;
         this.engine = engine;
         this.resolvers = resolvers;
         this.registry = registry;
@@ -151,6 +156,14 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
             throw failure.get();
         }
         LOG.info("event=resource_refused tool=\"{}\" reason={} type={}", tool, reason, result.deniedType().orElse("-"));
+        if ("evaluation_error".equals(reason) || "resource_id_invalid".equals(reason) || "resource_type_mismatch".equals(reason)) {
+            // The resolver gave something the policy cannot be evaluated on: a required attribute is missing (a project
+            // without category, a space without labels, a GitLab project without ancestorClassifications), the id does not
+            // match its type's pattern, the type differs. Contract (entity-builder.md, section 6): internal_error. The call
+            // is refused all the same; the log line above names the reason and the type, never the value.
+            throw new SanitizedToolException(new McpErrorMapper.SafeError(ToolErrorCode.INTERNAL_ERROR.code(),
+                    "The tool could not complete the request."));
+        }
         deny(caller, tool, result.deniedType().orElse(null), result.deniedId().orElse(null), null,
                 "denied".equals(reason) ? "policy_forbid" : "not_granted", snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
     }
@@ -219,6 +232,8 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         ResourceResolver<?> resolver = resolvers.only(resourceType).orElseThrow(() -> new IllegalStateException(
                 "there is not exactly one ResourceResolver bean for " + resourceType));
         List<T> kept = new ArrayList<>(items.size());
+        resolvers.prefetch(resolver, resourceType, items.stream().map(idOf).filter(id -> id != null
+                && ResourceIds.isValid(resourceType, ResourceIds.Kind.RESOURCE, id)).toList());
         for (T item : items) {
             if (elementAllowed(resolver, resourceType, idOf.apply(item))) {
                 kept.add(item);
@@ -231,7 +246,14 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         if (id == null || !ResourceIds.isValid(type, ResourceIds.Kind.RESOURCE, id)) {
             return false;
         }
-        Optional<ResolvedResource> resource = resolvers.resolve(resolver, type, id);
+        Optional<ResolvedResource> resource;
+        try {
+            resource = resolvers.resolve(resolver, type, id);
+        } catch (ResourceResolvers.ResolverFailedException ex) {
+            // An element that cannot be resolved is not returned (entity-builder.md, section 8); the call goes on.
+            LOG.warn("event=result_element_unresolved type={} detail=\"{}\"", type, ex.getCause().getClass().getName());
+            return false;
+        }
         return resource.isPresent() && type.equals(resource.get().type()) && allows(resource.get());
     }
 
@@ -270,38 +292,59 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         } catch (JacksonException ex) {
             throw new IllegalStateException("the result of tool '" + toolName + "' has resource components but is not JSON");
         }
-        JsonNode filtered = apply(shape, root, true);
+        JsonNode filtered = apply(shape, root, toolName);
         return JSON.writeValueAsString(filtered);
     }
 
-    private JsonNode apply(ResourceRefs.ResultShape shape, JsonNode node, boolean mustStay) {
+    private JsonNode apply(ResourceRefs.ResultShape shape, JsonNode node, String tool) {
+        if (node == null || node.isNull()) {
+            return node;
+        }
         switch (shape) {
             case ResourceRefs.Many many -> {
-                if (node instanceof ArrayNode array) {
-                    ArrayNode kept = JSON.createArrayNode();
-                    for (JsonNode element : array) {
-                        if (keeps(many.element(), element)) {
-                            kept.add(apply(many.element(), element, false));
-                        }
-                    }
-                    return kept;
+                if (!(node instanceof ArrayNode array)) {
+                    throw unexpected(tool, "a list was expected");
                 }
-                return node;
+                if (array.size() > maxFilteredElements) {
+                    throw new ToolResultRejectedException("The result of tool '" + tool + "' has " + array.size()
+                            + " elements to check against the policy, over the limit of " + maxFilteredElements
+                            + " (aiwcorpo.mcp.platform.tools.max-filtered-elements); return a page of results.");
+                }
+                prefetch(many.element(), array);
+                ArrayNode kept = JSON.createArrayNode();
+                int dropped = 0;
+                for (JsonNode element : array) {
+                    if (keeps(many.element(), element)) {
+                        kept.add(apply(many.element(), element, tool));
+                    } else {
+                        dropped++;
+                        auditDropped(many.element(), element, dropped);
+                    }
+                }
+                if (dropped > 0) {
+                    LOG.info("event=result_elements_removed tool=\"{}\" removed={}", tool, dropped);
+                }
+                return kept;
             }
             case ResourceRefs.Element element -> {
+                requireKnownFields(element.inside(), node, tool);
                 if (!keeps(element, node)) {
+                    ResourceContext context = ResourceContext.require();
+                    audit.policyDenied(context.caller(), tool, registry.riskOf(tool).orElse(null), element.type(),
+                            idOf(element, node), null, "policy_forbid", engine.snapshot().main().revision(),
+                            ToolErrorCode.NOT_FOUND_OR_DENIED.code());
                     throw notFound();
                 }
-                return apply(element.inside(), node, true);
+                return apply(element.inside(), node, tool);
             }
             case ResourceRefs.Fields fields -> {
-                if (node instanceof ObjectNode object) {
-                    fields.fields().forEach((name, inner) -> {
-                        JsonNode value = object.get(name);
-                        if (value != null && !value.isNull()) {
-                            object.set(name, apply(inner, value, true));
-                        }
-                    });
+                requireKnownFields(fields, node, tool);
+                ObjectNode object = (ObjectNode) node;
+                for (Map.Entry<String, ResourceRefs.ResultShape> field : fields.fields().entrySet()) {
+                    JsonNode value = object.get(field.getKey());
+                    if (value != null && !value.isNull()) {
+                        object.set(field.getKey(), apply(field.getValue(), value, tool));
+                    }
                 }
                 return node;
             }
@@ -311,15 +354,63 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         }
     }
 
+    /** One bulk fetch for the elements of a list that are resources, before each is judged. */
+    private void prefetch(ResourceRefs.ResultShape shape, ArrayNode array) {
+        if (!(shape instanceof ResourceRefs.Element element)) {
+            return;
+        }
+        List<String> ids = new ArrayList<>();
+        for (JsonNode node : array) {
+            String id = node instanceof ObjectNode ? idOf(element, node) : null;
+            if (id != null && ResourceIds.isValid(element.type(), ResourceIds.Kind.RESOURCE, id)) {
+                ids.add(id);
+            }
+        }
+        resolvers.prefetch(resolvers.forRef(element.type(), element.resolver(), "result"), element.type(), ids);
+    }
+
+    /** A field the platform did not expect means the JSON is not shaped as the type says (a naming strategy, a mixin): fail closed. */
+    private static void requireKnownFields(ResourceRefs.Fields fields, JsonNode node, String tool) {
+        if (!(node instanceof ObjectNode object)) {
+            throw unexpected(tool, "an object was expected");
+        }
+        for (String name : object.propertyNames()) {
+            if (!fields.known().contains(name)) {
+                throw unexpected(tool, "the result has a field that is not a component of its record type");
+            }
+        }
+    }
+
+    private static IllegalStateException unexpected(String tool, String what) {
+        return new IllegalStateException("the result of tool '" + tool + "' cannot be checked against the policy: " + what
+                + " (Jackson is configured to serialize records by something other than their component names)");
+    }
+
+    private String idOf(ResourceRefs.Element element, JsonNode node) {
+        JsonNode idNode = node.get(element.idComponent());
+        return idNode == null ? null : idNode.isString() ? idNode.asString() : idNode.isIntegralNumber() ? idNode.asString() : null;
+    }
+
+    private void auditDropped(ResourceRefs.ResultShape shape, JsonNode node, int count) {
+        if (count > MAX_AUDITED_DROPS || !(shape instanceof ResourceRefs.Element element)) {
+            return;
+        }
+        ResourceContext context = ResourceContext.require();
+        audit.policyDenied(context.caller(), context.tool(), registry.riskOf(context.tool()).orElse(null), element.type(),
+                idOf(element, node), null, "policy_forbid", engine.snapshot().main().revision(),
+                ToolErrorCode.NOT_FOUND_OR_DENIED.code());
+    }
+
     /** Whether an element of a list stays: a resource element only when allowed; other shapes always, they are filtered inside. */
     private boolean keeps(ResourceRefs.ResultShape shape, JsonNode node) {
         if (!(shape instanceof ResourceRefs.Element element)) {
             return true;
         }
-        JsonNode idNode = node.get(element.idComponent());
-        String id = idNode == null ? null : idNode.isString() ? idNode.asString() : idNode.isIntegralNumber() ? idNode.asString() : null;
+        if (!(node instanceof ObjectNode)) {
+            return false;
+        }
         ResourceResolver<?> resolver = resolvers.forRef(element.type(), element.resolver(), "result");
-        return elementAllowed(resolver, element.type(), id);
+        return elementAllowed(resolver, element.type(), idOf(element, node));
     }
 
     // ---- shared ----------------------------------------------------------------------------------------------

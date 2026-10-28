@@ -11,8 +11,11 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import org.springframework.ai.chat.model.ToolContext;
+import org.springframework.core.ResolvableType;
+import org.springframework.core.annotation.AnnotatedElementUtils;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -29,32 +32,93 @@ public final class ResourceRefs {
     /**
      * The resource arguments of {@code method}, in parameter order.
      *
-     * @throws IllegalStateException for a type outside the contracts, or a parameter that cannot carry identifiers
+     * @throws IllegalStateException for a type outside the contracts, a parameter that cannot carry identifiers, two
+     *         resolvers for one type in one tool, or a {@link ResourceRef} on a component of an argument record (it would
+     *         be ignored, and the tool would run without the check)
      */
     public static List<ResourceBinding> arguments(Method method) {
         List<ResourceBinding> bindings = new ArrayList<>();
+        Map<String, Class<?>> resolverByType = new java.util.HashMap<>();
         for (Parameter parameter : method.getParameters()) {
-            ResourceRef ref = parameter.getAnnotation(ResourceRef.class);
-            if (ref == null || ToolContext.class.isAssignableFrom(parameter.getType())) {
+            if (ToolContext.class.isAssignableFrom(parameter.getType())) {
                 continue;
             }
             String where = "@Tool " + method.getName() + "(" + parameter.getName() + ")";
+            nestedRefs(ResolvableType.forMethodParameter(method, java.util.Arrays.asList(method.getParameters()).indexOf(parameter)),
+                    where, 0);
+            ResourceRef ref = parameter.getAnnotation(ResourceRef.class);
+            if (ref == null) {
+                continue;
+            }
             checkType(ref, where);
             if (!identifiers(parameter.getParameterizedType())) {
                 throw new IllegalStateException(where + ": @ResourceRef needs a String, an integer, or a list or array of them, not "
                         + parameter.getParameterizedType().getTypeName());
+            }
+            Class<?> previous = resolverByType.putIfAbsent(ref.type(), ref.resolver());
+            if (previous != null && previous != ref.resolver()) {
+                throw new IllegalStateException("@Tool " + method.getName() + ": two arguments of type " + ref.type()
+                        + " name different resolvers (" + previous.getSimpleName() + ", " + ref.resolver().getSimpleName()
+                        + "); a call resolves one type with one resolver");
             }
             bindings.add(new ResourceBinding(parameter.getName(), ref.type(), ref.resolver()));
         }
         return List.copyOf(bindings);
     }
 
+    /** A {@link ResourceRef} below the top level of an argument is never read; the tool would run unchecked. */
+    private static void nestedRefs(ResolvableType type, String where, int depth) {
+        if (depth > MAX_DEPTH) {
+            return;
+        }
+        Class<?> raw = type.resolve(Object.class);
+        if (raw.isArray()) {
+            nestedRefs(type.getComponentType(), where + "[]", depth + 1);
+        } else if (Collection.class.isAssignableFrom(raw)) {
+            nestedRefs(type.asCollection().getGeneric(0), where + "[]", depth + 1);
+        } else if (raw.isRecord()) {
+            for (RecordComponent component : raw.getRecordComponents()) {
+                if (component.getAnnotation(ResourceRef.class) != null) {
+                    throw new IllegalStateException(where + "." + component.getName() + ": @ResourceRef is read on a parameter "
+                            + "of the @Tool method, not on a component of an argument record, where it would be ignored and the "
+                            + "tool would run without the policy check. Pass the identifier as a parameter of its own.");
+                }
+                nestedRefs(ResolvableType.forType(component.getGenericType(), type), where + "." + component.getName(), depth + 1);
+            }
+        }
+    }
+
     /**
-     * The resource components of the result type of {@code method}, as the shape the platform filters; empty when the
-     * result holds none.
+     * The resource components of the result type of {@code method}, as the shape the platform filters.
+     *
+     * <p>Fail-closed: a result whose type holds resource components must be a shape the platform can follow (records,
+     * also generic ones, in lists, arrays, sets and {@code Optional}), without Jackson annotations that rename or move
+     * fields. A result with a part the platform cannot see into (a {@code Map}, a class that is not a record,
+     * {@code Object}, {@code JsonNode}, a {@code Stream}) stops the server unless the method is marked
+     * {@link ResultWithoutResources}.
+     *
+     * @throws IllegalStateException for such a result
      */
     public static ResultShape result(Method method) {
-        return shape(method.getGenericReturnType(), method.getName() + " result", 0);
+        Walk walk = new Walk();
+        ResultShape shape = walk.shape(ResolvableType.forMethodReturnType(method), "result", 0);
+        String where = "@Tool " + method.getName();
+        if (!walk.unsupported.isEmpty()) {
+            throw new IllegalStateException(where + ": the result cannot be filtered by the platform: " + walk.unsupported.get(0)
+                    + ". Return records (also generic ones) in lists, arrays and Optional, without Jackson annotations on them.");
+        }
+        boolean declared = AnnotatedElementUtils.hasAnnotation(method, ResultWithoutResources.class);
+        if (declared && !(shape instanceof None)) {
+            throw new IllegalStateException(where + ": marked @ResultWithoutResources but the result type holds a @ResourceRef "
+                    + "component; remove one of them");
+        }
+        if (!declared && !walk.opaque.isEmpty()) {
+            throw new IllegalStateException(where + ": the platform cannot see into the result (" + walk.opaque.get(0)
+                    + "), so it cannot tell whether it holds resources it must filter. Return records with @ResourceRef "
+                    + "components, or mark the method @ResultWithoutResources if the result holds no resources or the tool "
+                    + "filters them itself with ResourcePolicy#retainAllowed.");
+        }
+        return shape;
     }
 
     private static void checkType(ResourceRef ref, String where) {
@@ -96,54 +160,112 @@ public final class ResourceRefs {
     public record Many(ResultShape element) implements ResultShape {
     }
 
-    /** A record without a resource component of its own, whose fields hold shapes. */
-    public record Fields(Map<String, ResultShape> fields) implements ResultShape {
+    /**
+     * A record without a resource component of its own, whose fields hold shapes; {@code known} is every component name,
+     * so a field the platform did not expect in the JSON (a renaming the platform cannot see) fails the call.
+     */
+    public record Fields(Map<String, ResultShape> fields, Set<String> known) implements ResultShape {
     }
 
-    private static ResultShape shape(Type type, String where, int depth) {
-        if (depth > MAX_DEPTH) {
-            return new None();
-        }
-        Class<?> raw = rawClass(type);
-        if (raw.isArray()) {
-            return many(shape(raw.getComponentType(), where, depth + 1));
-        }
-        if (Collection.class.isAssignableFrom(raw) && type instanceof ParameterizedType parameterized) {
-            return many(shape(parameterized.getActualTypeArguments()[0], where, depth + 1));
-        }
-        if (!raw.isRecord()) {
-            return new None();
-        }
-        Map<String, ResultShape> fields = new LinkedHashMap<>();
-        String idComponent = null;
-        ResourceRef idRef = null;
-        for (RecordComponent component : raw.getRecordComponents()) {
-            ResourceRef ref = component.getAnnotation(ResourceRef.class);
-            if (ref != null) {
-                String here = where + "." + component.getName();
-                checkType(ref, "@Tool " + here);
-                if (!isIdentifier(component.getType())) {
-                    throw new IllegalStateException("@Tool " + here + ": @ResourceRef on a result component needs a String or "
-                            + "an integer, not " + component.getGenericType().getTypeName());
-                }
-                if (idRef != null) {
-                    throw new IllegalStateException("@Tool " + where + ": a record has one @ResourceRef component, not "
-                            + "two (" + idComponent + ", " + component.getName() + ")");
-                }
-                idComponent = component.getName();
-                idRef = ref;
-                continue;
+    private static final class Walk {
+
+        final List<String> opaque = new ArrayList<>();
+        final List<String> unsupported = new ArrayList<>();
+
+        ResultShape shape(ResolvableType type, String where, int depth) {
+            if (depth > MAX_DEPTH) {
+                opaque.add(where + " is nested deeper than " + MAX_DEPTH + " levels");
+                return new None();
             }
-            ResultShape inner = shape(component.getGenericType(), where + "." + component.getName(), depth + 1);
-            if (!(inner instanceof None)) {
-                fields.put(component.getName(), inner);
+            Class<?> raw = type.resolve(Object.class);
+            if (raw == void.class || raw == Void.class || isScalar(raw)) {
+                return new None();
+            }
+            if (Optional.class.isAssignableFrom(raw)) {
+                return shape(type.getGeneric(0), where, depth + 1);
+            }
+            if (raw.isArray()) {
+                return many(shape(type.getComponentType(), where + "[]", depth + 1));
+            }
+            if (Collection.class.isAssignableFrom(raw)) {
+                return many(shape(type.asCollection().getGeneric(0), where + "[]", depth + 1));
+            }
+            if (Map.class.isAssignableFrom(raw)) {
+                ResultShape inner = shape(type.asMap().getGeneric(1), where + "{}", depth + 1);
+                if (!(inner instanceof None) || containsOpaque(type.asMap().getGeneric(1))) {
+                    opaque.add(where + " is a Map (its values are not followed)");
+                }
+                return new None();
+            }
+            if (!raw.isRecord()) {
+                opaque.add(where + " is " + raw.getName() + ", which is not a record");
+                return new None();
+            }
+            Map<String, ResultShape> fields = new LinkedHashMap<>();
+            Set<String> known = new java.util.LinkedHashSet<>();
+            String idComponent = null;
+            ResourceRef idRef = null;
+            for (RecordComponent component : raw.getRecordComponents()) {
+                known.add(component.getName());
+                ResourceRef ref = component.getAnnotation(ResourceRef.class);
+                if (ref != null) {
+                    String here = "@Tool " + where + "." + component.getName();
+                    checkType(ref, here);
+                    if (!isIdentifier(component.getType())) {
+                        throw new IllegalStateException(here + ": @ResourceRef on a result component needs a String or "
+                                + "an integer, not " + component.getGenericType().getTypeName());
+                    }
+                    if (idRef != null) {
+                        throw new IllegalStateException("@Tool " + where + ": a record has one @ResourceRef component, not "
+                                + "two (" + idComponent + ", " + component.getName() + ")");
+                    }
+                    idComponent = component.getName();
+                    idRef = ref;
+                    continue;
+                }
+                ResultShape inner = shape(ResolvableType.forType(component.getGenericType(), type),
+                        where + "." + component.getName(), depth + 1);
+                if (!(inner instanceof None)) {
+                    fields.put(component.getName(), inner);
+                }
+            }
+            boolean holds = idRef != null || !fields.isEmpty();
+            if (holds) {
+                jacksonAnnotations(raw, where);
+            }
+            Fields inside = new Fields(Map.copyOf(fields), Set.copyOf(known));
+            if (idRef != null) {
+                return new Element(idComponent, idRef.type(), idRef.resolver(), inside);
+            }
+            return fields.isEmpty() ? new None() : inside;
+        }
+
+        private void jacksonAnnotations(Class<?> record, String where) {
+            List<java.lang.annotation.Annotation> found = new ArrayList<>(List.of(record.getAnnotations()));
+            for (RecordComponent component : record.getRecordComponents()) {
+                found.addAll(List.of(component.getAnnotations()));
+                found.addAll(List.of(component.getAccessor().getAnnotations()));
+            }
+            for (java.lang.annotation.Annotation annotation : found) {
+                String name = annotation.annotationType().getName();
+                if (name.startsWith("com.fasterxml.jackson.") || name.startsWith("tools.jackson.")) {
+                    unsupported.add(where + " (" + record.getSimpleName() + ") has @" + annotation.annotationType().getSimpleName()
+                            + ": the platform reads the JSON by the names of the record components, so renaming, unwrapping "
+                            + "or ignoring them would hide resources from the filter");
+                }
             }
         }
-        Fields inside = new Fields(Map.copyOf(fields));
-        if (idRef != null) {
-            return new Element(idComponent, idRef.type(), idRef.resolver(), inside);
+
+        private boolean containsOpaque(ResolvableType type) {
+            Class<?> raw = type.resolve(Object.class);
+            return !isScalar(raw) && !raw.isRecord() && !Collection.class.isAssignableFrom(raw) && !raw.isArray();
         }
-        return fields.isEmpty() ? new None() : inside;
+    }
+
+    private static boolean isScalar(Class<?> raw) {
+        return raw.isPrimitive() || raw == String.class || raw == Character.class || raw == Boolean.class
+                || Number.class.isAssignableFrom(raw) || raw.isEnum() || java.time.temporal.Temporal.class.isAssignableFrom(raw)
+                || raw == java.util.Date.class || raw == java.util.UUID.class || raw == java.net.URI.class;
     }
 
     private static ResultShape many(ResultShape element) {

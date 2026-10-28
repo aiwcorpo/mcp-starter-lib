@@ -30,6 +30,7 @@ public final class PolicyRepository {
     private final AtomicInteger pointerRequests = new AtomicInteger();
     private volatile String revision;
     private volatile boolean offline;
+    private volatile boolean stalled;
 
     /** Publishes the bundle of {@code revision} with its own signature. */
     public PolicyRepository publish(String revision) {
@@ -42,6 +43,91 @@ public final class PolicyRepository {
         byte[] archiveBytes = read(archive);
         byte[] signature = read(signatureResource);
         return publishRaw(revision, archiveBytes, signature);
+    }
+
+    /**
+     * Publishes a bundle generated here for a server that is none of the five systems of the contracts (the template's
+     * {@code mcp-example}): the schema of the contracts, no static entities, and a {@code call} policy per risk for the
+     * groups {@code <serverId>-read}, {@code <serverId>-write} and {@code <serverId>-destructive}. Signed with the published
+     * test key of the main channel (the key of the contracts' vectors; the bundle is for tests only).
+     */
+    public PolicyRepository publishGenerated(String revision, String serverId) {
+        try {
+            String schema = new String(readResource("mcp-contracts/cedar/mcp.cedarschema"), StandardCharsets.UTF_8);
+            StringBuilder policies = new StringBuilder();
+            for (String[] row : new String[][] {{"read", "READ_ONLY"}, {"write", "UPDATE"}, {"destructive", "DESTRUCTIVE"}}) {
+                policies.append("@id(\"").append(serverId).append("-call-").append(row[0]).append("\")\npermit (\n  principal in UserGroup::\"")
+                        .append(serverId).append('-').append(row[0]).append("\",\n  action == Action::\"call\",\n  resource is Tool\n)\n")
+                        .append("when { resource.server == \"").append(serverId).append("\" && resource.risk == \"")
+                        .append(row[1]).append("\" };\n\n");
+            }
+            String manifest = "{\"revision\":\"" + revision + "\",\"gitSha\":\"" + revision.substring(15).repeat(6).substring(0, 40)
+                    + "\",\"createdAt\":\"2026-10-26T13:00:00Z\",\"schemaVersion\":\"3.1.0\"}";
+            byte[] archive = gzip(tar(Map.of("manifest.json", manifest, "schema.cedarschema", schema, "entities/static.json", "[]",
+                    "policies/call.cedar", policies.toString())));
+            java.security.Signature signature = java.security.Signature.getInstance("Ed25519");
+            String pem = new String(readResource("mcp-contracts/test-vectors/keys/test-policy-bundle.NOT-FOR-PRODUCTION.private.pem"),
+                    StandardCharsets.UTF_8).replaceAll("-----[A-Z ]+-----", "").replaceAll("\\s", "");
+            signature.initSign(java.security.KeyFactory.getInstance("Ed25519").generatePrivate(
+                    new java.security.spec.PKCS8EncodedKeySpec(java.util.Base64.getDecoder().decode(pem))));
+            signature.update(archive);
+            return publishRaw(revision, archive, signature.sign());
+        } catch (java.security.GeneralSecurityException | IOException ex) {
+            throw new IllegalStateException("cannot generate the test bundle", ex);
+        }
+    }
+
+    private static byte[] readResource(String path) throws IOException {
+        try (InputStream in = PolicyRepository.class.getClassLoader().getResourceAsStream(path)) {
+            if (in == null) {
+                throw new IOException(path + " not found: add pl.aiwcorpo.mcp:mcp-contracts and its test-vectors");
+            }
+            return in.readAllBytes();
+        }
+    }
+
+    /** Strict ustar, regular files only, as mcp-policy-bundle reads it. */
+    private static byte[] tar(Map<String, String> files) throws IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        for (Map.Entry<String, String> file : new java.util.TreeMap<>(files).entrySet()) {
+            byte[] content = file.getValue().getBytes(StandardCharsets.UTF_8);
+            byte[] header = new byte[512];
+            put(header, 0, file.getKey());
+            put(header, 100, "0000644");
+            put(header, 108, "0000000");
+            put(header, 116, "0000000");
+            put(header, 124, String.format("%011o", content.length));
+            put(header, 136, "00000000000");
+            java.util.Arrays.fill(header, 148, 156, (byte) ' ');
+            header[156] = '0';
+            put(header, 257, "ustar");
+            put(header, 263, "00");
+            long sum = 0;
+            for (byte b : header) {
+                sum += b & 0xff;
+            }
+            put(header, 148, String.format("%06o", sum));
+            header[154] = 0;
+            header[155] = ' ';
+            out.write(header);
+            out.write(content);
+            out.write(new byte[(512 - content.length % 512) % 512]);
+        }
+        out.write(new byte[1024]);
+        return out.toByteArray();
+    }
+
+    private static void put(byte[] header, int offset, String text) {
+        byte[] bytes = text.getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(bytes, 0, header, offset, bytes.length);
+    }
+
+    private static byte[] gzip(byte[] data) throws IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        try (java.util.zip.GZIPOutputStream gz = new java.util.zip.GZIPOutputStream(out)) {
+            gz.write(data);
+        }
+        return out.toByteArray();
     }
 
     /** Publishes arbitrary bytes under the names the pointer of {@code revision} gives. */
@@ -58,6 +144,15 @@ public final class PolicyRepository {
     /** While true every request is answered 503, as when the repository is down. */
     public PolicyRepository offline(boolean value) {
         this.offline = value;
+        return this;
+    }
+
+    /**
+     * While true a request is answered with the headers of a 200 and then nothing for half a minute, as a repository
+     * (or a proxy in front of it) that hangs while it sends the body.
+     */
+    public PolicyRepository stall(boolean value) {
+        this.stalled = value;
         return this;
     }
 
@@ -90,6 +185,16 @@ public final class PolicyRepository {
             }
             exchange.sendResponseHeaders(200, body.length);
             try (OutputStream out = exchange.getResponseBody()) {
+                if (stalled) {
+                    out.write(body, 0, 1);
+                    out.flush();
+                    try {
+                        Thread.sleep(30_000);
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
                 out.write(body);
             }
         }

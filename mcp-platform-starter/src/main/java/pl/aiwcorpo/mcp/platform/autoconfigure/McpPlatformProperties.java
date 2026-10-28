@@ -566,6 +566,20 @@ public class McpPlatformProperties {
          */
         private DataSize maxResultSize = DEFAULT_MAX_RESULT_SIZE;
 
+        /**
+         * Most elements of one list in a result that are checked against the policy per call (each is a call to the
+         * system by the resolver unless it was resolved already); a longer list ends the call as {@code internal_error}.
+         */
+        private int maxFilteredElements = 200;
+
+        public int getMaxFilteredElements() {
+            return maxFilteredElements;
+        }
+
+        public void setMaxFilteredElements(int maxFilteredElements) {
+            this.maxFilteredElements = maxFilteredElements;
+        }
+
         public DataSize getMaxResultSize() {
             return maxResultSize;
         }

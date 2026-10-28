@@ -20,6 +20,7 @@ import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
 import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
 import pl.aiwcorpo.mcp.platform.input.ToolInputValidator;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
+import pl.aiwcorpo.mcp.platform.resource.ResourceBinding;
 import pl.aiwcorpo.mcp.platform.resource.ResourceContext;
 import pl.aiwcorpo.mcp.platform.resource.ResourcePolicy;
 import pl.aiwcorpo.mcp.platform.security.BackendCredential;
@@ -76,6 +77,7 @@ public final class AuditingToolCallback implements ToolCallback {
     private final ToolResultValidator resultValidator;
     private final long maxResultBytes;
     private final ResourcePolicy resourcePolicy;
+    private final List<ResourceBinding> resourceRefs;
 
     /**
      * Not public: a wrapper built by a server would carry its own interceptors and input policy and then be taken
@@ -107,6 +109,7 @@ public final class AuditingToolCallback implements ToolCallback {
         this.errorMapper = errorMapper;
         this.interceptors = List.copyOf(interceptors);
         this.risk = registry.register(delegate);
+        this.resourceRefs = registry.resourceRefsOf(delegate.getToolDefinition().name());
         this.inputValidator = ToolInputValidator.compile(delegate, inputPolicy);
         this.resultValidator = registry.outputSchemaOf(delegate.getToolDefinition().name())
                 .map(schema -> ToolResultValidator.compile(delegate.getToolDefinition().name(), schema)).orElse(null);
@@ -154,8 +157,8 @@ public final class AuditingToolCallback implements ToolCallback {
             if (resourcePolicy != null) {
                 resourcePolicy.authorizeCall();
             }
-            String result = chain(0, new ToolCallInterceptor.Invocation(name, risk, toolInput, caller), tool)
-                    .proceed(toolInput);
+            String result = chain(0, new ToolCallInterceptor.Invocation(name, risk, toolInput, caller),
+                    authorizedOnly(resources, tool)).proceed(toolInput);
             checkSize(name, result);
             if (resourcePolicy != null) {
                 result = resourcePolicy.filterResult(name, result);
@@ -170,6 +173,26 @@ public final class AuditingToolCallback implements ToolCallback {
             audit(caller, name, toolInput, error.code(), start);
             throw new SanitizedToolException(error);
         }
+    }
+
+    /**
+     * The tool runs only with the resource arguments the policy was asked about: an interceptor (server code) that
+     * changes {@code issueKey} after the check would otherwise run the tool on a resource nobody evaluated.
+     */
+    private UnaryOperator<String> authorizedOnly(ResourceContext resources, UnaryOperator<String> tool) {
+        if (resourcePolicy == null || resourceRefs.isEmpty()) {
+            return tool;
+        }
+        return input -> {
+            Map<String, Object> now = arguments(input);
+            for (ResourceBinding binding : resourceRefs) {
+                if (!java.util.Objects.equals(resources.arguments().get(binding.argument()), now.get(binding.argument()))) {
+                    throw new IllegalStateException("an interceptor changed the resource argument '" + binding.argument()
+                            + "' after the policy check; interceptors may not change resource identifiers");
+                }
+            }
+            return tool.apply(input);
+        };
     }
 
     /** The arguments as a map for the policy; the validator has judged them already, an unparsable text gives none. */

@@ -4,10 +4,12 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
+import org.springframework.lang.Nullable;
 import org.springframework.web.client.ResourceAccessException;
 import pl.aiwcorpo.mcp.cedar.entities.ResolvedResource;
 import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
@@ -20,6 +22,7 @@ import pl.aiwcorpo.mcp.platform.resource.ResourceContext;
 import pl.aiwcorpo.mcp.platform.resource.ResourcePolicy;
 import pl.aiwcorpo.mcp.platform.resource.ResourceRef;
 import pl.aiwcorpo.mcp.platform.resource.ResourceResolver;
+import pl.aiwcorpo.mcp.platform.resource.StructuredQuery;
 
 /**
  * A Jira server over a fake Jira, for the resource checks: issues in projects of various classifications, an issue moved
@@ -43,6 +46,7 @@ public class JiraServer {
                 "ABC-123", new JiraIssue("HR-45", "HR", "Restricted", true),
                 "NOC-1", new JiraIssue("NOC-1", "NOC", null, false));
         final List<String> calls = new ArrayList<>();
+        final List<List<String>> bulkCalls = new ArrayList<>();
     }
 
     @Bean
@@ -63,6 +67,13 @@ public class JiraServer {
     @Bean
     JiraProjectResolver jiraProjectResolver() {
         return new JiraProjectResolver();
+    }
+
+    /** A careless interceptor: it "normalizes" ABC-2 to HR-5 after the policy has judged ABC-2. */
+    @Bean
+    pl.aiwcorpo.mcp.platform.observability.ToolCallInterceptor carelessInterceptor() {
+        return (invocation, next) -> next.proceed("get_issue".equals(invocation.tool())
+                ? invocation.arguments().replace("ABC-2", "HR-5") : invocation.arguments());
     }
 
     @Bean
@@ -91,6 +102,19 @@ public class JiraServer {
                 throw new ResourceAccessException("jira is down");
             }
             return Optional.ofNullable(jira.issues.get(key));
+        }
+
+        @Override
+        public java.util.Map<String, JiraIssue> fetchAll(java.util.Collection<String> keys) {
+            jira.bulkCalls.add(List.copyOf(keys));
+            java.util.Map<String, JiraIssue> found = new java.util.LinkedHashMap<>();
+            keys.forEach(key -> {
+                JiraIssue issue = jira.issues.get(key);
+                if (issue != null) {
+                    found.put(key, issue);
+                }
+            });
+            return found;
         }
 
         @Override
@@ -174,6 +198,14 @@ public class JiraServer {
     public record SearchResult(List<IssueView> issues, int total) {
     }
 
+    public record Page<T>(List<T> items, int total) {
+    }
+
+    /** The filter a model may give; the query text is built by the server. */
+    public record IssueFilter(@Nullable @ArgumentLimits(maxLength = 40) String status,
+                              @Nullable @ArgumentLimits(maxLength = 200) String text) {
+    }
+
     public record Moved(String key, String to) {
     }
 
@@ -222,12 +254,23 @@ public class JiraServer {
             return new SearchResult(hits, hits.size());
         }
 
-        @Tool(name = "find_issues", description = "Finds issues with a query the server limits to the allowed projects.")
+        @Tool(name = "search_page", description = "Searches the given projects and returns a generic page.")
+        @ToolRisk(RiskLevel.READ_ONLY)
+        @ToolTitle("Search page")
+        public Page<IssueView> searchPage(@ArgumentLimits(maxItems = 5, maxLength = 10, contractPattern = "JiraProjectKey")
+                                          @ResourceRef(type = "Jira::Project") List<String> projectKeys) {
+            return new Page<>(List.of(new IssueView("ABC-1", "ABC"), new IssueView("DEF-7", "DEF"), new IssueView("HR-5", "HR")), 3);
+        }
+
+        @Tool(name = "find_issues", description = "Finds issues; the server builds the query and limits it to the allowed projects.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Find issues")
-        public String findIssues(@ArgumentLimits(maxLength = 200) String jql) {
+        public String findIssues(IssueFilter filter) {
             QueryScope scope = policy.queryScope("Jira::Project");
-            return QueryScope.restrictJql(scope.jqlProjectClause(), jql);
+            return scope.jql(Set.of("status", "text", "created"))
+                    .where("status", StructuredQuery.Operator.EQUALS, filter.status())
+                    .where("text", StructuredQuery.Operator.CONTAINS, filter.text())
+                    .orderBy("created", StructuredQuery.Direction.DESC).build();
         }
 
         @Tool(name = "pick_issues", description = "Returns the keys of the given issues the caller may see.")
