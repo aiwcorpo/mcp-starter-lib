@@ -96,6 +96,72 @@ class PlatformConfigurationGuardTest {
         assertThatThrownBy(() -> check(props, production())).hasMessageContaining("accepted-credential-types must list");
     }
 
+    private static MockEnvironment devstack(boolean property, boolean variable) {
+        MockEnvironment env = production();
+        env.setActiveProfiles("devstack");
+        if (property) {
+            env.setProperty(PlatformConfigurationGuard.DEVSTACK_ACK_PROPERTY, "true");
+        }
+        if (variable) {
+            env.setProperty(PlatformConfigurationGuard.DEVSTACK_ACK_ENVIRONMENT, "true");
+        }
+        return env;
+    }
+
+    @Test
+    void devstackAcceptsTestKeysOnlyWithBothAcknowledgements() {
+        McpPlatformProperties props = valid();
+        props.getInternalJwt().setAllowTestKeys(true);
+        props.getPolicy().setAllowTestKeys(true);
+
+        assertThatCode(() -> check(props, devstack(true, true))).doesNotThrowAnyException();
+        assertThatThrownBy(() -> check(props, devstack(true, false))).hasMessageContaining("two acknowledgements");
+        assertThatThrownBy(() -> check(props, devstack(false, true))).hasMessageContaining("MCP_DEVSTACK_ACKNOWLEDGED");
+        assertThatThrownBy(() -> check(props, devstack(false, false))).hasMessageContaining("two acknowledgements");
+    }
+
+    @Test
+    void devstackKeepsEverythingElseOfProduction() {
+        McpPlatformProperties props = valid();
+        props.getInternalJwt().setAllowTestKeys(true);
+        props.getInternalJwt().setReplayStore(McpPlatformProperties.ReplayStore.MEMORY);
+        props.getMtls().setRequired(false);
+        props.getPolicy().getMain().setUrl("http://policies.internal/latest.json");
+        props.getPolicy().setStateDir(null);
+        props.setAuthMode(AuthMode.DEV_PAT);
+
+        assertThatThrownBy(() -> check(props, devstack(true, true)))
+                .hasMessageContaining("replay-store=memory").hasMessageContaining("mtls.required=false")
+                .hasMessageContaining("policy.main.url must be an absolute https").hasMessageContaining("state-dir is required")
+                .hasMessageContaining("dev-pat");
+    }
+
+    @Test
+    void devstackIsNotCombinedWithAnotherProfileAndOtherProfilesGetNoTestKeys() {
+        McpPlatformProperties props = valid();
+        MockEnvironment both = devstack(true, true);
+        both.setActiveProfiles("devstack", "prod");
+        MockEnvironment prod = production();
+        prod.setActiveProfiles("prod");
+        McpPlatformProperties withKeys = valid();
+        withKeys.getInternalJwt().setAllowTestKeys(true);
+        withKeys.getPolicy().setAllowTestKeys(true);
+
+        assertThatThrownBy(() -> check(props, both)).hasMessageContaining("'devstack' profile must be the only active profile");
+        assertThatThrownBy(() -> check(withKeys, prod)).hasMessageContaining("'dev' or the 'devstack' profile");
+        assertThatThrownBy(() -> check(withKeys, production())).hasMessageContaining("internal-jwt.allow-test-keys");
+    }
+
+    @Test
+    void devstackMayRunInAContainerWhereDevIsRefused() {
+        McpPlatformProperties props = valid();
+        props.getInternalJwt().setAllowTestKeys(true);
+        MockEnvironment env = devstack(true, true).withProperty("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+                .withProperty("KUBERNETES_SERVICE_PORT", "443");
+
+        assertThatCode(() -> check(props, env)).doesNotThrowAnyException();
+    }
+
     @Test
     void devNextToAnotherProfileStopsTheServer() {
         assertThatThrownBy(() -> check(valid(), profiles("prod", "dev")))

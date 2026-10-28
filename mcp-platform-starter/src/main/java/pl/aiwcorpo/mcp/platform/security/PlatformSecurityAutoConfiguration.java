@@ -57,4 +57,25 @@ public class PlatformSecurityAutoConfiguration {
     CredentialTransportGuard credentialTransportGuard(Environment environment, McpPlatformProperties props) {
         return new CredentialTransportGuard(environment, props.isRequireSyncTransport());
     }
+
+    /**
+     * Shows in the metrics that this server runs with the {@code devstack} profile (test signing keys accepted): the C6 manifest
+     * has no field for the environment, so a gauge {@code mcp_server_devstack_active} is the machine-readable mark next to the
+     * warning that every start logs.
+     */
+    @Bean
+    @Lazy(false)
+    DevstackMark devstackMark(Environment environment, org.springframework.beans.factory.ObjectProvider<io.micrometer.core.instrument.MeterRegistry> meters) {
+        if (java.util.List.of(environment.getActiveProfiles()).equals(java.util.List.of(PlatformConfigurationGuard.DEVSTACK_PROFILE))) {
+            io.micrometer.core.instrument.MeterRegistry registry = meters.getIfAvailable();
+            if (registry != null) {
+                io.micrometer.core.instrument.Gauge.builder("mcp_server_devstack_active", () -> 1).register(registry);
+            }
+        }
+        return new DevstackMark();
+    }
+
+    /** Marker bean; the gauge is the mark. */
+    record DevstackMark() {
+    }
 }

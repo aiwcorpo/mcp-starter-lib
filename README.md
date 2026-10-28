@@ -6,7 +6,7 @@ robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadc
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
 Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 3.1.0.
-Wersja: **3.0.0-beta-3** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+Wersja: **3.0.0-beta-4** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
 
@@ -233,6 +233,15 @@ Redisa używa `INFO`, którego użytkownik `mcp-<system>` w `mcp-platform-dev` n
 `spring.data.redis.timeout=2s` (zawieszony Redis daje szybko 503), transport MCP jak w "Pierwszy serwer",
 `spring.ai.mcp.server.annotation-scanner.enabled=false`.
 
+**Profil `devstack` (wspólny stos deweloperski w kontenerach).** `dev` jest zabroniony w kontenerze, a stos `mcp-platform-dev` uruchamia serwery w
+kontenerach z kluczami podpisu `test-*`. Profil `devstack` jest dla niego: zachowuje **wszystko** z produkcji (TLS i mTLS, Redis, https, `state-dir`,
+bez `dev-pat`, `replay-store: memory`, `mtls.required: false`) poza tym, że przyjmuje klucze `test-*` i opublikowane klucze testowe
+(`internal-jwt.allow-test-keys` i `policy.allow-test-keys`). Wymaga dwóch zgód jednocześnie, żeby skopiowana konfiguracja nie trafiła na produkcję:
+właściwość `aiwcorpo.mcp.platform.devstack.acknowledged=true` **i** zmienna środowiskowa `MCP_DEVSTACK_ACKNOWLEDGED=true` (obie w konfiguracji stosu
+deweloperskiego, nie w obrazie serwera). Musi być jedynym aktywnym profilem. Każdy start loguje `WARN event=devstack_profile`, a metryka
+`mcp_server_devstack_active` ma wartość 1 (manifest C6 nie ma pola na środowisko). Klucze `test-*` pod innym profilem niż `dev` i `devstack` są
+odrzucane jak dotąd, więc klucz produkcyjny nie może nazywać się `test-...`, a klucz stosu nie przejdzie na produkcji.
+
 **Tryb `dev-pat`** (tylko gdy `dev` jest jedynym aktywnym profilem): poza `X-MCP-Credential` serwer przyjmuje token
 programisty w `X-PAT-<system>` (np. `X-PAT-Jira`) jako `Bearer` typu `user-secret`. Wewnętrzny JWT nadal jest
 wymagany.
@@ -270,7 +279,7 @@ poniżej `$JAVA_HOME/bin/java` (`JAVA_HOME` wskazuje JDK 25).
             <dependency>
                 <groupId>pl.aiwcorpo.mcp</groupId>
                 <artifactId>mcp-platform-bom</artifactId>
-                <version>3.0.0-beta-3</version>
+                <version>3.0.0-beta-4</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -871,7 +880,7 @@ Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera t
 ```xml
 <dependency>
   <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-  <version>3.0.0-beta-3</version><type>pom</type><scope>import</scope>
+  <version>3.0.0-beta-4</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
 

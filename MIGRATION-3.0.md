@@ -308,6 +308,33 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
+## Z beta-3 na beta-4
+
+Jedna nowa możliwość i nic obowiązkowego dla serwera, który działa na beta-3. Wersja: `<version>3.0.0-beta-4</version>` w imporcie BOM.
+
+**Profil `devstack` dla stosu deweloperskiego w kontenerach.** Do beta-3 klucze podpisu `test-*` (JWT gateway'a, paczki polityk) działały tylko w
+profilu `dev`, a `dev` jest zabroniony w kontenerze, więc stos `mcp-platform-dev` musiał nazwać klucz paczki inaczej (`policies-main-dev`). To omijało
+zabezpieczenie po nazwie: kopia takiej konfiguracji przechodziła na produkcji. Teraz stos uruchamia serwery z profilem `devstack`
+(`SPRING_PROFILES_ACTIVE=devstack`, jedyny aktywny profil) i dwiema zgodami:
+
+```yaml
+# konfiguracja stosu dev (compose), nie obraz serwera
+environment:
+  SPRING_PROFILES_ACTIVE: devstack
+  MCP_DEVSTACK_ACKNOWLEDGED: "true"
+  AIWCORPO_MCP_PLATFORM_DEVSTACK_ACKNOWLEDGED: "true"            # = aiwcorpo.mcp.platform.devstack.acknowledged
+  AIWCORPO_MCP_PLATFORM_POLICY_ALLOW_TEST_KEYS: "true"
+  AIWCORPO_MCP_PLATFORM_POLICY_MAIN_KEY_ID: test-policies-main-dev   # nazwa klucza wraca do test-*
+  AIWCORPO_MCP_PLATFORM_INTERNAL_JWT_ALLOW_TEST_KEYS: "true"       # jeśli gateway podpisuje kluczami testowymi
+```
+
+`devstack` zdejmuje wyłącznie zakaz kluczy `test-*` i opublikowanych kluczy testowych. Reszta jest jak na produkcji i nadal wymagana: TLS i mTLS
+(`server.ssl.client-auth=need`), Redis na `jti`, https do JWKS i do repozytorium paczek, `policy.state-dir`, brak `dev-pat`. Bez obu zgód albo z drugim
+profilem start jest odrzucany z listą braków. Każdy start loguje `WARN event=devstack_profile`, a metryka `mcp_server_devstack_active` ma wartość 1;
+manifest C6 nie ma pola na środowisko (propozycja CC Beta-I), więc znacznikiem są log i metryka. Poza `dev` i `devstack` klucze `test-*` są
+odrzucane jak dotąd: klucz stosu nie przejdzie na produkcji, bo produkcja nie ma profilu `devstack` ani zgód, a klucz produkcyjny nie może się nazywać
+`test-*`. Ewentualne odrzucanie kluczy stosu po odcisku SPKI (lista z konfiguracji publikowanej przez ws-09) nie jest w beta-4.
+
 ## Z beta-2 na beta-3
 
 Poprawki po recenzji beta-2 (0 CRITICAL/HIGH) i po przeglądzie automatycznym. Serwer, który przeszedł na beta-2, musi tylko oznaczyć

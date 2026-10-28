@@ -39,6 +39,17 @@ public class PlatformConfigurationGuard implements InitializingBean {
     /** The profile under which development relaxations are allowed. */
     public static final String DEV_PROFILE = "dev";
 
+    /**
+     * The profile of a shared development stack (containers of mcp-platform-dev): everything is as in production (TLS, mTLS,
+     * Redis, https, state directory) except that signing keys named {@code test-*} and the published test keys are accepted.
+     * Allowed in a container, but only with the explicit acknowledgement below, and it is never combined with another profile.
+     */
+    public static final String DEVSTACK_PROFILE = "devstack";
+
+    /** Property and environment variable that must both be {@code true} for the {@code devstack} profile. */
+    public static final String DEVSTACK_ACK_PROPERTY = "aiwcorpo.mcp.platform.devstack.acknowledged";
+    public static final String DEVSTACK_ACK_ENVIRONMENT = "MCP_DEVSTACK_ACKNOWLEDGED";
+
     /** The only paths that may be served without the internal JWT (health probes of the orchestrator). */
     public static final Set<String> ALLOWED_UNAUTHENTICATED_PATHS =
             Set.of("/actuator/health", "/actuator/health/liveness", "/actuator/health/readiness");
@@ -74,6 +85,26 @@ public class PlatformConfigurationGuard implements InitializingBean {
             problems.add("the 'dev' profile must be the only active profile (active: " + active + "): its relaxations "
                     + "must not ride along with another profile");
         }
+
+        boolean devstack = active.equals(List.of(DEVSTACK_PROFILE));
+        if (active.contains(DEVSTACK_PROFILE) && !devstack) {
+            problems.add("the 'devstack' profile must be the only active profile (active: " + active + ")");
+        }
+        if (devstack) {
+            boolean acknowledged = "true".equalsIgnoreCase(environment.getProperty(DEVSTACK_ACK_PROPERTY, ""))
+                    && "true".equalsIgnoreCase(environment.getProperty(DEVSTACK_ACK_ENVIRONMENT, ""));
+            if (!acknowledged) {
+                problems.add("the 'devstack' profile accepts signing keys named test-* and needs two acknowledgements, so that a "
+                        + "copied configuration does not carry it to production: " + DEVSTACK_ACK_PROPERTY + "=true and the "
+                        + "environment variable " + DEVSTACK_ACK_ENVIRONMENT + "=true");
+            } else {
+                // The manifest has no field for the environment (C6), so every start says it, and a gauge shows it.
+                LOG.warn("event=devstack_profile detail=\"signing keys named test-* are accepted (internal JWT: {}, policy "
+                        + "bundles: {}); this server must not run in production\"", properties.getInternalJwt().isAllowTestKeys(),
+                        properties.getPolicy().isAllowTestKeys());
+            }
+        }
+        boolean testKeysAllowed = dev || devstack;
 
         if (dev && !loopback(environment.getProperty("server.address"))) {
             problems.add("with the 'dev' profile server.address must be a loopback address (127.0.0.1, ::1, localhost), "
@@ -149,7 +180,7 @@ public class PlatformConfigurationGuard implements InitializingBean {
         if (properties.getTools().getMaxFilteredElements() < 1) {
             problems.add("aiwcorpo.mcp.platform.tools.max-filtered-elements must be at least 1");
         }
-        policyProblems(properties.getPolicy(), dev, problems);
+        policyProblems(properties.getPolicy(), dev, testKeysAllowed, problems);
         manifestProblems(properties.getManifest(), problems);
 
         if (!dev) {
@@ -161,8 +192,9 @@ public class PlatformConfigurationGuard implements InitializingBean {
             if (properties.getAuthMode() == AuthMode.DEV_PAT) {
                 problems.add("aiwcorpo.mcp.platform.auth-mode=dev-pat is allowed only with the 'dev' profile");
             }
-            if (jwt.isAllowTestKeys()) {
-                problems.add("aiwcorpo.mcp.platform.internal-jwt.allow-test-keys=true is allowed only with the 'dev' profile");
+            if (jwt.isAllowTestKeys() && !testKeysAllowed) {
+                problems.add("aiwcorpo.mcp.platform.internal-jwt.allow-test-keys=true is allowed only with the 'dev' or the "
+                        + "'devstack' profile");
             }
             if (jwt.getReplayStore() == McpPlatformProperties.ReplayStore.MEMORY) {
                 problems.add("aiwcorpo.mcp.platform.internal-jwt.replay-store=memory is allowed only with the 'dev' profile");
@@ -187,7 +219,8 @@ public class PlatformConfigurationGuard implements InitializingBean {
         }
     }
 
-    private static void policyProblems(McpPlatformProperties.Policy policy, boolean dev, List<String> problems) {
+    private static void policyProblems(McpPlatformProperties.Policy policy, boolean dev, boolean testKeysAllowed,
+                                       List<String> problems) {
         channelProblems("main", policy.getMain(), true, dev, problems);
         channelProblems("overrides", policy.getOverrides(), !isBlank(policy.getOverrides().getUrl()), dev, problems);
         if (!dev) {
@@ -195,9 +228,9 @@ public class PlatformConfigurationGuard implements InitializingBean {
                 problems.add("aiwcorpo.mcp.platform.policy.state-dir is required outside the 'dev' profile: without it a "
                         + "restart accepts an older signed bundle again (rollback protection, CC-066)");
             }
-            if (policy.isAllowTestKeys()) {
-                problems.add("aiwcorpo.mcp.platform.policy.allow-test-keys=true is allowed only with the 'dev' profile");
-            }
+        }
+        if (policy.isAllowTestKeys() && !testKeysAllowed) {
+            problems.add("aiwcorpo.mcp.platform.policy.allow-test-keys=true is allowed only with the 'dev' or the 'devstack' profile");
         }
         if (!policy.getStartupTimeout().isPositive() || !policy.getOverridesGrace().isPositive()) {
             problems.add("aiwcorpo.mcp.platform.policy.startup-timeout and overrides-grace must be positive");
