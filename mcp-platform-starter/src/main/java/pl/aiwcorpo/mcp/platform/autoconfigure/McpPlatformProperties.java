@@ -66,6 +66,13 @@ public class McpPlatformProperties {
         /** The gateway's JWKS, {@code https://<gateway-internal>/.well-known/jwks.json}. Required. */
         private String jwksUri;
 
+        /**
+         * How many {@code missing_token} audit events one process writes per second; the rest only count in the
+         * {@code mcp_server_audit_authentication_suppressed_total} metric. A request without a token costs nothing, so
+         * without a cap it could fill the audit stream. At least 1 (the same default as the gateway's).
+         */
+        private int missingTokenEventsPerSecond = 20;
+
         /** Name of a Spring SSL bundle used to trust the gateway's internal endpoint; JVM default when unset. */
         private String jwksSslBundle;
 
@@ -211,6 +218,14 @@ public class McpPlatformProperties {
 
         public void setMaxRequestBody(DataSize maxRequestBody) {
             this.maxRequestBody = maxRequestBody;
+        }
+
+        public int getMissingTokenEventsPerSecond() {
+            return missingTokenEventsPerSecond;
+        }
+
+        public void setMissingTokenEventsPerSecond(int missingTokenEventsPerSecond) {
+            this.missingTokenEventsPerSecond = missingTokenEventsPerSecond;
         }
 
         public List<String> getUnauthenticatedPaths() {

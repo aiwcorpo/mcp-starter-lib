@@ -1,5 +1,7 @@
 package pl.aiwcorpo.mcp.platform.auth;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.net.URI;
 import java.time.Clock;
 import java.util.Set;
@@ -61,9 +63,13 @@ public class PlatformAuthAutoConfiguration {
     }
 
     @Bean
-    InternalJwtFilter internalJwtFilter(McpPlatformProperties props, InternalJwtVerifier verifier, AuditLogger audit) {
+    InternalJwtFilter internalJwtFilter(McpPlatformProperties props, InternalJwtVerifier verifier, AuditLogger audit,
+                                        ObjectProvider<MeterRegistry> meters) {
+        MissingTokenEventLimiter missingTokenEvents = new MissingTokenEventLimiter(
+                props.getInternalJwt().getMissingTokenEventsPerSecond(), System::nanoTime,
+                meters.getIfAvailable(SimpleMeterRegistry::new));
         return new InternalJwtFilter(verifier, props.getInternalJwt().getUnauthenticatedPaths(),
                 props.getInternalJwt().getMaxRequestBody().toBytes(), props.getMtls().isRequired(),
-                Set.copyOf(props.getMtls().getAllowedClientNames()), audit);
+                Set.copyOf(props.getMtls().getAllowedClientNames()), audit, missingTokenEvents);
     }
 }

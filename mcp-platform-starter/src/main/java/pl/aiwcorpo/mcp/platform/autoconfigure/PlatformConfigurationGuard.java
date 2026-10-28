@@ -133,6 +133,10 @@ public class PlatformConfigurationGuard implements InitializingBean {
         if (jwt.getClockSkew().isNegative() || jwt.getClockSkew().compareTo(Duration.ofSeconds(30)) > 0) {
             problems.add("aiwcorpo.mcp.platform.internal-jwt.clock-skew must be between 0 and 30s (C2)");
         }
+        if (jwt.getMissingTokenEventsPerSecond() < 1) {
+            problems.add("aiwcorpo.mcp.platform.internal-jwt.missing-token-events-per-second must be at least 1: "
+                    + "0 would write no audit event for a request without a token");
+        }
         if (!jwt.getMaxLifetime().isPositive() || jwt.getMaxLifetime().compareTo(Duration.ofSeconds(60)) > 0) {
             problems.add("aiwcorpo.mcp.platform.internal-jwt.max-lifetime must be between 1s and 60s (C2)");
         }

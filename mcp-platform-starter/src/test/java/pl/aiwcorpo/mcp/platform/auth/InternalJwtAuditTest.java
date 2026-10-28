@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
@@ -12,6 +13,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
@@ -24,7 +26,7 @@ import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
-/** A refused request leaves an {@code authentication} event (C8, CC-071) with the closed field list of 2.1.1. */
+/** A refused request leaves an {@code authentication} event (C8, CC-071) with the closed field list of 2.2.5 (CC-120). */
 class InternalJwtAuditTest {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
@@ -48,11 +50,16 @@ class InternalJwtAuditTest {
     }
 
     private InternalJwtFilter filter(JtiReplayStore store, boolean mtls) {
+        return filter(store, mtls, new MissingTokenEventLimiter(MissingTokenEventLimiter.DEFAULT_PER_SECOND,
+                System::nanoTime, new SimpleMeterRegistry()));
+    }
+
+    private InternalJwtFilter filter(JtiReplayStore store, boolean mtls, MissingTokenEventLimiter limiter) {
         InternalJwtVerifier verifier = new InternalJwtVerifier(new InternalJwtVerifier.Settings(
                 "https://mcp-gateway.internal", "mcp-jira", Duration.ofSeconds(30), Duration.ofSeconds(60), true),
                 JwksGatewayKeys.of(InternalJwtFilterTest.read("keys/test-gateway-jwks.json")), store, clock);
         return new InternalJwtFilter(verifier, List.of("/actuator/health"), 1024, mtls, Set.of("mcp-gateway"),
-                new AuditLogger("test.audit.authentication", "mcp-jira"));
+                new AuditLogger("test.audit.authentication", "mcp-jira"), limiter);
     }
 
     private MockHttpServletRequest toolCall(String authorization) {
@@ -133,5 +140,59 @@ class InternalJwtAuditTest {
                 new MockHttpServletResponse(), new MockFilterChain());
 
         assertThat(onlyEvent().get("reason").asString()).isEqualTo("bad_signature");
+    }
+
+    @Test
+    void theClientCertificateEventIsTheContractsVector() throws Exception {
+        JsonNode expected = JSON.readTree(InternalJwtFilterTest.read("audit-events/server-authentication-denied-client-certificate.json"))
+                .get("event");
+        filter(new InMemoryJtiReplayStore(clock), true).doFilter(toolCall("Bearer " + token),
+                new MockHttpServletResponse(), new MockFilterChain());
+
+        JsonNode event = onlyEvent();
+        for (String field : List.of("component", "componentId", "event", "decision", "reason", "outcome", "errorCode")) {
+            assertThat(event.get(field)).as(field).isEqualTo(expected.get(field));
+        }
+    }
+
+    @Test
+    void aFloodOfRequestsWithoutATokenWritesOnlyTheBudgetAndCountsTheRest() throws Exception {
+        AtomicLong nanos = new AtomicLong(1_000_000_000L);
+        SimpleMeterRegistry meters = new SimpleMeterRegistry();
+        InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock), false,
+                new MissingTokenEventLimiter(3, nanos::get, meters));
+
+        for (int i = 0; i < 10; i++) {
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            filter.doFilter(toolCall(null), response, new MockFilterChain());
+            assertThat(response.getStatus()).as("every request is still refused").isEqualTo(401);
+        }
+
+        assertThat(CapturedLogs.snapshot(lines)).hasSize(3);
+        assertThat(meters.get(MissingTokenEventLimiter.METRIC).tag("reason", "missing_token").counter().count())
+                .isEqualTo(7.0);
+
+        nanos.addAndGet(1_000_000_000L);
+        filter.doFilter(toolCall(null), new MockHttpServletResponse(), new MockFilterChain());
+        assertThat(CapturedLogs.snapshot(lines)).hasSize(4);
+    }
+
+    @Test
+    void theCapOfMissingTokensDoesNotHideOtherRefusals() throws Exception {
+        InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock), false,
+                new MissingTokenEventLimiter(1, () -> 1_000_000_000L, new SimpleMeterRegistry()));
+
+        for (int i = 0; i < 5; i++) {
+            filter.doFilter(toolCall(null), new MockHttpServletResponse(), new MockFilterChain());
+        }
+        String broken = "Bearer " + token.substring(0, token.length() - 4) + "AAAA";
+        for (int i = 0; i < 5; i++) {
+            filter.doFilter(toolCall(broken), new MockHttpServletResponse(), new MockFilterChain());
+        }
+
+        List<String> reasons = CapturedLogs.snapshot(lines).stream()
+                .map(line -> JSON.readTree(line.getFormattedMessage()).get("reason").asString()).toList();
+        assertThat(reasons).containsExactly("missing_token", "bad_signature", "bad_signature", "bad_signature",
+                "bad_signature", "bad_signature");
     }
 }

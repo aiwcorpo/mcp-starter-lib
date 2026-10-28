@@ -4,6 +4,7 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.security.cert.X509Certificate;
@@ -28,6 +29,11 @@ import pl.aiwcorpo.mcp.platform.observability.CorrelationIdFilter;
  *
  * <p>On success the verified caller is in {@link CallerContext} for the rest of the request. Infrastructure
  * failures (JWKS, Redis) refuse the request with 503: the token could not be judged, so it is not accepted.
+ *
+ * <p>A refused request leaves an {@code authentication} audit event (C8, CC-071, CC-120): the reasons the gateway
+ * knows for a token of its own plus {@code client_certificate_rejected} (mTLS) and, for the two infrastructure
+ * failures, {@code jwks_unavailable} and {@code replay_store_unavailable} with {@code upstream_unavailable}.
+ * {@code missing_token} events are capped per process ({@link MissingTokenEventLimiter}); the rest is not.
  *
  * <p>Paths in {@code unauthenticatedPaths} (by default the health endpoints) are passed through untouched.
  * They are exact paths, never patterns, and a request is let through only when its raw URI is literally one
@@ -56,6 +62,7 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
     private final boolean clientCertificateRequired;
     private final Set<String> allowedClientNames;
     private final AuditLogger audit;
+    private final MissingTokenEventLimiter missingTokenEvents;
 
     /** Without an audit logger the refusals reach only the application log; for tests of the check itself. */
     public InternalJwtFilter(InternalJwtVerifier verifier, List<String> unauthenticatedPaths, long maxRequestBody,
@@ -63,10 +70,23 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
         this(verifier, unauthenticatedPaths, maxRequestBody, clientCertificateRequired, allowedClientNames, null);
     }
 
-    /** @param audit receives an {@code authentication} event (C8) for every refused request; may be {@code null} */
+    /** As below, with the default cap on {@code missing_token} events and its counter in a registry of its own. */
     public InternalJwtFilter(InternalJwtVerifier verifier, List<String> unauthenticatedPaths, long maxRequestBody,
                              boolean clientCertificateRequired, Set<String> allowedClientNames, AuditLogger audit) {
+        this(verifier, unauthenticatedPaths, maxRequestBody, clientCertificateRequired, allowedClientNames, audit,
+                new MissingTokenEventLimiter(MissingTokenEventLimiter.DEFAULT_PER_SECOND, System::nanoTime,
+                        new SimpleMeterRegistry()));
+    }
+
+    /**
+     * @param audit              receives an {@code authentication} event (C8) for every refused request; may be {@code null}
+     * @param missingTokenEvents decides which {@code missing_token} events are written; the others are only counted
+     */
+    public InternalJwtFilter(InternalJwtVerifier verifier, List<String> unauthenticatedPaths, long maxRequestBody,
+                             boolean clientCertificateRequired, Set<String> allowedClientNames, AuditLogger audit,
+                             MissingTokenEventLimiter missingTokenEvents) {
         this.audit = audit;
+        this.missingTokenEvents = missingTokenEvents;
         this.verifier = verifier;
         for (String path : unauthenticatedPaths) {
             if (!path.startsWith("/") || SUSPICIOUS.matcher(path).find() || path.contains("*")) {
@@ -211,7 +231,7 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
     }
 
     private void audit(InternalJwtRejection reason, String errorCode, long start) {
-        if (audit != null) {
+        if (audit != null && (reason != InternalJwtRejection.MISSING_TOKEN || missingTokenEvents.tryAcquire())) {
             audit.authenticationDenied(reason.code(), errorCode, (System.nanoTime() - start) / 1_000_000L);
         }
     }

@@ -104,10 +104,12 @@ class PlatformConfigurationGuardTest {
         McpPlatformProperties props = new McpPlatformProperties();
         props.getInternalJwt().setClockSkew(java.time.Duration.ofSeconds(31));
         props.getInternalJwt().setMaxLifetime(java.time.Duration.ofSeconds(61));
+        props.getInternalJwt().setMissingTokenEventsPerSecond(0);
 
         assertThatThrownBy(() -> check(props, production()))
                 .hasMessageContaining("server-id").hasMessageContaining("jwks-uri").hasMessageContaining("connect-url")
-                .hasMessageContaining("clock-skew").hasMessageContaining("max-lifetime");
+                .hasMessageContaining("clock-skew").hasMessageContaining("max-lifetime")
+                .hasMessageContaining("missing-token-events-per-second");
     }
 
     @Test
