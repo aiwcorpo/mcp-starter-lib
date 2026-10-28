@@ -58,11 +58,57 @@ class TextHygieneTest {
     void untrustedTextIsNormalizedAndCutOnACodePointBoundary() {
         UntrustedText text = UntrustedText.plain("ab\u200bc\ud83d\ude00de", 4);
 
-        assertThat(text.text()).isEqualTo("ab c");
+        assertThat(text.text()).isEqualTo("ab");
         assertThat(text.truncated()).isTrue();
         assertThat(text.kind()).isEqualTo("untrusted-data");
         assertThat(text.format()).isEqualTo("text/plain");
         assertThat(UntrustedText.markdown("short", 100)).isEqualTo(new UntrustedText("untrusted-data", "text/markdown", "short", false));
+    }
+
+    @Test
+    void theCutNeverLeavesAPartOfAWordThatTheFilterSawWhole() {
+        UntrustedText mention = UntrustedText.plain("hello @allison", 10);
+        assertThat(mention.text()).isEqualTo("hello");
+        assertThat(mention.truncated()).isTrue();
+
+        assertThat(UntrustedText.plain("hello @all", 10)).isEqualTo(new UntrustedText("untrusted-data", "text/plain", "hello @all", false));
+        assertThat(UntrustedText.plain("hello @allison", 6).text()).isEqualTo("hello");
+        assertThat(UntrustedText.plain("hello world", 5).text()).isEqualTo("hello");
+        assertThat(UntrustedText.markdown("see ![x](https://host/a.png) now", 12).text()).isEqualTo("see");
+        assertThat(UntrustedText.plain("@allison", 4)).isEqualTo(new UntrustedText("untrusted-data", "text/plain", "", true));
+    }
+
+    @Test
+    void aLongRunWithoutSpacesIsCutWhereTheLimitFallsAndNeverInsideAPair() {
+        UntrustedText run = UntrustedText.plain("a".repeat(100), 70);
+        assertThat(run.text()).hasSize(70);
+        assertThat(run.truncated()).isTrue();
+
+        UntrustedText emoji = UntrustedText.plain("x " + "\ud83d\ude00".repeat(70), 3);
+        assertThat(emoji.text()).isEqualTo("x");
+        UntrustedText emojiRun = UntrustedText.plain("\ud83d\ude00".repeat(70), 71);
+        assertThat(emojiRun.text()).isEqualTo("\ud83d\ude00".repeat(35));
+    }
+
+    @Test
+    void textNormalizedAfterTheFilterIsReportedWithoutQuotingIt() {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(UntrustedText.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender = new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            // An entity decoded after normalize(): the filter ran on "x &#8203;@all", the factory sees the ZWSP.
+            String decodedLate = "x \u200b@all";
+            assertThat(UntrustedText.plain(decodedLate, 100).text()).isEqualTo("x @all");
+            UntrustedText.plain(TextHygiene.normalize(decodedLate), 100);
+
+            var lines = pl.aiwcorpo.mcp.platform.CapturedLogs.snapshot(appender).stream()
+                    .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage).toList();
+            assertThat(lines).hasSize(1);
+            assertThat(lines.getFirst()).contains("event=untrusted_text_not_normalized").doesNotContain("@all");
+        } finally {
+            logger.detachAppender(appender);
+        }
     }
 
     @Test

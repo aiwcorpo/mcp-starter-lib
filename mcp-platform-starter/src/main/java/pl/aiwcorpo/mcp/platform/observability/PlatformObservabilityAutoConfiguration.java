@@ -8,7 +8,9 @@ import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.context.annotation.Bean;
+import org.springframework.util.unit.DataSize;
 import org.springframework.core.env.Environment;
 import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
 import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
@@ -58,8 +60,13 @@ public class PlatformObservabilityAutoConfiguration {
             ObjectProvider<AuditLogger> auditLogger, ObjectProvider<McpErrorMapper> errorMapper,
             ObjectProvider<ToolRiskRegistry> registry, ObjectProvider<ToolCallInterceptor> interceptors,
             Environment environment) {
+        DataSize maxResult = Binder.get(environment).bind("aiwcorpo.mcp.platform.tools.max-result-size", DataSize.class)
+                .orElse(McpPlatformProperties.DEFAULT_MAX_RESULT_SIZE);
+        if (maxResult.toBytes() <= 0) {
+            throw new IllegalStateException("aiwcorpo.mcp.platform.tools.max-result-size must be positive");
+        }
         return new ToolCallbackAuditPostProcessor(auditLogger, errorMapper, registry, interceptors,
-                policyFor(environment));
+                policyFor(environment), maxResult.toBytes());
     }
 
     /** Only the one-and-only {@code dev} profile may run a tool without a closed inputSchema. */

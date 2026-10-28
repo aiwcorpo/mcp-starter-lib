@@ -10,6 +10,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.ai.tool.metadata.ToolMetadata;
 import pl.aiwcorpo.mcp.platform.auth.CallerContext;
+import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 import pl.aiwcorpo.mcp.platform.error.McpErrorMapper;
 import pl.aiwcorpo.mcp.platform.error.SanitizedToolException;
 import pl.aiwcorpo.mcp.platform.error.ToolErrorCode;
@@ -19,6 +20,7 @@ import pl.aiwcorpo.mcp.platform.input.ToolInputValidator;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 import pl.aiwcorpo.mcp.platform.security.BackendCredential;
 import pl.aiwcorpo.mcp.platform.security.CredentialContext;
+import pl.aiwcorpo.mcp.platform.text.ToolResultRejectedException;
 import pl.aiwcorpo.mcp.platform.text.ToolResultValidator;
 
 /**
@@ -33,7 +35,8 @@ import pl.aiwcorpo.mcp.platform.text.ToolResultValidator;
  *       violation is {@code invalid_argument} (C10) without the offending value. The MCP SDK's own validation
  *       is off because it answers before this class, with a text that is not C10 and no audit event.</li>
  *   <li><b>Interceptors</b> ({@link ToolCallInterceptor}), then the tool.</li>
- *   <li><b>Result.</b> A tool that publishes an {@code outputSchema} ({@code UntrustedText} in its result) has
+ *   <li><b>Result.</b> A result larger than {@code tools.max-result-size} is {@code internal_error} before it is
+ *       parsed. A tool that publishes an {@code outputSchema} ({@code UntrustedText} in its result) has
  *       its result checked against it ({@link ToolResultValidator}) before the audit event is written; a
  *       mismatch is {@code internal_error} and {@code outcome=error}, not an SDK error after an {@code ok} event.</li>
  *   <li><b>Errors.</b> Whatever escapes is mapped by {@link McpErrorMapper}; only a
@@ -57,6 +60,7 @@ public final class AuditingToolCallback implements ToolCallback {
     private final RiskLevel risk;
     private final ToolInputValidator inputValidator;
     private final ToolResultValidator resultValidator;
+    private final long maxResultBytes;
 
     /**
      * Not public: a wrapper built by a server would carry its own interceptors and input policy and then be taken
@@ -64,12 +68,14 @@ public final class AuditingToolCallback implements ToolCallback {
      */
     AuditingToolCallback(ToolCallback delegate, AuditLogger auditLogger, McpErrorMapper errorMapper,
                          ToolRiskRegistry registry, List<ToolCallInterceptor> interceptors) {
-        this(delegate, auditLogger, errorMapper, registry, interceptors, ToolInputPolicy.STRICT);
+        this(delegate, auditLogger, errorMapper, registry, interceptors, ToolInputPolicy.STRICT,
+                McpPlatformProperties.DEFAULT_MAX_RESULT_SIZE.toBytes());
     }
 
     AuditingToolCallback(ToolCallback delegate, AuditLogger auditLogger, McpErrorMapper errorMapper,
                          ToolRiskRegistry registry, List<ToolCallInterceptor> interceptors,
-                         ToolInputPolicy inputPolicy) {
+                         ToolInputPolicy inputPolicy, long maxResultBytes) {
+        this.maxResultBytes = maxResultBytes;
         this.delegate = delegate;
         this.auditLogger = auditLogger;
         this.errorMapper = errorMapper;
@@ -121,6 +127,7 @@ public final class AuditingToolCallback implements ToolCallback {
             inputValidator.validate(toolInput);
             String result = chain(0, new ToolCallInterceptor.Invocation(name, risk, toolInput, caller), tool)
                     .proceed(toolInput);
+            checkSize(name, result);
             if (resultValidator != null) {
                 resultValidator.validate(result);
             }
@@ -130,6 +137,17 @@ public final class AuditingToolCallback implements ToolCallback {
             McpErrorMapper.SafeError error = errorMapper.map(ex);
             audit(caller, name, toolInput, error.code(), start);
             throw new SanitizedToolException(error);
+        }
+    }
+
+    private void checkSize(String name, String result) {
+        if (result == null || result.length() * 3L <= maxResultBytes) {
+            return;
+        }
+        long bytes = result.length() > maxResultBytes ? result.length() : result.getBytes(StandardCharsets.UTF_8).length;
+        if (bytes > maxResultBytes) {
+            throw new ToolResultRejectedException("The result of tool '" + name + "' is larger than the limit of "
+                    + maxResultBytes + " bytes (aiwcorpo.mcp.platform.tools.max-result-size); return a page of results.");
         }
     }
 

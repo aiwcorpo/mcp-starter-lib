@@ -47,6 +47,25 @@ sekcja "Zmiany w 3.0.0-alpha-9". Kamienie:
    `BeanDefinitionRegistryPostProcessor` jest wykrywane; niewykrywalne zostają `BeanFactoryPostProcessor` uruchomiony po kontroli
    i refleksja, czyli świadome hacki, nie "wygodna konfiguracja". Testy: `ForeignToolPolicyCheckTest` (2 nowe).
 
+3. A8-L5, A8-L6.
+   L5 (i): kolejność w serwerze opisana w MIGRATION: konwersja do tekstu (dekodowanie encji), `TextHygiene.normalize`, filtr,
+   fabryka. Fabryka loguje WARN `event=untrusted_text_not_normalized tool=...` (bez cytowania tekstu), gdy `normalize(raw) != raw`,
+   czyli gdy tekst zmienił się już po filtrze serwera (zwykle encje dekodowane po normalizacji). (ii): cięcie w fabryce cofa się
+   do ostatniego białego znaku, gdy zachowywana część ostatniego słowa ma najwyżej 64 jednostki (`plain("hello @allison", 10)` ->
+   `hello`, `truncated=true`); dłuższy ciąg bez spacji (pismo bez spacji, blob) jest cięty tam, gdzie wypada limit; nigdy w parze
+   surogatów. Osobnego kroku "cięcie przed filtrem" nie ma: fabryka tnie na końcu, a cięcie po granicy słowa nie tworzy tokenu,
+   którego filtr nie widział. Wybrane zamiast oznaczenia w tekście (znacznik dopisany do `text` byłby treścią wymyśloną przez
+   serwer); flaga `truncated` jest oznaczeniem. (iii) NFKC: propozycja CC 6 niżej, w starterze bez zmian.
+   L6 (i): `ToolResultRejectedException` (zwykły `RuntimeException`, nie `IllegalStateException`); `McpErrorMapper` klasyfikuje go
+   przed mappingami serwera jako `internal_error`, więc mapping `IllegalStateException` -> `not_found_or_denied` nie zamieni
+   niezgodności z `outputSchema` w odmowę. (ii): `aiwcorpo.mcp.platform.tools.max-result-size` (domyślnie 1MB, bajty UTF-8),
+   sprawdzane w opakowaniu przed parsowaniem; przekroczenie to `internal_error`, audyt `error`, w logu ERROR rozmiar limitu, bez
+   treści. Jedno parsowanie zamiast trzech: nie robione. Trzecie parsowanie to walidacja SDK (poza startera), a drugie
+   (`structuredContent` w `ToolHintsPostProcessor`) działa na `CallToolResult` po warstwie Spring AI; przekazanie drzewa przez
+   `ThreadLocal` między tymi warstwami dodałoby ukryty stan, a przy limicie 1MB koszt jest rzędu milisekund (pomiar
+   przeglądu: 12 MB w 148 ms). Walidator zbiera nadal wszystkie błędy przed odcięciem do 5; przy limicie rozmiaru to
+   ograniczone. Testy: `TextHygieneTest` (4 nowe), `AuditingToolCallbackTest` (2), `McpErrorMapperTest` (1), `ForeignToolPolicyCheckTest` (1).
+
 3.0.0-alpha-8: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-8`, tag
 `v3.0.0-alpha-8` (praca na `3.0.0-alpha-8-SNAPSHOT`, alpha-7 w `~/.m2` nietknięte). Instrukcja dla serwerów:
 `MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-8". Kamienie:
@@ -203,6 +222,10 @@ przebiegach zielony: do uodpornienia w teście, nie w kodzie startera; `pattern`
    niewidocznych zastępuje jedna spacja (`@a<ZWSP>ll` -> `@a ll`, `!<ZWSP>https://h/x.png!` -> `! https://h/x.png!`), pomijana
    na brzegach i obok białych znaków; do wspólnej listy dopisać znaki niewidoczne poza `\p{Cf}` (A7-L4): selektory wariantu
    U+FE00..FE0F i U+E0100..E01EF poza pojedynczym U+FE0F po emoji, U+034F, U+115F, U+1160, U+3164, U+FFA0, U+2800 w wartości z `pattern`.
+6. C10/C8 (A8-L5 iii, wspólna z gateway'em): normalizacja NFKC w wektorach `text-hygiene/`. Pełna szerokość
+   (`U+FF20 U+FF41 U+FF4C U+FF4C`) przechodzi `normalize` bez zmian, a po NFKC po stronie odbiorcy daje `@all`. Decyzja do podjęcia
+   razem dla gateway'a i serwerów (NFKC zmienia też zwykły tekst: ligatury, znaki zgodnościowe, pełną szerokość w CJK); do
+   czasu decyzji starter nie normalizuje NFKC, żeby nie rozjechać gateway'a i serwerów.
 
 3.0.0-alpha-6: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-6`,
 tag `v3.0.0-alpha-6`. API bez usunięć; zgłoszenia pięciu serwerów ws-04 i template'u. Instrukcja dla serwerów

@@ -290,6 +290,9 @@ public class McpPlatformProperties {
         }
     }
 
+    /** Default of {@code tools.max-result-size}: well above a page of results, far below what exhausts the heap. */
+    public static final DataSize DEFAULT_MAX_RESULT_SIZE = DataSize.ofMegabytes(1);
+
     /** {@code aiwcorpo.mcp.platform.tools.*}. */
     public static class Tools {
 
@@ -302,6 +305,21 @@ public class McpPlatformProperties {
 
         public void setUnclassified(ToolRiskRegistry.Unclassified unclassified) {
             this.unclassified = unclassified;
+        }
+
+        /**
+         * Largest result (UTF-8 bytes of the text a tool returns) the platform passes on; a larger one is
+         * {@code internal_error} and is not parsed. Results are parsed and checked in memory, and a tool that returns
+         * a whole search without paging could otherwise cost hundreds of megabytes of heap per call.
+         */
+        private DataSize maxResultSize = DEFAULT_MAX_RESULT_SIZE;
+
+        public DataSize getMaxResultSize() {
+            return maxResultSize;
+        }
+
+        public void setMaxResultSize(DataSize maxResultSize) {
+            this.maxResultSize = maxResultSize;
         }
     }
 

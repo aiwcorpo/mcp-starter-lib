@@ -22,6 +22,7 @@ import pl.aiwcorpo.mcp.platform.error.McpErrorMapper;
 import pl.aiwcorpo.mcp.platform.error.SanitizedToolException;
 import pl.aiwcorpo.mcp.platform.guard.RiskClassifiedTool;
 import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
+import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 import pl.aiwcorpo.mcp.platform.security.CredentialRequiredException;
 
@@ -56,6 +57,30 @@ class AuditingToolCallbackTest {
     private ToolCallback decorate(Supplier<String> behaviour, ToolCallInterceptor... interceptors) {
         return new AuditingToolCallback(new Tool("get_issue", behaviour), audit, errors,
                 new ToolRiskRegistry(ToolRiskRegistry.Unclassified.FAIL), List.of(interceptors));
+    }
+
+    @Test
+    void aResultOverTheLimitIsInternalErrorWithoutItsContent() {
+        ToolCallback callback = new AuditingToolCallback(new Tool("get_issue", () -> "{\"text\":\"" + "x".repeat(200) + "\"}"),
+                audit, errors, new ToolRiskRegistry(ToolRiskRegistry.Unclassified.FAIL), List.of(), ToolInputPolicy.STRICT, 100);
+
+        assertThatThrownBy(() -> TestCallers.as(TestCallers.user("get_issue"), () -> callback.call("{}")))
+                .isInstanceOf(SanitizedToolException.class).hasMessageContaining("\"error\":\"internal_error\"")
+                .satisfies(ex -> assertThat(ex.getMessage()).doesNotContain("xxxx"));
+        assertThat(lastAudit()).contains("\"outcome\":\"error\"");
+    }
+
+    @Test
+    void theLimitCountsBytesNotCharacters() {
+        String multibyte = "{\"t\":\"" + "\u00f3".repeat(30) + "\"}";
+        ToolCallback atLimit = new AuditingToolCallback(new Tool("get_issue", () -> multibyte), audit, errors,
+                new ToolRiskRegistry(ToolRiskRegistry.Unclassified.FAIL), List.of(), ToolInputPolicy.STRICT, 68);
+        ToolCallback over = new AuditingToolCallback(new Tool("get_issue", () -> multibyte), audit, errors,
+                new ToolRiskRegistry(ToolRiskRegistry.Unclassified.FAIL), List.of(), ToolInputPolicy.STRICT, 67);
+
+        assertThat(TestCallers.as(TestCallers.user("get_issue"), () -> atLimit.call("{}"))).isEqualTo(multibyte);
+        assertThatThrownBy(() -> TestCallers.as(TestCallers.user("get_issue"), () -> over.call("{}")))
+                .hasMessageContaining("internal_error");
     }
 
     private String lastAudit() {

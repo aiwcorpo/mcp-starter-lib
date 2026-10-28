@@ -43,7 +43,7 @@ class ToolResultValidatorTest {
         String result = "{\"key\":null,\"assignee\":null,\"summary\":{\"kind\":\"untrusted-data\",\"format\":\"text/plain\","
                 + "\"text\":\"secret-system-text\",\"truncated\":false}}";
 
-        assertThatThrownBy(() -> validator().validate(result)).isInstanceOf(IllegalStateException.class)
+        assertThatThrownBy(() -> validator().validate(result)).isInstanceOf(ToolResultRejectedException.class)
                 .hasMessageContaining("read_ticket").hasMessageContaining("/key (type)")
                 .hasMessageContaining("@Nullable").message().doesNotContain("secret-system-text");
     }
@@ -53,10 +53,10 @@ class ToolResultValidatorTest {
         String summary = "{\"kind\":\"untrusted-data\",\"format\":\"text/plain\",\"text\":\"s\",\"truncated\":false}";
 
         assertThatThrownBy(() -> validator().validate("{\"issue_key\":\"T-1\",\"assignee\":null,\"summary\":" + summary + "}"))
-                .isInstanceOf(IllegalStateException.class);
+                .isInstanceOf(ToolResultRejectedException.class);
         assertThatThrownBy(() -> validator().validate("{\"assignee\":null,\"summary\":" + summary + "}"))
-                .isInstanceOf(IllegalStateException.class);
-        assertThatThrownBy(() -> validator().validate("plain text")).isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(ToolResultRejectedException.class);
+        assertThatThrownBy(() -> validator().validate("plain text")).isInstanceOf(ToolResultRejectedException.class)
                 .message().doesNotContain("plain text");
     }
 }

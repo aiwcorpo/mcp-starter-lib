@@ -146,6 +146,12 @@ class ForeignToolPolicyCheckTest {
     }
 
     @Test
+    void theResultSizeLimitMustBePositive() {
+        runner.withPropertyValues("aiwcorpo.mcp.platform.tools.max-result-size=0B").run(context -> assertThat(context)
+                .hasFailed().getFailure().hasMessageContaining("max-result-size must be positive"));
+    }
+
+    @Test
     void aServerCannotConstructTheWrapperOrItsPostProcessor() {
         for (Class<?> type : new Class<?>[] {AuditingToolCallback.class, ToolCallbackAuditPostProcessor.class}) {
             assertThat(java.lang.reflect.Modifier.isFinal(type.getModifiers())).as(type.getSimpleName()).isTrue();

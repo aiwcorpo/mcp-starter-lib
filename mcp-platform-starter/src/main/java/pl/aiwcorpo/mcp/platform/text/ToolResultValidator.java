@@ -47,13 +47,13 @@ public final class ToolResultValidator {
         }
     }
 
-    /** @throws IllegalStateException when the result is not JSON or does not satisfy the schema */
+    /** @throws ToolResultRejectedException when the result is not JSON or does not satisfy the schema */
     public void validate(String result) {
         JsonNode node;
         try {
             node = JSON.readTree(result == null ? "" : result);
         } catch (JacksonException ex) {
-            throw new IllegalStateException("The result of tool '" + tool + "' is not JSON, but the tool publishes an "
+            throw new ToolResultRejectedException("The result of tool '" + tool + "' is not JSON, but the tool publishes an "
                     + "outputSchema");
         }
         List<Error> errors = schema.validate(node);
@@ -71,7 +71,7 @@ public final class ToolResultValidator {
                 break;
             }
         }
-        throw new IllegalStateException("The result of tool '" + tool + "' does not match its outputSchema at "
+        throw new ToolResultRejectedException("The result of tool '" + tool + "' does not match its outputSchema at "
                 + String.join(", ", problems) + ". A result component that can be null needs @Nullable "
                 + "(see MIGRATION-3.0.md, alpha-8).");
     }

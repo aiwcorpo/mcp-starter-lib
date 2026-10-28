@@ -18,6 +18,7 @@ import org.springframework.web.client.RestClientResponseException;
 import pl.aiwcorpo.mcp.platform.security.CredentialRequiredException;
 import pl.aiwcorpo.mcp.platform.security.SecretRedactor;
 import pl.aiwcorpo.mcp.platform.text.TextHygiene;
+import pl.aiwcorpo.mcp.platform.text.ToolResultRejectedException;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
@@ -136,6 +137,10 @@ public class McpErrorMapper {
     }
 
     private Optional<SafeError> classify(Throwable ex) {
+        if (ex instanceof ToolResultRejectedException) {
+            // Before the server's mappings: a result the platform rejected is never a denial, whatever the server maps.
+            return Optional.of(new SafeError(ToolErrorCode.INTERNAL_ERROR.code(), GENERIC));
+        }
         for (ToolErrorMapping mapping : mappings) {
             Optional<SafeError> mapped = mapping.map(ex);
             if (mapped.isPresent()) {

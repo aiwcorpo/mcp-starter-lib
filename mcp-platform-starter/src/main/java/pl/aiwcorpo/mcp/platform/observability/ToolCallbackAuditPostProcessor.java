@@ -6,6 +6,7 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.config.BeanPostProcessor;
+import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 import pl.aiwcorpo.mcp.platform.error.McpErrorMapper;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
@@ -29,12 +30,13 @@ public final class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
     private final ObjectProvider<ToolRiskRegistry> registry;
     private final ObjectProvider<ToolCallInterceptor> interceptors;
     private final ToolInputPolicy inputPolicy;
+    private final long maxResultBytes;
 
     ToolCallbackAuditPostProcessor(ObjectProvider<AuditLogger> auditLogger,
                                    ObjectProvider<McpErrorMapper> errorMapper,
                                    ObjectProvider<ToolRiskRegistry> registry,
                                    ObjectProvider<ToolCallInterceptor> interceptors) {
-        this(auditLogger, errorMapper, registry, interceptors, null);
+        this(auditLogger, errorMapper, registry, interceptors, null, McpPlatformProperties.DEFAULT_MAX_RESULT_SIZE.toBytes());
     }
 
     /**
@@ -46,7 +48,8 @@ public final class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
                                    ObjectProvider<McpErrorMapper> errorMapper,
                                    ObjectProvider<ToolRiskRegistry> registry,
                                    ObjectProvider<ToolCallInterceptor> interceptors,
-                                   ToolInputPolicy inputPolicy) {
+                                   ToolInputPolicy inputPolicy, long maxResultBytes) {
+        this.maxResultBytes = maxResultBytes;
         this.inputPolicy = inputPolicy == null ? ToolInputPolicy.STRICT : inputPolicy;
         this.auditLogger = auditLogger;
         this.errorMapper = errorMapper;
@@ -71,7 +74,7 @@ public final class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
         }
         List<ToolCallInterceptor> chain = interceptors.orderedStream().toList();
         return new AuditingToolCallback(callback, auditLogger.getObject(), errorMapper.getObject(),
-                registry.getObject(), chain, inputPolicy);
+                registry.getObject(), chain, inputPolicy, maxResultBytes);
     }
 
     /** Marker + decorator; the marker keeps a second post-processing pass from double-wrapping. */
