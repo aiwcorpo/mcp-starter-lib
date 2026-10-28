@@ -66,26 +66,53 @@ public final class ResourceRefs {
         return List.copyOf(bindings);
     }
 
-    /** A {@link ResourceRef} below the top level of an argument is never read; the tool would run unchecked. */
+    /**
+     * A {@link ResourceRef} below the top level of an argument is never read; the tool would run unchecked. Followed:
+     * arrays, collections, {@code Optional}, the values of a {@code Map}, records, and the fields of a class that is not a
+     * record (its fields are where a Jackson-bound object would carry an annotated record). A type that cannot be followed
+     * ({@code Object}, an interface, a type variable) carries no annotation the platform could see, so there is nothing to
+     * ignore silently.
+     */
     private static void nestedRefs(ResolvableType type, String where, int depth) {
         if (depth > MAX_DEPTH) {
             return;
         }
         Class<?> raw = type.resolve(Object.class);
+        if (isScalar(raw)) {
+            return;
+        }
         if (raw.isArray()) {
             nestedRefs(type.getComponentType(), where + "[]", depth + 1);
+        } else if (Optional.class.isAssignableFrom(raw)) {
+            nestedRefs(type.getGeneric(0), where, depth + 1);
         } else if (Collection.class.isAssignableFrom(raw)) {
             nestedRefs(type.asCollection().getGeneric(0), where + "[]", depth + 1);
+        } else if (Map.class.isAssignableFrom(raw)) {
+            nestedRefs(type.asMap().getGeneric(1), where + "{}", depth + 1);
         } else if (raw.isRecord()) {
             for (RecordComponent component : raw.getRecordComponents()) {
                 if (component.getAnnotation(ResourceRef.class) != null) {
-                    throw new IllegalStateException(where + "." + component.getName() + ": @ResourceRef is read on a parameter "
-                            + "of the @Tool method, not on a component of an argument record, where it would be ignored and the "
-                            + "tool would run without the policy check. Pass the identifier as a parameter of its own.");
+                    throw nestedRef(where + "." + component.getName());
                 }
                 nestedRefs(ResolvableType.forType(component.getGenericType(), type), where + "." + component.getName(), depth + 1);
             }
+        } else if (!raw.isInterface() && raw != Object.class && !raw.getName().startsWith("java.")) {
+            for (java.lang.reflect.Field field : raw.getDeclaredFields()) {
+                if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
+                    continue;
+                }
+                if (field.getAnnotation(ResourceRef.class) != null) {
+                    throw nestedRef(where + "." + field.getName());
+                }
+                nestedRefs(ResolvableType.forField(field, type), where + "." + field.getName(), depth + 1);
+            }
         }
+    }
+
+    private static IllegalStateException nestedRef(String where) {
+        return new IllegalStateException(where + ": @ResourceRef is read on a parameter of the @Tool method, not on a component "
+                + "of an argument record, where it would be ignored and the tool would run without the policy check. Pass the "
+                + "identifier as a parameter of its own.");
     }
 
     /**

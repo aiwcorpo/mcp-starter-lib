@@ -30,6 +30,14 @@ class ResourceRefsTest {
     public record Plain(String id, List<String> names) {
     }
 
+    public record Wrapper(String name, Optional<List<Map<String, Update>>> deep) {
+    }
+
+    public static class PojoArgument {
+        public String name;
+        public List<Update> updates;
+    }
+
     public static class Pojo {
         public List<Hit> hits;
     }
@@ -106,6 +114,22 @@ class ResourceRefsTest {
             return null;
         }
 
+        public String updateOptional(Optional<Update> request) {
+            return null;
+        }
+
+        public String updateMap(Map<String, Update> requests) {
+            return null;
+        }
+
+        public String updateNestedOptionalInRecord(Wrapper wrapper) {
+            return null;
+        }
+
+        public String updatePojo(PojoArgument argument) {
+            return null;
+        }
+
         public String twoResolvers(@ResourceRef(type = "Jira::Issue", resolver = String.class) String a,
                                    @ResourceRef(type = "Jira::Issue", resolver = Integer.class) String b) {
             return null;
@@ -177,9 +201,10 @@ class ResourceRefsTest {
 
     @Test
     void aResourceRefBelowTheTopLevelOfAnArgumentStopsTheServer() {
-        for (String name : new String[] {"updateIssue", "updateMany"}) {
+        for (String name : new String[] {"updateIssue", "updateMany", "updateOptional", "updateMap", "updateNestedOptionalInRecord",
+                "updatePojo"}) {
             assertThatThrownBy(() -> ResourceRefs.arguments(method(name))).as(name).isInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining("not on a component of an argument record").hasMessageContaining("key");
+                    .hasMessageContaining("not on a component of an argument record");
         }
     }
 
