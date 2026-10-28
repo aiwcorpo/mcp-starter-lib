@@ -21,7 +21,7 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
 
-3.0.0-alpha-11: (w pracy na `3.0.0-alpha-11-SNAPSHOT`; po wydaniu: `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-11`, tag `v3.0.0-alpha-11`). Instrukcja dla serwerów: `MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-11". Kamienie:
+3.0.0-alpha-11: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-11`, tag `v3.0.0-alpha-11` (praca na `3.0.0-alpha-11-SNAPSHOT`, nic innego w `~/.m2` nie instalowane). Razem 352 testy (starter 281, mcp-platform-test 71). Instrukcja dla serwerów: `MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-11". Kamienie:
 1. A10-M1. `DevProfileGuardAssertions` w `mcp-platform-test` (`assertDevProfileLoopbackRule()`, `assertDevProfileRefusesAddress(adres)`):
    woła `PlatformConfigurationGuard` z własnym środowiskiem (bez zmiennych procesu i właściwości systemowych hosta, z ustawionymi na
    stałe `INVOCATION_ID` i `KUBERNETES_*`), więc reguła loopbacku jest sprawdzana tak samo na każdym hoście. Wybrane zamiast
