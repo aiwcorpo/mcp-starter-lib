@@ -1,6 +1,6 @@
 # Migracja z 2.x na 3.0
 
-Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-12**.
+Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-13**.
 
 ## Zmiana modelu
 
@@ -308,10 +308,74 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
+## Jak przejść z alpha-11 (albo alpha-12) na 3.0.0-alpha-13
+
+Jedna lista dla serwera i dla template'u; szczegóły i uzasadnienia są w sekcjach "Zmiany w 3.0.0-alpha-12" i
+"Zmiany w 3.0.0-alpha-13" niżej. Kolejność ma znaczenie tylko dla ostatniego punktu.
+
+1. **Wersje.** W `pom.xml` serwera `<mcp-platform.version>3.0.0-alpha-13</mcp-platform.version>` (BOM zarządza też
+   `mcp-contracts` 2.2.5). W README serwera wersja startera i kontraktów jest wpisana ręcznie (`starter 3.0.0-alpha-11`,
+   `kontrakty 2.1.1`): popraw na `3.0.0-alpha-13` i `2.2.5`. `new-server.sh` bierze wersję BOM z `pom.xml` template'u, więc
+   template trzeba przestawić przed generowaniem nowych serwerów.
+2. **Zastąp cały plik** `mcp-app/src/test/java/pl/aiwcorpo/mcp/<system>/app/DevProfileLoopbackTest.java` (to nie jest
+   dopisek do testu z alpha-11: `TestGateway`, `SpringApplicationBuilder` i `assertThatThrownBy` znikają z importów).
+   Pakiet i nazwa systemu zostają Twoje (`jira`, `confluence`, `gitlab`, `servicedesk`, `opensearch`, w template'cie `example`):
+
+   ```java
+   package pl.aiwcorpo.mcp.jira.app;
+
+   import org.junit.jupiter.api.Test;
+   import org.springframework.beans.factory.annotation.Autowired;
+   import org.springframework.context.ApplicationContext;
+   import pl.aiwcorpo.mcp.platform.test.DevProfileGuardAssertions;
+
+   /**
+    * The dev profile (test keys, no mTLS) does not listen on an address other machines can reach: the rule is the
+    * starter's, and the server's own context must have the guard that applies it.
+    */
+   class DevProfileLoopbackTest extends ServerTestSupport {
+
+       @Autowired
+       ApplicationContext context;
+
+       @Test
+       void devListensOnLoopbackOnly() {
+           DevProfileGuardAssertions.assertDevProfileLoopbackRule();
+           DevProfileGuardAssertions.assertServerIsGuarded(context);
+       }
+   }
+   ```
+
+   `ServerTestSupport` jest w tym samym pakiecie (klasa bazowa testów serwera z `@SpringBootTest` i `@ActiveProfiles("dev")`),
+   więc import nie jest potrzebny; test używa jej kontekstu i nie startuje aplikacji drugi raz.
+3. **Usuń wykluczenia platformy**, jeśli są; w alpha-13 kończą start w każdym profilu, także w `dev`. Miejsca do przeszukania:
+   - `src/main/resources/application*.yml` i `.properties` (także `application-dev.yml`): klucz
+     `spring.autoconfigure.exclude`, zapisany jako lista albo z indeksami (`exclude[0]`);
+   - zmienne środowiska: `SPRING_AUTOCONFIGURE_EXCLUDE` w `.env`, w `docker-compose*.yml`, w jednostce systemd
+     (`Environment=`, `EnvironmentFile=`), w `Dockerfile` (`ENV`), w konfiguracji CI;
+   - kod: `@SpringBootApplication(exclude = ...)` albo `excludeName`, `@EnableAutoConfiguration(exclude = ...)`,
+     `@ImportAutoConfiguration(exclude = ...)`;
+   - wartości do wyrzucenia: wszystko z pakietu `pl.aiwcorpo.mcp.platform.` (np. `PlatformSecurityAutoConfiguration`,
+     `PlatformAuthAutoConfiguration`, `PlatformObservabilityAutoConfiguration`, `PlatformMcpServerAutoConfiguration`).
+     Przykład do usunięcia:
+
+     ```java
+     @SpringBootApplication(exclude = PlatformSecurityAutoConfiguration.class)   // nie rób tego
+     public class McpServerApplication { ... }
+     ```
+
+   Grep, który wystarcza na całe drzewo: `grep -rnE "autoconfigure.exclude|AUTOCONFIGURE_EXCLUDE|exclude *=|excludeName" .`
+   (bez `target/`). Slice'y (`@WebMvcTest`) bez platformy nadal działają.
+4. **Lazy initialization i własny filtr.** Serwer z `spring.main.lazy-initialization=true` albo z własnym
+   `CredentialHeaderFilter` nic nie zmienia: od alpha-13 guardy powstają zawsze.
+5. **Kod, który ustawia adres serwera WWW** (`WebServerFactoryCustomizer#setAddress`, dodatkowy `Connector`) w `dev` musi
+   wskazywać pętlę zwrotną; inaczej start kończy się odmową.
+6. **Zbuduj** (`JAVA_HOME` na Javę 25, `./mvnw -B verify`).
+
 ## Zmiany w 3.0.0-alpha-12
 
 Pracowano na `3.0.0-alpha-12-SNAPSHOT`. Przejście z alpha-11: podbić `mcp-platform.version` (BOM) na `3.0.0-alpha-12`, co
-podnosi też `mcp-contracts` do 2.2.5; w każdym serwerze i w template'cie rozszerzyć `DevProfileLoopbackTest` (pierwszy
+podnosi też `mcp-contracts` do 2.2.5; w każdym serwerze i w template'cie zastąpić plik `DevProfileLoopbackTest` (pierwszy
 punkt) i usunąć wykluczenia platformy, jeśli są (drugi). Reszta zmienia się tylko tam, gdzie punkty mówią wprost.
 
 - **`DevProfileLoopbackTest` sprawdza prawdziwą konfigurację serwera (A11-M1).** Test z alpha-11 woła pomocnika na
@@ -362,7 +426,30 @@ punkt) i usunąć wykluczenia platformy, jeśli są (drugi). Reszta zmienia się
   tekst z takim ogonem trzeba poprawić.
 - **Rozpoznanie jaru test frameworka** (A11-L2): ścieżka musi kończyć się na `spring-test-<wersja>.jar` albo
   `spring-boot-test-<wersja>.jar` (z `!/` w jarze zagnieżdżonym); katalog o takiej nazwie już się nie liczy. Nic do zmiany w serwerach.
-- **Devcontainer** (A10-L2) nadal bez zmian: decyzja o dwóch opcjach czeka na człowieka (STATUS, "Do decyzji").
+- **Devcontainer** (A10-L2): bez zmian; człowiek wybrał opcję 1 (STATUS), `dev` w kontenerze nadal odmawia.
+
+## Zmiany w 3.0.0-alpha-13
+
+Pracowano na `3.0.0-alpha-13-SNAPSHOT`. Przejście: lista "Jak przejść z alpha-11 (albo alpha-12)" wyżej.
+
+- **Guardy powstają przy `spring.main.lazy-initialization=true` (A12-M1).** `PlatformConfigurationGuard`,
+  `CredentialTransportGuard` i nowy `DevListenAddressCheck` są `@Lazy(false)`. Wcześniej guard był tworzony tylko jako
+  zależność `CredentialHeaderFilter`, więc serwer z leniwą inicjalizacją i własnym `CredentialHeaderFilter` startował bez
+  żadnej kontroli (`dev` na `0.0.0.0`, `prod` z kluczami testowymi, bez mTLS, z jti w pamięci i JWKS po http).
+  `assertServerIsGuarded` pobiera beany (`getBean`), nie tylko sprawdza definicje, więc wykonuje też kontrole guarda.
+- **Adres, na którym serwer naprawdę słucha (A12-L2).** W `dev` po starcie serwera WWW (głównego i managementu) sprawdzane są
+  konektory Tomcata; adres inny niż pętla zwrotna albo nieustawiony (wszystkie interfejsy) kończy start. Dotyczy kodu, który
+  ustawia adres fabryki serwera albo dodaje konektor, bo `server.address` tego nie pokazuje. `assertServerIsGuarded` sprawdza to
+  samo w kontekście z serwerem WWW (`ListenAddresses.nonLoopback`).
+- **Limit zdarzeń bez poprawnego tokenu (A12-L1).** Wspólny budżet obejmuje `missing_token` i `malformed` (pusty albo obcy
+  nagłówek `Authorization`, napis, który nie jest JWT) i dotyczy zarówno zdarzenia `authentication`, jak i linii
+  `event=internal_jwt_rejected` w logu aplikacji. Nadmiar tylko w liczniku
+  `mcp_server_audit_authentication_suppressed_total` z tagiem `reason` (`missing_token` albo `malformed`); żądanie dostaje 401
+  jak zawsze. Własność `internal-jwt.missing-token-events-per-second` zostaje (nazwa z alpha-12). Okno limitera jest
+  teraz synchronizowane, więc budżet nie jest przekraczany pod współbieżnością. Alerty na `malformed` w SIEM trzeba oprzeć
+  też na liczniku.
+- Testy audytu (A12-L3): kody błędu dla powodów liczone z tabeli kontraktu, nie z predykatu filtra; `jwks_unavailable`
+  sprawdzone przez filtr; asercja serwera odmawia kontekstu spoza `dev`.
 
 ## Zmiany w 3.0.0-alpha-11
 

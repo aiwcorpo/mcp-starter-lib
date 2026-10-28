@@ -62,6 +62,14 @@ class InternalJwtAuditTest {
                 new AuditLogger("test.audit.authentication", "mcp-jira"), limiter);
     }
 
+    private InternalJwtFilter filterWithKeys(GatewayKeys keys) {
+        InternalJwtVerifier verifier = new InternalJwtVerifier(new InternalJwtVerifier.Settings(
+                "https://mcp-gateway.internal", "mcp-jira", Duration.ofSeconds(30), Duration.ofSeconds(60), true),
+                keys, new InMemoryJtiReplayStore(clock), clock);
+        return new InternalJwtFilter(verifier, List.of("/actuator/health"), 1024, false, Set.of("mcp-gateway"),
+                new AuditLogger("test.audit.authentication", "mcp-jira"));
+    }
+
     private MockHttpServletRequest toolCall(String authorization) {
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp");
         request.setServletPath("/mcp");
@@ -135,6 +143,21 @@ class InternalJwtAuditTest {
     }
 
     @Test
+    void unreachableKeysAreAuditedAsUnavailableByTheFilter() throws Exception {
+        GatewayKeys down = kid -> {
+            throw new GatewayKeys.KeysUnavailableException("down", null);
+        };
+
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        filterWithKeys(down).doFilter(toolCall("Bearer " + token), response, new MockFilterChain());
+
+        assertThat(response.getStatus()).isEqualTo(503);
+        JsonNode event = onlyEvent();
+        assertThat(event.get("reason").asString()).isEqualTo("jwks_unavailable");
+        assertThat(event.get("errorCode").asString()).isEqualTo("upstream_unavailable");
+    }
+
+    @Test
     void aBrokenSignatureIsAudited() throws Exception {
         filter(new InMemoryJtiReplayStore(clock), false).doFilter(toolCall("Bearer " + token.substring(0, token.length() - 4) + "AAAA"),
                 new MockHttpServletResponse(), new MockFilterChain());
@@ -194,5 +217,35 @@ class InternalJwtAuditTest {
                 .map(line -> JSON.readTree(line.getFormattedMessage()).get("reason").asString()).toList();
         assertThat(reasons).containsExactly("missing_token", "bad_signature", "bad_signature", "bad_signature",
                 "bad_signature", "bad_signature");
+    }
+
+    @Test
+    void missingAndMalformedShareOneBudgetForTheEventAndTheLogLine() throws Exception {
+        Logger filterLog = (Logger) LoggerFactory.getLogger(InternalJwtFilter.class);
+        ListAppender<ILoggingEvent> warnings = new ListAppender<>();
+        warnings.start();
+        filterLog.addAppender(warnings);
+        try {
+            AtomicLong nanos = new AtomicLong(1_000_000_000L);
+            SimpleMeterRegistry meters = new SimpleMeterRegistry();
+            InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock), false,
+                    new MissingTokenEventLimiter(4, nanos::get, meters));
+            String[] headers = {null, "x", "", "Bearer", "Bearer ", "Bearer not-a-jwt", "Basic abc", "Bearer a.b.c"};
+
+            for (String header : headers) {
+                MockHttpServletResponse response = new MockHttpServletResponse();
+                filter.doFilter(toolCall(header), response, new MockFilterChain());
+                assertThat(response.getStatus()).as("header '%s'", header).isEqualTo(401);
+            }
+
+            assertThat(CapturedLogs.snapshot(lines)).hasSize(4);
+            assertThat(CapturedLogs.snapshot(warnings).stream().filter(e -> e.getFormattedMessage().contains("internal_jwt_rejected")))
+                    .hasSize(4);
+            double counted = meters.get(MissingTokenEventLimiter.METRIC).counters().stream().mapToDouble(c -> c.count()).sum();
+            assertThat(counted).isEqualTo(4.0);
+            assertThat(meters.get(MissingTokenEventLimiter.METRIC).tag("reason", "malformed").counter().count()).isPositive();
+        } finally {
+            filterLog.detachAppender(warnings);
+        }
     }
 }

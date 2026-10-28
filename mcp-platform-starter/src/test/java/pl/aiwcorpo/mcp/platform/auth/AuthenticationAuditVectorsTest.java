@@ -38,6 +38,9 @@ class AuthenticationAuditVectorsTest {
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final int EXPECTED_VECTORS = 42;
 
+    /** The reasons CC-120 gives errorCode upstream_unavailable, written out so the test does not use the starter's own predicate. */
+    private static final Set<String> UPSTREAM_UNAVAILABLE = Set.of("jwks_unavailable", "replay_store_unavailable");
+
     record Vector(String name, JsonNode data) {
         @Override
         public String toString() {
@@ -85,7 +88,7 @@ class AuthenticationAuditVectorsTest {
         logger.addAppender(lines);
         try {
             new AuditLogger("test.audit.authentication.reasons", "mcp-jira").authenticationDenied(reason.code(),
-                    reason.infrastructure() ? "upstream_unavailable" : "unauthenticated", 3);
+                    UPSTREAM_UNAVAILABLE.contains(reason.code()) ? "upstream_unavailable" : "unauthenticated", 3);
 
             String line = CapturedLogs.snapshot(lines).getFirst().getFormattedMessage();
             assertThat(ContractSchemas.violations(ContractSchemas.AUDIT_EVENT, line)).as(line).isEmpty();

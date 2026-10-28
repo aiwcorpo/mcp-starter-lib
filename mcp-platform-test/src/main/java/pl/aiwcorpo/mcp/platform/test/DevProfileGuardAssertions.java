@@ -1,12 +1,16 @@
 package pl.aiwcorpo.mcp.platform.test;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+import org.springframework.beans.BeansException;
+import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.context.ApplicationContext;
 import org.springframework.core.env.Environment;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.StandardEnvironment;
+import pl.aiwcorpo.mcp.platform.autoconfigure.ListenAddresses;
 import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
 import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformPresenceCheck;
@@ -95,13 +99,28 @@ public final class DevProfileGuardAssertions {
     /**
      * The application context of a server started in the {@code dev} profile has every bean of
      * {@link PlatformPresenceCheck#REQUIRED_BEANS} (the configuration guard, the internal JWT verifier and filter, the
-     * audit post-processor and the server customizer) and its {@code server.address} is a loopback address. The
-     * guard refuses a network address at startup, but only when it exists; this fails when it does not.
+     * audit post-processor and the server customizer), its {@code server.address} is a loopback address and, when it
+     * runs a web server, the server listens only on loopback addresses. The beans are fetched, not only looked up:
+     * with {@code spring.main.lazy-initialization=true} a bean that nothing needs is defined but never created, and
+     * the guard's checks run when it is created. The guard refuses a network address at startup, but only when it
+     * exists and runs; this fails when it does not.
      *
-     * @throws AssertionError when a bean is missing or the address is not loopback
+     * @throws AssertionError when a bean is missing or cannot be created, or an address is not loopback
      */
     public static void assertServerIsGuarded(ApplicationContext context) {
-        List<String> missing = PlatformPresenceCheck.REQUIRED_BEANS.stream().filter(name -> !context.containsBean(name)).toList();
+        List<String> missing = new ArrayList<>();
+        for (String name : PlatformPresenceCheck.REQUIRED_BEANS) {
+            if (!context.containsBean(name)) {
+                missing.add(name);
+                continue;
+            }
+            try {
+                context.getBean(name);
+            } catch (BeansException ex) {
+                throw new AssertionError("the platform bean '" + name + "' of the server's context cannot be created: "
+                        + ex.getMostSpecificCause().getMessage(), ex);
+            }
+        }
         if (!missing.isEmpty()) {
             throw new AssertionError("the server's context lacks the platform beans " + missing + ": an auto-configuration "
                     + "of the platform is excluded, so nothing keeps the dev profile on a loopback address");
@@ -114,6 +133,13 @@ public final class DevProfileGuardAssertions {
         String address = environment.getProperty("server.address");
         if (!PlatformConfigurationGuard.loopback(address)) {
             throw new AssertionError("the server's server.address is '" + address + "', not a loopback address");
+        }
+        if (context instanceof WebServerApplicationContext web && web.getWebServer() != null) {
+            List<String> exposed = ListenAddresses.nonLoopback(web.getWebServer());
+            if (!exposed.isEmpty()) {
+                throw new AssertionError("the server listens on " + exposed + ", not on loopback only, whatever "
+                        + "server.address says");
+            }
         }
     }
 

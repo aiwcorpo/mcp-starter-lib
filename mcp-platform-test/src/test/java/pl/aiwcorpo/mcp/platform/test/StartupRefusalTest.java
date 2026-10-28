@@ -12,6 +12,8 @@ import org.springframework.boot.builder.SpringApplicationBuilder;
 import pl.aiwcorpo.mcp.platform.test.app.ProbeServer;
 import pl.aiwcorpo.mcp.platform.test.excluding.ExcludingMcpServer;
 import pl.aiwcorpo.mcp.platform.test.excluding.ExcludingServer;
+import pl.aiwcorpo.mcp.platform.test.own.OwnFilterServer;
+import pl.aiwcorpo.mcp.platform.test.wide.WideAddressServer;
 
 /** Development relaxations outside the {@code dev} profile stop the server instead of weakening it. */
 class StartupRefusalTest {
@@ -144,5 +146,55 @@ class StartupRefusalTest {
                 .satisfiesAnyOf(
                         cause -> assertThat(cause).hasMessageContaining("platformConfigurationGuard"),
                         cause -> assertThat(cause).hasMessageContaining("the 'dev' profile is active in"));
+    }
+
+    private static final String DEPLOYMENT_REFUSAL = "the 'dev' profile is active in";
+
+    /**
+     * {@code spring.main.lazy-initialization=true} creates only the beans something needs. The configuration guard and the
+     * transport guard are checks nobody depends on, so a server with its own credential filter (the one eager dependant)
+     * used to start without them.
+     */
+    @Test
+    void lazyInitializationDoesNotSwitchTheGuardsOff() {
+        for (String address : new String[] {"0.0.0.0", "::"}) {
+            Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
+            properties.put("spring.ai.mcp.server.name", "startup-refusal-test");
+            properties.put("spring.main.lazy-initialization", "true");
+            assertThatThrownBy(() -> new SpringApplicationBuilder(OwnFilterServer.class).web(WebApplicationType.SERVLET)
+                    .properties(properties).properties("server.port=0").profiles("dev")
+                    .run("--server.address=" + address).close()).as(address)
+                    .satisfiesAnyOf(
+                            cause -> assertThat(cause).hasStackTraceContaining("must be a loopback address"),
+                            cause -> assertThat(cause).hasStackTraceContaining(DEPLOYMENT_REFUSAL));
+        }
+        Map<String, Object> prod = new HashMap<>(GATEWAY.serverProperties());
+        prod.put("spring.ai.mcp.server.name", "startup-refusal-test");
+        prod.put("spring.main.lazy-initialization", "true");
+        assertThatThrownBy(() -> new SpringApplicationBuilder(OwnFilterServer.class).web(WebApplicationType.SERVLET)
+                .properties(prod).properties("server.port=0").profiles("prod").run().close()).rootCause()
+                .hasMessageContaining("allow-test-keys=true is allowed only with the 'dev' profile")
+                .hasMessageContaining("replay-store=memory").hasMessageContaining("mtls.required=false")
+                .hasMessageContaining("jwks-uri must be an absolute https URL");
+        Map<String, Object> async = new HashMap<>(GATEWAY.serverProperties());
+        async.put("spring.ai.mcp.server.name", "startup-refusal-test");
+        async.put("spring.main.lazy-initialization", "true");
+        assertThatThrownBy(() -> new SpringApplicationBuilder(OwnFilterServer.class).web(WebApplicationType.SERVLET)
+                .properties(async).properties("server.port=0").profiles("dev").run("--spring.ai.mcp.server.type=ASYNC").close())
+                .satisfiesAnyOf(
+                        cause -> assertThat(cause).hasStackTraceContaining("ASYNC"),
+                        cause -> assertThat(cause).hasStackTraceContaining(DEPLOYMENT_REFUSAL));
+    }
+
+    /** The address the server really listens on, not the property: set in code by a web server customizer. */
+    @Test
+    void aWildcardAddressSetInCodeStopsTheStartInDev() {
+        Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
+        properties.put("spring.ai.mcp.server.name", "startup-refusal-test");
+        assertThatThrownBy(() -> new SpringApplicationBuilder(WideAddressServer.class).web(WebApplicationType.SERVLET)
+                .properties(properties).properties("server.port=0").profiles("dev").run().close())
+                .satisfiesAnyOf(
+                        cause -> assertThat(cause).hasStackTraceContaining("must listen on a loopback address only"),
+                        cause -> assertThat(cause).hasStackTraceContaining(DEPLOYMENT_REFUSAL));
     }
 }

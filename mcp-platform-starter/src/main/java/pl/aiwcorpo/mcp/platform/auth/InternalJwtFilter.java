@@ -33,7 +33,8 @@ import pl.aiwcorpo.mcp.platform.observability.CorrelationIdFilter;
  * <p>A refused request leaves an {@code authentication} audit event (C8, CC-071, CC-120): the reasons the gateway
  * knows for a token of its own plus {@code client_certificate_rejected} (mTLS) and, for the two infrastructure
  * failures, {@code jwks_unavailable} and {@code replay_store_unavailable} with {@code upstream_unavailable}.
- * {@code missing_token} events are capped per process ({@link MissingTokenEventLimiter}); the rest is not.
+ * Refusals for {@code missing_token} and {@code malformed} (no usable token) share one per-process budget for the audit
+ * event and the log line ({@link MissingTokenEventLimiter}); the rest is not capped.
  *
  * <p>Paths in {@code unauthenticatedPaths} (by default the health endpoints) are passed through untouched.
  * They are exact paths, never patterns, and a request is let through only when its raw URI is literally one
@@ -80,7 +81,7 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
 
     /**
      * @param audit              receives an {@code authentication} event (C8) for every refused request; may be {@code null}
-     * @param missingTokenEvents decides which {@code missing_token} events are written; the others are only counted
+     * @param missingTokenEvents decides which events for a request without a usable token are written and logged; the others are only counted
      */
     public InternalJwtFilter(InternalJwtVerifier verifier, List<String> unauthenticatedPaths, long maxRequestBody,
                              boolean clientCertificateRequired, Set<String> allowedClientNames, AuditLogger audit,
@@ -212,18 +213,24 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
     private void reject(HttpServletRequest request, HttpServletResponse response, InternalJwtRejection reason,
                         RequestBinding binding, long start) throws IOException {
         String kind = binding == null ? "-" : binding.kind().name().toLowerCase(Locale.ROOT);
+        // One decision for the log line and the audit event: a flood without a usable token fills neither.
+        boolean report = !MissingTokenEventLimiter.covers(reason) || missingTokenEvents.tryAcquire(reason);
         if (reason.infrastructure()) {
-            LOG.error("event=internal_jwt_unverifiable reason={} method={} path=\"{}\" kind={}", reason.code(),
-                    request.getMethod(), normalizedPath(request), kind);
+            if (report) {
+                LOG.error("event=internal_jwt_unverifiable reason={} method={} path=\"{}\" kind={}", reason.code(),
+                        request.getMethod(), normalizedPath(request), kind);
+                audit(reason, "upstream_unavailable", start);
+            }
             response.setHeader("Retry-After", "5");
-            audit(reason, "upstream_unavailable", start);
             writeError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "upstream_unavailable",
                     "The request could not be authenticated right now. Try again later.");
             return;
         }
-        LOG.warn("event=internal_jwt_rejected reason={} method={} path=\"{}\" kind={}", reason.code(),
-                request.getMethod(), normalizedPath(request), kind);
-        audit(reason, "unauthenticated", start);
+        if (report) {
+            LOG.warn("event=internal_jwt_rejected reason={} method={} path=\"{}\" kind={}", reason.code(),
+                    request.getMethod(), normalizedPath(request), kind);
+            audit(reason, "unauthenticated", start);
+        }
         response.setHeader("WWW-Authenticate",
                 reason == InternalJwtRejection.MISSING_TOKEN ? "Bearer" : "Bearer error=\"invalid_token\"");
         writeError(response, HttpServletResponse.SC_UNAUTHORIZED, "unauthenticated",
@@ -231,7 +238,7 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
     }
 
     private void audit(InternalJwtRejection reason, String errorCode, long start) {
-        if (audit != null && (reason != InternalJwtRejection.MISSING_TOKEN || missingTokenEvents.tryAcquire())) {
+        if (audit != null) {
             audit.authenticationDenied(reason.code(), errorCode, (System.nanoTime() - start) / 1_000_000L);
         }
     }

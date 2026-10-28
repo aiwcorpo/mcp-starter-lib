@@ -67,9 +67,10 @@ public class McpPlatformProperties {
         private String jwksUri;
 
         /**
-         * How many {@code missing_token} audit events one process writes per second; the rest only count in the
-         * {@code mcp_server_audit_authentication_suppressed_total} metric. A request without a token costs nothing, so
-         * without a cap it could fill the audit stream. At least 1 (the same default as the gateway's).
+         * How many refusals of requests without a usable token ({@code missing_token} and {@code malformed}) one process
+         * reports per second, as an audit event and a log line; the rest only count in the
+         * {@code mcp_server_audit_authentication_suppressed_total} metric. Such a request costs nothing, so without a cap
+         * it could fill the audit stream. At least 1 (the same default as the gateway's).
          */
         private int missingTokenEventsPerSecond = 20;
 

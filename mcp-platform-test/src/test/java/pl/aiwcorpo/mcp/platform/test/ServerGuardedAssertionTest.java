@@ -18,6 +18,7 @@ import org.springframework.test.context.DynamicPropertySource;
 import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformPresenceCheck;
 import pl.aiwcorpo.mcp.platform.test.app.ProbeServer;
 import pl.aiwcorpo.mcp.platform.test.excluding.ExcludingServer;
+import pl.aiwcorpo.mcp.platform.test.own.OwnFilterServer;
 
 /**
  * {@link DevProfileGuardAssertions#assertServerIsGuarded} on real application contexts of the {@code dev} profile:
@@ -80,6 +81,55 @@ class ServerGuardedAssertionTest {
 
             assertThatThrownBy(() -> DevProfileGuardAssertions.assertServerIsGuarded(context))
                     .isInstanceOf(AssertionError.class).hasMessageContaining("0.0.0.0");
+        }
+    }
+
+    @Test
+    void aContextOutsideDevFailsTheAssertionEvenWithEveryBeanAndALoopbackAddress() {
+        for (String[] profiles : new String[][] {{"prod"}, {}, {"dev", "prod"}}) {
+            try (GenericApplicationContext context = new GenericApplicationContext()) {
+                PlatformPresenceCheck.REQUIRED_BEANS.forEach(name -> context.registerBean(name, Object.class));
+                context.getEnvironment().setActiveProfiles(profiles);
+                context.getEnvironment().getPropertySources()
+                        .addFirst(new MapPropertySource("address", Map.of("server.address", "127.0.0.1")));
+                context.refresh();
+
+                assertThatThrownBy(() -> DevProfileGuardAssertions.assertServerIsGuarded(context))
+                        .isInstanceOf(AssertionError.class).hasMessageContaining("'dev' profile only");
+            }
+        }
+    }
+
+    /** With lazy initialization a defined bean may never have been created, so its checks never ran. */
+    @Test
+    void aBeanThatIsDefinedButFailsWhenCreatedFailsTheAssertion() {
+        try (GenericApplicationContext context = new GenericApplicationContext()) {
+            context.getDefaultListableBeanFactory().setAllowBeanDefinitionOverriding(true);
+            PlatformPresenceCheck.REQUIRED_BEANS.forEach(name -> context.registerBean(name, Object.class));
+            context.registerBean("platformConfigurationGuard", Object.class, () -> {
+                throw new IllegalStateException("server.address must be a loopback address");
+            }, bd -> bd.setLazyInit(true));
+            context.getEnvironment().setActiveProfiles("dev");
+            context.refresh();
+
+            assertThatThrownBy(() -> DevProfileGuardAssertions.assertServerIsGuarded(context))
+                    .isInstanceOf(AssertionError.class).hasMessageContaining("platformConfigurationGuard")
+                    .hasMessageContaining("cannot be created");
+        }
+    }
+
+    @Nested
+    @SpringBootTest(classes = OwnFilterServer.class,
+            properties = {"spring.ai.mcp.server.name=guarded-assertion-test", "spring.main.lazy-initialization=true"})
+    @ActiveProfiles("dev")
+    class LazyServerWithItsOwnCredentialFilter {
+
+        @Autowired
+        ApplicationContext context;
+
+        @Test
+        void theGuardExistsAndTheAssertionPasses() {
+            assertThatCode(() -> DevProfileGuardAssertions.assertServerIsGuarded(context)).doesNotThrowAnyException();
         }
     }
 }

@@ -1,16 +1,17 @@
 package pl.aiwcorpo.mcp.platform.auth;
 
-import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.LongSupplier;
 
 /**
- * Per-process cap on {@code missing_token} authentication events (C8, CC-120): a request without a token costs the
- * caller nothing, so without a cap anyone who reaches the port could fill the audit stream. Events over the cap are
- * only counted ({@value #METRIC}, tag {@code reason}), never written. The same mechanism and default as the
- * gateway's. Other reasons are not capped: they need a certificate, a token of a known shape or a failing dependency,
- * and each of them is a signal on its own.
+ * One per-process budget for the refusals of requests that carry no usable token: {@code missing_token} and
+ * {@code malformed} (an empty or foreign {@code Authorization} header, a string that is not a JWT). Both cost the
+ * caller nothing, so without a cap anyone who reaches the port could fill the audit stream and the application log
+ * (CC-120). What is over the budget is only counted ({@value #METRIC}, tag {@code reason}), neither audited nor
+ * logged. The same mechanism and default as the gateway's, which caps {@code missing_token}.
+ *
+ * <p>Other reasons are not capped: they need a token of the right shape, a certificate or a failing dependency, and
+ * each of them is a signal on its own.
  */
 public final class MissingTokenEventLimiter {
 
@@ -21,9 +22,9 @@ public final class MissingTokenEventLimiter {
 
     private final int perSecond;
     private final LongSupplier nanoClock;
-    private final Counter suppressed;
-    private final AtomicLong windowStart;
-    private final AtomicLong inWindow = new AtomicLong();
+    private final MeterRegistry meters;
+    private long windowStart;
+    private int inWindow;
 
     public MissingTokenEventLimiter(int perSecond, LongSupplier nanoClock, MeterRegistry meters) {
         if (perSecond < 1) {
@@ -31,21 +32,24 @@ public final class MissingTokenEventLimiter {
         }
         this.perSecond = perSecond;
         this.nanoClock = nanoClock;
-        this.suppressed = Counter.builder(METRIC).tag("reason", InternalJwtRejection.MISSING_TOKEN.code())
-                .description("missing_token authentication events not written to the audit log (rate cap)")
-                .register(meters);
-        this.windowStart = new AtomicLong(nanoClock.getAsLong());
+        this.meters = meters;
+        this.windowStart = nanoClock.getAsLong();
     }
 
-    /** True when the event may be written; false (and counted) when this second's budget is spent. */
-    public boolean tryAcquire() {
+    /** Whether a refusal for this reason is capped at all. */
+    public static boolean covers(InternalJwtRejection reason) {
+        return reason == InternalJwtRejection.MISSING_TOKEN || reason == InternalJwtRejection.MALFORMED;
+    }
+
+    /** True when the event may be written; false (and counted under {@code reason}) when this second's budget is spent. */
+    public synchronized boolean tryAcquire(InternalJwtRejection reason) {
         long now = nanoClock.getAsLong();
-        long start = windowStart.get();
-        if (now - start >= SECOND_NANOS && windowStart.compareAndSet(start, now)) {
-            inWindow.set(0);
+        if (now - windowStart >= SECOND_NANOS) {
+            windowStart = now;
+            inWindow = 0;
         }
-        if (inWindow.incrementAndGet() > perSecond) {
-            suppressed.increment();
+        if (++inWindow > perSecond) {
+            meters.counter(METRIC, "reason", reason.code()).increment();
             return false;
         }
         return true;

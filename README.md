@@ -6,7 +6,7 @@ robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadc
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
 Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 2.2.5.
-Wersja: **3.0.0-alpha-12** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+Wersja: **3.0.0-alpha-13** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
 
@@ -234,7 +234,7 @@ poniżej `$JAVA_HOME/bin/java` (`JAVA_HOME` wskazuje JDK 25).
             <dependency>
                 <groupId>pl.aiwcorpo.mcp</groupId>
                 <artifactId>mcp-platform-bom</artifactId>
-                <version>3.0.0-alpha-12</version>
+                <version>3.0.0-alpha-13</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -437,9 +437,9 @@ ERROR z ścieżką pola (`/assignee (type)`), bez wartości. Komunikat SDK (`out
 zdarzenie `authentication` (`outcome=denied`, `reason` = kod odrzucenia) tylko z pól dozwolonych w kontraktach 2.2.5
 (CC-071, CC-120), bez `sub`, `client`, `tool` z niezweryfikowanego tokenu. Powody to kody z wektorów JWT oraz
 `client_certificate_rejected` (certyfikat gateway'a) i, z `errorCode: upstream_unavailable` (odpowiedź 503),
-`jwks_unavailable` i `replay_store_unavailable` (magazyn `jti`). Zdarzeń `missing_token` proces zapisuje najwyżej
-`aiwcorpo.mcp.platform.internal-jwt.missing-token-events-per-second` na sekundę (domyślnie 20, jak w gateway'u, minimum 1);
-nadmiar nie trafia do audytu, tylko do licznika `mcp_server_audit_authentication_suppressed_total` (tag `reason`), a żądanie
+`jwks_unavailable` i `replay_store_unavailable` (magazyn `jti`). Zdarzeń dla żądań bez poprawnego tokenu (`missing_token` i `malformed`) proces zapisuje (jako zdarzenie i jako linię logu) najwyżej
+`aiwcorpo.mcp.platform.internal-jwt.missing-token-events-per-second` na sekundę (domyślnie 20, minimum 1; gateway ma ten sam budżet dla samego `missing_token`);
+nadmiar nie trafia do audytu ani do logu, tylko do licznika `mcp_server_audit_authentication_suppressed_total` (tag `reason`), a żądanie
 dostaje 401 jak zawsze. Pozostałe powody nie są ograniczane.
 
 Gateway usuwa `confirmation_code` z argumentów przed wywołaniem serwera (C11), więc schemat serwera go nie
@@ -477,6 +477,13 @@ konfigurację samego serwera sprawdza na jego prawdziwym kontekście `@SpringBoo
 w pozostałych testach, więc bez kosztu drugiego startu):
 
 ```java
+package pl.aiwcorpo.mcp.jira.app;   // pakiet i nazwa systemu serwera
+
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
+import pl.aiwcorpo.mcp.platform.test.DevProfileGuardAssertions;
+
 class DevProfileLoopbackTest extends ServerTestSupport {
 
     @Autowired
@@ -489,6 +496,9 @@ class DevProfileLoopbackTest extends ServerTestSupport {
     }
 }
 ```
+
+`ServerTestSupport` to klasa bazowa testów serwera (`@SpringBootTest`, `@ActiveProfiles("dev")`), w tym samym pakiecie.
+Przejście z wcześniejszych wersji krok po kroku: `MIGRATION-3.0.md`, sekcja "Jak przejść z alpha-11".
 
 `assertServerIsGuarded(context)` wymaga, żeby w kontekście serwera były wszystkie beany z
 `PlatformPresenceCheck.REQUIRED_BEANS` (guard, weryfikator i filtr JWT, post-processor audytu, customizer serwera MCP) i
@@ -629,7 +639,7 @@ Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera t
 ```xml
 <dependency>
   <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-  <version>3.0.0-alpha-12</version><type>pom</type><scope>import</scope>
+  <version>3.0.0-alpha-13</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
 

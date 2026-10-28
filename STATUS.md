@@ -21,7 +21,27 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
 
-3.0.0-alpha-12: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-12`, tag `v3.0.0-alpha-12` (praca na `3.0.0-alpha-12-SNAPSHOT`, wersji alpha-11 i wcześniejszych nie instalowano). Razem 431 testów (starter 353, mcp-platform-test 78). Kontrakty 2.2.5 (BOM i oba moduły). Instrukcja dla serwerów: `MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-12". Kamienie:
+3.0.0-alpha-13: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-13`, tag `v3.0.0-alpha-13` (praca na `3.0.0-alpha-13-SNAPSHOT`, wersji alpha-12 i wcześniejszych nie instalowano ponownie). Razem __TESTS__ testów. Instrukcja: `MIGRATION-3.0.md`, sekcja "Jak przejść z alpha-11 (albo alpha-12) na 3.0.0-alpha-13". Decyzja człowieka A10-L2: opcja 1 (devcontainer nie jest wspierany dla `dev`, bez zmian w kodzie). Kamienie (przegląd alpha-12: 0 CRITICAL/HIGH, 1 MEDIUM, 3 LOW):
+1. A12-M1. `PlatformConfigurationGuard`, `CredentialTransportGuard` i `DevListenAddressCheck` są `@Lazy(false)`; przy `spring.main.lazy-initialization=true`
+   guard powstawał tylko jako zależność `CredentialHeaderFilter` (`@ConditionalOnMissingBean`), więc serwer z własnym filtrem startował bez kontroli.
+   `assertServerIsGuarded` używa `getBean` (wykonanie kontroli), nie `containsBean`. Testy: `StartupRefusalTest.lazyInitializationDoesNotSwitchTheGuardsOff`
+   (aplikacja `OwnFilterServer`: `dev` na `0.0.0.0` i `::`, `prod` z kluczami testowymi/bez mTLS/jti w pamięci/JWKS po http, ASYNC), `ServerGuardedAssertionTest`
+   (kontekst z leniwym guardem, który się nie tworzy). Mutacja bez `@Lazy(false)` jest czerwona.
+2. A12-L1. `MissingTokenEventLimiter` ma jeden budżet dla `missing_token` i `malformed` i obejmuje zdarzenie audytu oraz linię WARN
+   `internal_jwt_rejected`; licznik z tagiem `reason`; okno synchronizowane
+   (poprzednio nieatomowy reset). Testy: `InternalJwtAuditTest.missingAndMalformedShareOneBudgetForTheEventAndTheLogLine`.
+   Odstępstwo od gateway'a: gateway ogranicza tylko `missing_token` (propozycja CC 7 niżej).
+3. A12-L2. `DevListenAddressCheck` (listener `WebServerInitializedEvent`, tylko `dev` jako jedyny profil) odmawia startu, gdy któryś konektor Tomcata
+   (główny lub managementu) nie jest na pętli zwrotnej (`ListenAddresses.nonLoopback`, publiczne); `assertServerIsGuarded` sprawdza to samo.
+   Testy: `ListenAddressesTest`, `StartupRefusalTest.aWildcardAddressSetInCodeStopsTheStartInDev` (`WebServerFactoryCustomizer` z `0.0.0.0`).
+   Granica: tylko Tomcat (jedyny serwer w starterze); serwer wystartował na chwilę, zanim odmowa go zatrzymuje.
+4. A12-L3. Asercja odrzuca kontekst spoza `dev` i bez profilu (mutacja M6); kod błędu w teście powodów z tabeli kontraktu (`UPSTREAM_UNAVAILABLE`),
+   a nie z `infrastructure()`; `jwks_unavailable` sprawdzony przez filtr (zdarzenie i 503).
+5. Dokumentacja wg smoke Haiku: jedna lista "Jak przejść z alpha-11" w MIGRATION (wersje, pełny plik `DevProfileLoopbackTest` z pakietem i importami,
+   gdzie szukać wykluczeń: yml, env, systemd, compose, adnotacje, grep), README odsyła do niej. Template i `new-server.sh` (wersja BOM z pom template'u,
+   README template'u z ręcznie wpisanymi wersjami) przestawia ws-03.
+
+3.0.0-alpha-12: wydane (nie zalecane, następcą jest alpha-13) - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-12`, tag `v3.0.0-alpha-12` (praca na `3.0.0-alpha-12-SNAPSHOT`, wersji alpha-11 i wcześniejszych nie instalowano). Razem 431 testów (starter 353, mcp-platform-test 78). Kontrakty 2.2.5 (BOM i oba moduły). Instrukcja dla serwerów: `MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-12". Kamienie:
 1. Kontrakty 2.2.5, wersja `3.0.0-alpha-12-SNAPSHOT`. Bez zmian w kodzie; 352 testy zielone na 2.2.5 (schematy i wektory JWT bez zmian oczekiwań).
 2. A11-M1 (MEDIUM). Test serwera nie sprawdzał niczego w serwerze, a serwer z wykluczonym guardem przechodził testy w `dev` na `0.0.0.0`.
    Dwie warstwy: (a) `DevProfileGuardAssertions.assertServerIsGuarded(ApplicationContext)` w `mcp-platform-test`: w kontekście `@SpringBootTest`
@@ -53,12 +73,14 @@ poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i
    Odstępstwo od briefu: nie ma. `client_certificate_rejected` nie jest limitowane, bo poza `dev` TLS wymaga `client-auth=need`, więc anonimowe
    żądanie nie dociera do kontroli aplikacji.
 
-### Do decyzji: A10-L2, devcontainer i dev w kontenerze programisty
+### A10-L2, devcontainer i dev w kontenerze programisty: zamknięte, opcja 1
+
+Decyzja człowieka (2026-10-28): opcja 1, bez zmian. `dev` w kontenerze (devcontainer, Codespaces, Toolbox, Distrobox) nadal odmawia, uruchomienie serwera tam idzie z testu albo w profilu z TLS, mTLS i Redisem. Opcja 2 (znaczniki `REMOTE_CONTAINERS`, `CODESPACES`, `/run/.toolboxenv`) wraca tylko przy realnej potrzebie. Rozważane opcje i uzasadnienie:
 
 Problem: sygnał kontenera (`/.dockerenv`, `/run/.containerenv`, `container`, cgroup) odmawia `dev` także w devcontainerze VS Code, Codespaces, Toolboxie
 i Distroboxie, czyli tam, gdzie programista pracuje. Komunikat odmowy i README podają dziś trzy wyjścia (poza kontenerem, z testu, profil inny niż `dev`).
 Testy serwerów działają w kontenerze (kontekst testowy nie jest sprawdzany). Nikt nie zgłosił, że pracuje w devcontainerze; programista na macOS
-nie ma problemu. To decyzja o modelu zagrożeń i o tym, czy wspieramy devcontainer, więc nie rozstrzygam jej sam.
+nie ma problemu.
 
 - Opcja 1: zostaje jak jest (devcontainer nie jest wspierany dla uruchomienia aplikacji w `dev`, testy tak). Koszt: 0. Zaleta: sygnał kontenera
   zatrzymuje skopiowany `SPRING_PROFILES_ACTIVE=dev` w obrazie wdrożeniowym bez wyjątków. Wada: programista w devcontainerze/Toolboxie uruchamia
@@ -397,8 +419,9 @@ Pozostałe poniżej wymagają decyzji ws-00; nowe punkty na końcu listy.
    (`U+FF20 U+FF41 U+FF4C U+FF4C`) przechodzi `normalize` bez zmian, a po NFKC po stronie odbiorcy daje `@all`. Decyzja do podjęcia
    razem dla gateway'a i serwerów (NFKC zmienia też zwykły tekst: ligatury, znaki zgodnościowe, pełną szerokość w CJK); do
    czasu decyzji starter nie normalizuje NFKC, żeby nie rozjechać gateway'a i serwerów.
-7. C8 (opis, patch; nowe w alpha-12): zapisać, że odbiorca zdarzenia `authentication` może ograniczyć częstość `missing_token` na proces
-   (domyślnie 20 na sekundę w gateway'u i w starterze), a nadmiar wyłącznie liczyć; nazwy liczników dziś różne
+7. C8 (opis, patch; nowe w alpha-12, uzupełnione w alpha-13): zapisać, że odbiorca zdarzenia `authentication` może ograniczyć częstość żądań bez
+   poprawnego tokenu na proces (domyślnie 20 na sekundę; starter obejmuje `missing_token` i `malformed`, gateway dziś tylko `missing_token`: do ujednolicenia
+   z ws-05, bo pusty lub obcy nagłówek `Authorization` omija limit gateway'a), a nadmiar wyłącznie liczyć; nazwy liczników dziś różne
    (`gateway_audit_authentication_suppressed_total`, `mcp_server_audit_authentication_suppressed_total`), więc SIEM i alerty
    potrzebują albo wspólnej nazwy, albo listy. Do rozstrzygnięcia przez ws-00 razem z ws-05.
 
