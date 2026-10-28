@@ -198,6 +198,38 @@ class ToolRiskRegistryTest {
     }
 
     @Test
+    void aHandWrittenCallbackMustDeclareThatItsResultHoldsNoResources() {
+        ToolCallback undeclared = new Undeclared();
+
+        assertThatThrownBy(() -> registry.register(undeclared)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("resultWithoutResources()");
+    }
+
+    private record Undeclared() implements ToolCallback, RiskClassifiedTool {
+
+        @Override
+        public RiskLevel riskLevel() {
+            return RiskLevel.READ_ONLY;
+        }
+
+        @Override
+        public String title() {
+            return "Undeclared";
+        }
+
+        @Override
+        public ToolDefinition getToolDefinition() {
+            return DefaultToolDefinition.builder().name("search_things").description("d")
+                    .inputSchema("{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}").build();
+        }
+
+        @Override
+        public String call(String toolInput) {
+            return "";
+        }
+    }
+
+    @Test
     void theNameOfADestructiveToolCannotBeFlaggedMilder() {
         assertThatThrownBy(() -> registry.register(new Hand("delete_issue", RiskLevel.UPDATE, null, "Delete issue")))
                 .hasMessageContaining("DESTRUCTIVE");

@@ -308,6 +308,65 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
+## Z beta-2 na beta-3
+
+Poprawki po recenzji beta-2 (0 CRITICAL/HIGH) i po przeglądzie automatycznym. Serwer, który przeszedł na beta-2, musi tylko oznaczyć
+narzędzia zwracające tekst (punkt 1); reszta to nowe błędy startu i drobne API. Wersja: `<version>3.0.0-beta-3</version>` w imporcie BOM
+(kontrakty 3.1.0).
+
+1. **Wynik, który jest tekstem, wymaga `@ResultWithoutResources`.** `String`, `CharSequence` i `byte[]` na najwyższym poziomie wyniku
+   (także w `Optional`, `List`) mogły być gotowym JSON-em z zasobami, których platforma nie widzi, więc narzędzie zwracające zwykły tekst
+   deklaruje, że nie ma w nim zasobów. `String` jako komponent rekordu nadal jest zwykłym polem. Dotyczy każdego narzędzia z
+   `String get...()` i `List<String> list...()`:
+
+   ```java
+   import pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources;
+
+   @Tool(name = "delete_issue", description = "Deletes an issue.")
+   @ToolRisk(RiskLevel.DESTRUCTIVE)
+   @ToolTitle("Delete issue")
+   @ResultWithoutResources            // "deleted ABC-1": komunikat, nie zasób
+   public String deleteIssue(@ArgumentLimits(maxLength = 16, contractPattern = "JiraIssueKey")
+                             @ResourceRef(type = "Jira::Issue") String issueKey) { ... }
+   ```
+
+   Narzędzie, które zwracało `objectMapper.writeValueAsString(hits)` albo odpowiedź systemu jako tekst, zwraca rekordy z
+   `@ResourceRef` (adnotacja `@ResultWithoutResources` na takim wyniku byłaby fałszywa i nic by nie filtrowało). Klucz `Map` niebędący
+   skalarem (`Map<IssueHit, Long>`) liczy się jak część nieśledzona.
+2. **Ręcznie napisany `ToolCallback` i `MethodToolCallback` bez czytelnej metody** zatrzymują start, jeśli nie deklarują wyniku:
+   `RiskClassifiedTool#resultWithoutResources()` zwraca `true` (callback nie zwraca zasobów albo filtruje je sam). Testy z własnymi
+   callbackami dopisują tę metodę.
+3. **Argumenty zagnieżdżone.** Szukanie `@ResourceRef` poniżej parametru obejmuje teraz `Optional`, wartości `Map`, pola klas niebędących
+   rekordami razem z nadklasami, podtypy `sealed` (`permits`) i kończy się błędem startu przy zagnieżdżeniu głębszym niż 6 poziomów
+   (wcześniej przechodziło po cichu). Kod z `@ResourceRef` na komponencie rekordu-argumentu był już odrzucany od beta-2; teraz także gdy rekord
+   siedzi w `Optional<...>`, `Map<String, ...>`, w klasie albo jej nadklasie.
+4. **Limit elementów na wywołanie.** `tools.max-filtered-elements` (200) liczy elementy wszystkich list-zasobów w całym wyniku, nie każdą listę osobno;
+   przekroczenie to `internal_error`.
+5. **CQL.** `scope.cql(fields, true)` i `scope.cqlSpaceClause(true)` dodają zakresy z grup dla `Confluence::Space` (rzucają, gdy grup brak; dla
+   `Confluence::Page` nie istnieją, bo zakresy stron to poddrzewa). Wartości w CQL są cytowane i escapowane jak w JQL (testy z wrogimi wartościami).
+6. **OpenSearch.** `QueryScope.requireNoAliases(odpowiedźJson)` czyta odpowiedź `GET _resolve/index/<wyrażenie>` i odmawia (`access_denied`) przy
+   aliasie albo data streamie; wołaj je przed zapytaniem agregującym, `_count` albo odczytem `hits.total`:
+
+   ```java
+   String expression = scope.opensearchIndexExpression();                  // rzuca, gdy nie ma czego pytać
+   QueryScope.requireNoAliases(opensearch.resolveIndex(expression));        // GET _resolve/index/<expression>
+   var response = opensearch.search(expression, QueryScope.OPENSEARCH_SEARCH_PARAMETERS, body);
+   ```
+
+   Resolver indeksów działający kontem serwisowym zwraca `tags: []` dla indeksu bez skonfigurowanych tagów, nie brak atrybutu (brak to `internal_error`,
+   czyli inna odpowiedź niż dla indeksu, którego nie ma).
+7. **Serwer przykładowy (`mcp-example`).** `TestGateway.start("mcp-example")` generuje teraz paczkę z regułami z przykładów kontraktów także dla zasobów:
+   odczyt, zapis w zakresie grup `mcp-jira-proj-ABC` itd., odmowa dla `restricted`, zawężenie linku (grupy `mcp-example-read|write|destructive`). Test
+   szablonu (odczyt dozwolony, `restricted` odrzucony, link zawęża) działa na `mcp-example` bez udawania `mcp-jira` (wzór: `ExampleServerResourcesTest`).
+8. **Wektory kontraktów na `ResourcePolicy`.** `ContractVectorsOnResourcePolicyTest` w `mcp-platform-test` uruchamia każdy plik z `resource-checks/` i
+   `result-filter/` kontraktów na `ResourcePolicy` z przykładowymi politykami; nowy wektor w kontraktach jest uruchamiany bez zmian w kodzie. Serwer
+   może zrobić to samo dla własnych resolverów.
+9. **Pobieranie paczek.** Pobranie zlecone podpowiedzią `prv` nie czeka na blokadę kanału (`tryLock`), więc dwa wątki silnika nie stoją na jednym `main`.
+
+Znane granice (bez zmiany w beta-3): słowa `AND`, `OR`, `NOT` w wartości `CONTAINS` działają jako operatory wyszukiwania tekstowego w obrębie jednego pola;
+`IS EMPTY`, `membersOf(...)` i funkcje dat nie są wyrażalne w `StructuredQuery`; wynik buildera nie był sprawdzony na prawdziwej Jirze (`POST
+/rest/api/2/jql/parse`) i Confluence (CQL z `\n`, `\\`, `\"`) w środowisku dev (zadanie dla ws-01).
+
 ## Z beta-1 na beta-2
 
 Zmiany po recenzji bezpieczeństwa i smoke teście beta-1. Dla serwera pisanego według sekcji "Z alpha-14 na beta-1" to: przepisanie

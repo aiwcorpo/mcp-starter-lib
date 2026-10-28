@@ -3,6 +3,11 @@
 Linia `pl.aiwcorpo.mcp:mcp-platform*` 3.x (niezależna od wersji kontraktów). Kontrakty:
 `pl.aiwcorpo.mcp:mcp-contracts:3.1.0` od beta-1 (2.2.5 w alpha-12 ... alpha-14, 2.1.1 od alpha-7, 2.0.2 do alpha-6).
 
+3.0.0-beta-3: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-3`, tag `v3.0.0-beta-3` (praca na `3.0.0-beta-3-SNAPSHOT`, po wydaniu `3.0.0-beta-4-SNAPSHOT`). Poprawki recenzji beta-2 (0 CRITICAL/HIGH, 1 MEDIUM, 10 LOW) i przeglądu automatycznego. Instrukcja: `MIGRATION-3.0.md`, "Z beta-2 na beta-3".
+- B2-M1: `String`, `CharSequence`, `byte[]` jako wynik (także w `Optional`/liście) wymagają `@ResultWithoutResources`. B2-L1: ręczny `ToolCallback` deklaruje `resultWithoutResources()`, nieczytelna metoda `MethodToolCallback` zatrzymuje start. B2-L2: nieskalarny klucz `Map` w wyniku jest nieśledzony. B2-L3: limit elementów na całe wywołanie. B2-L4 i przegląd automatyczny: `nestedRefs` w `Optional`, wartościach `Map`, polach z nadklasami, podtypach `sealed`; głębokość > 6 to błąd startu. B2-L5: `cql(fields, true)`. B2-L7: `tryLock` w pobraniu z `prv`, javadoc. B2-L8: `QueryScope.requireNoAliases` z testem (test na prawdziwym OpenSearch: ws-01). B2-L10: `ContractVectorsOnResourcePolicyTest` uruchamia wszystkie wektory `resource-checks/` (4) i `result-filter/` (8) na `ResourcePolicy`.
+- Znane, nieruszane: B2-L6 (słowa `AND`/`OR`/`NOT` w `CONTAINS`; brak `IS EMPTY`/funkcji; sprawdzenie na prawdziwej Jirze i Confluence w ws-01), B2-L9 (`internal_error` rozróżnia istniejący zasób bez klasyfikacji od nieistniejącego przy resolverze na koncie serwisowym: zalecenie `tags: []` w README; propozycja CC poniżej).
+- Dodatkowo: paczka generowana dla `mcp-example` ma reguły zasobów z przykładów kontraktów (`ExampleServerResourcesTest`).
+
 3.0.0-beta-2: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-2`, tag `v3.0.0-beta-2` (praca na `3.0.0-beta-2-SNAPSHOT`, po wydaniu `3.0.0-beta-3-SNAPSHOT`). Poprawki recenzji Opus i smoke Haiku beta-1 (0 CRITICAL, 2 HIGH, 3 MEDIUM, 7 LOW) oraz dopiski ws-03. Instrukcja: `MIGRATION-3.0.md`, sekcja "Z beta-1 na beta-2".
 - H1: usunięte `QueryScope.restrictJql` (surowy JQL od modelu; obejście `\"` poza cudzysłowem). Zastąpione `StructuredQuery` (`scope.jql(pola)`, `scope.cql(pola)`): pola z białej listy, zamknięty zbiór operatorów, tylko `AND`, wartości zawsze cytowane i escapowane wg JQL/CQL, tekst Lucene escapowany; testy z lekserem czytającym ucieczki jak Jira na 60 wrogich wartościach x 10 operatorów (backslash, cudzysłowy, nawiasy, ORDER BY, funkcje, komentarze, Unicode).
 - H2: wynik śledzony przez `ResolvableType` (rekordy generyczne, `Optional`, zbiory, tablice); nieśledzony kształt (`Map`, nie-rekord, `Object`, `JsonNode`) albo adnotacja Jacksona na rekordzie z zasobami zatrzymuje start, chyba że `@ResultWithoutResources`; pole poza komponentami rekordu w JSON i nie-lista w miejscu listy kończą wywołanie `internal_error`.
@@ -437,6 +442,8 @@ Nowe w beta-1 (numeracja robocza):
   nierozwiązanego): kontrakt wymienia wartości, ale nie rozróżnia przypadków serwera.
 - **Beta-E: `BundleFetcher` w `mcp-policy-bundle`** (CC-132 odłożone): `PolicyBundleClient` startera i klient gateway'a to dwie
   implementacje tego samego protokołu bez wspólnych wektorów.
+- **Beta-H (B2-L9): kolejność oceny.** Przy braku grantu na typ builder powinien zwrócić `not_found_or_denied` przed budową encji i klasyfikacją; dziś zasób bez wymaganego
+  atrybutu daje `internal_error`, co przy resolverze z kontem serwisowym zdradza istnienie indeksu.
 - **Beta-F: `SystemId` i `ServerId` w kontrakcie to enum pięciu systemów**, więc serwer przykładowy (`mcp-example` w template) nie może mieć ważnego
   manifestu ani paczki polityk nie jest dla niego zdefiniowana; template i testy udają `mcp-jira` albo działają w `dev` z ostrzeżeniem. Propozycja:
   `ServerId` dopuszcza wzorzec `^mcp-[a-z0-9]+$` poza listą systemów (z wyjątkiem rejestru produkcyjnego), albo kontrakt mówi wprost, że przykład

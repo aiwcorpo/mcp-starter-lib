@@ -206,6 +206,9 @@ public class JiraServer {
                               @Nullable @ArgumentLimits(maxLength = 200) String text) {
     }
 
+    public record TwoLists(List<IssueView> first, List<IssueView> second) {
+    }
+
     public record Moved(String key, String to) {
     }
 
@@ -254,6 +257,15 @@ public class JiraServer {
             List<IssueView> hits = List.of(new IssueView("ABC-1", "ABC"), new IssueView("DEF-7", "DEF"),
                     new IssueView("HR-5", "HR"), new IssueView("ABC-2", "ABC"));
             return new SearchResult(hits, hits.size());
+        }
+
+        @Tool(name = "search_two_lists", description = "Returns two long lists in one result.")
+        @ToolRisk(RiskLevel.READ_ONLY)
+        @ToolTitle("Search two lists")
+        public TwoLists searchTwoLists(@ArgumentLimits(maxItems = 5, maxLength = 10, contractPattern = "JiraProjectKey")
+                                       @ResourceRef(type = "Jira::Project") List<String> projectKeys) {
+            List<IssueView> many = java.util.Collections.nCopies(120, new IssueView("ABC-1", "ABC"));
+            return new TwoLists(many, many);
         }
 
         @Tool(name = "search_page", description = "Searches the given projects and returns a generic page.")

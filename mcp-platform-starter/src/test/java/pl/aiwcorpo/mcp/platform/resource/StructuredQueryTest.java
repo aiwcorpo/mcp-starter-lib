@@ -147,6 +147,24 @@ class StructuredQueryTest {
         }
     }
 
+    /** The same attacks as values of a CQL query: one string literal, the space clause and the field in front of it. */
+    @ParameterizedTest
+    @ValueSource(strings = {"x\\\" ) OR space = SECRET OR ( title ~ \"y", "\\", "\"", "\" OR space = SECRET OR \"", ") OR (", "\n",
+            "order by title", "currentUser()", "-- c", "/* c */", "\u00e9\u0301", "*", "a\tb"})
+    void aCqlValueIsAlwaysOneStringLiteralToo(String hostile) {
+        QueryScope spaces = QueryScope.of(new QueryConstraint("Confluence::Space", Optional.of(new TreeSet<>(Set.of("ENG"))),
+                "Confluence::Space", new TreeSet<>(Set.of("ENG"))));
+        for (Operator operator : Operator.values()) {
+            String query = spaces.cql(Set.of("title")).where("title", operator, hostile).build();
+            List<String> tokens = lex(query);
+
+            assertThat(tokens.subList(0, 6)).as(query).containsExactly("space", "in", "(", "\"ENG\"", ")", "AND");
+            assertThat(tokens.get(6)).as(query).isEqualTo("title");
+            assertThat(tokens.stream().filter(t -> t.startsWith("\"")).count()).as(query).isEqualTo(2);
+            assertThat(query).doesNotContain("\n").doesNotContain("\r").doesNotContain("\t");
+        }
+    }
+
     private static String[] operatorTokens(Operator operator, boolean list) {
         String text = switch (operator) {
             case EQUALS -> "=";

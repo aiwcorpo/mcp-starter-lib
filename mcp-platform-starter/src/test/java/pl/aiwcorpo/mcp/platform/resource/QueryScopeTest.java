@@ -75,4 +75,33 @@ class QueryScopeTest {
         assertThatThrownBy(() -> scope("Confluence::Space", "Confluence::Space", null, Set.of()).jqlProjectClause())
                 .isInstanceOf(IllegalStateException.class);
     }
+
+    @Test
+    void confluenceGrantsBecomeACqlClauseOnlyForSpacesAndNeverEmpty() {
+        QueryScope spaces = scope("Confluence::Space", "Confluence::Space", Set.of("ENG"), Set.of("ENG", "OPS"));
+        QueryScope open = scope("Confluence::Space", "Confluence::Space", null, Set.of("OPS"));
+        QueryScope none = scope("Confluence::Space", "Confluence::Space", null, Set.of());
+        QueryScope pages = scope("Confluence::Page", "Confluence::Space", null, Set.of("1000"));
+
+        assertThat(spaces.cqlSpaceClause(true)).contains("space in (\"ENG\") AND space in (\"ENG\", \"OPS\")");
+        assertThat(open.cqlSpaceClause(true)).contains("space in (\"OPS\")");
+        assertThat(open.cqlSpaceClause(false)).isEmpty();
+        assertThatThrownBy(() -> none.cqlSpaceClause(true)).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> pages.cqlSpaceClause(true)).isInstanceOf(IllegalStateException.class).hasMessageContaining("subtrees");
+        assertThat(open.cql(Set.of("title"), true).build()).isEqualTo("space in (\"OPS\")");
+    }
+
+    @Test
+    void anAggregateOverAnAliasOrADataStreamIsRefused() {
+        QueryScope.requireNoAliases("{\"indices\":[{\"name\":\"logs-team-a-1\"}],\"aliases\":[],\"data_streams\":[]}");
+        for (String answer : new String[] {
+                "{\"indices\":[],\"aliases\":[{\"name\":\"logs-team-a-all\",\"indices\":[\"hr-1\"]}],\"data_streams\":[]}",
+                "{\"indices\":[],\"aliases\":[],\"data_streams\":[{\"name\":\"logs-team-a-ds\"}]}"}) {
+            assertThatThrownBy(() -> QueryScope.requireNoAliases(answer))
+                    .isInstanceOf(pl.aiwcorpo.mcp.platform.error.SanitizedToolException.class)
+                    .satisfies(ex -> assertThat(((pl.aiwcorpo.mcp.platform.error.SanitizedToolException) ex).getCode()).isEqualTo("access_denied"));
+        }
+        assertThatThrownBy(() -> QueryScope.requireNoAliases("not json")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> QueryScope.requireNoAliases("{\"hits\":1}")).isInstanceOf(IllegalArgumentException.class);
+    }
 }

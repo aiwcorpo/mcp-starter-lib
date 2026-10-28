@@ -6,7 +6,7 @@ robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadc
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
 Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 3.1.0.
-Wersja: **3.0.0-beta-2** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+Wersja: **3.0.0-beta-3** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
 
@@ -270,7 +270,7 @@ poniżej `$JAVA_HOME/bin/java` (`JAVA_HOME` wskazuje JDK 25).
             <dependency>
                 <groupId>pl.aiwcorpo.mcp</groupId>
                 <artifactId>mcp-platform-bom</artifactId>
-                <version>3.0.0-beta-2</version>
+                <version>3.0.0-beta-3</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -317,6 +317,7 @@ import pl.aiwcorpo.mcp.platform.guard.ToolRisk;
 import pl.aiwcorpo.mcp.platform.guard.ToolTitle;
 import pl.aiwcorpo.mcp.platform.input.ArgumentLimits;
 import pl.aiwcorpo.mcp.platform.input.SchemaLimitedToolCallbacks;
+import pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources;
 import pl.aiwcorpo.mcp.platform.security.CredentialContext;
 
 @SpringBootApplication
@@ -336,6 +337,7 @@ public class JiraServer {
         @Tool(name = "get_issue", description = "Returns an issue by key.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Get issue")
+        @ResultWithoutResources     // wynik to zwykły tekst; zob. "Wyniki: ResultFilter"
         public String getIssue(@ArgumentLimits(maxLength = 16, contractPattern = "JiraIssueKey") String issueKey) {
             // A real adapter calls Jira with: .headers(CredentialContext.require("jira")::applyTo)
             return issueKey + " read with a " + CredentialContext.require("jira").scheme().wireName() + " credential";
@@ -568,7 +570,8 @@ projekt `HR`, a jego klasyfikacja `restricted` zamyka dostęp mimo argumentu, kt
 (`""` gdy brak), `Confluence::Space.labels` i `OpenSearch::Index.tags` są obowiązkowe, a zasób bez nich nie jest budowany: wywołanie
 kończy się `internal_error` (kontrakt, entity-builder.md sekcja 6; w logu `event=resource_refused reason=evaluation_error type=...`), a
 element wyniku jest usuwany. To samo dla id niezgodnego ze wzorcem typu i dla zasobu innego typu niż w `@ResourceRef`.
-`ResolvedResource.of` pomija atrybuty o wartości `null` (brak atrybutu), a `Map.of(..., null)` rzuca NPE: użyj `HashMap` albo
+Resolver działający kontem serwisowym (OpenSearch) zwraca domyślnie `tags: []`, nie brak atrybutu: brak daje `internal_error`, czyli odpowiedź
+różną od `not_found_or_denied` dla indeksu, którego nie ma, i zdradza istnienie indeksu. `ResolvedResource.of` pomija atrybuty o wartości `null` (brak atrybutu), a `Map.of(..., null)` rzuca NPE: użyj `HashMap` albo
 `""` dla kategorii projektu. `fetch` zwraca pusty `Optional` dla "nie ma" i "nie wolno użytkownikowi"
 (404 i 403), a **rzuca** dla awarii systemu: to `upstream_unavailable` (albo `credential_required`), nie odmowa. Wynik
 `fetch` i `describe` jest w pamięci podręcznej na czas wywołania; narzędzie czyta go z
@@ -607,8 +610,14 @@ w dowolnym zagnieżdżeniu. **Czego nie:** `Map`, klas, które nie są rekordami
 Jacksona (`@JsonProperty`, `@JsonUnwrapped`, `@JsonIgnore`, ...: zmieniają nazwy pól, pod którymi filtr szuka danych). Wynik z taką częścią
 zatrzymuje start (komunikat podaje metodę i część), chyba że metoda ma `@ResultWithoutResources`: wynik nie zawiera zasobów albo
 narzędzie filtruje je samo przed zwróceniem. JSON z polem, którego nie ma wśród komponentów rekordu (globalna strategia nazw w
-Jacksonie), kończy wywołanie `internal_error` zamiast przepuścić nieprzefiltrowane dane. Wynik typu `String` jest przekazywany
-bez zmian: narzędzie, które zwraca zasoby, zwraca typowane rekordy, nie gotowy JSON.
+Jacksonie), kończy wywołanie `internal_error` zamiast przepuścić nieprzefiltrowane dane. **Wynik, który sam jest tekstem
+(`String`, `CharSequence`, `byte[]`, także w `Optional` albo liście), też wymaga `@ResultWithoutResources`**: mógłby być gotowym JSON-em
+(odpowiedź wyszukiwania przekazana dalej), w którym platforma nie widzi zasobów. Narzędzie zwraca typowane rekordy; tekst zwykły
+(komunikat, numer) dostaje adnotację. Klucz `Map` niebędący skalarem liczy się jak część nieśledzona. Ręcznie napisany
+`ToolCallback` (nie metoda `@Tool`) deklaruje to samo przez `RiskClassifiedTool#resultWithoutResources()` albo nie wystartuje.
+Pozostałe znane granice: słowa `AND`, `OR`, `NOT` w wartości `CONTAINS` działają jako operatory wyszukiwania tekstowego Jiry/Confluence
+(w obrębie tego jednego pola, nie poszerzają zakresu); `IS EMPTY`, `membersOf(...)` i funkcje dat nie da się wyrazić w
+`StructuredQuery` (dodaj stały, nazwany filtr w narzędziu, nie przez wartość).
 
 Dla wyniku budowanego inaczej wstrzyknij `ResourcePolicy` (implementuje `ResultFilter`): `retainAllowed(items, item -> resolvedResource)` albo
 `retainAllowedById("Jira::Issue", items, Item::key)`; `allows(resource)` i `require(resource)` dla zasobu, który narzędzie znajduje samo
@@ -636,14 +645,15 @@ String jql = scope.jql(Set.of("status", "assignee", "labels", "text", "created")
   (`EQUALS`, `NOT_EQUALS`, `IN`, `NOT_IN`, `CONTAINS`, `NOT_CONTAINS`, `GREATER(_OR_EQUAL)`, `LESS(_OR_EQUAL)`), tylko koniunkcja (`AND`);
 - wartość: 1 do 1000 znaków, bez znaków zakazanych przez higienę tekstu (CC-121; nowy wiersz i tab są escapowane), do 50 wartości w `IN`, do 30 filtrów;
   naruszenie to `IllegalArgumentException` (platforma zgłasza `invalid_argument`);
-- `scope.cql(Set.of("title", "label", ...))` dla Confluence (zawężenie do przestrzeni linku); `scope.jql(fields, true)` dodaje zakresy
-  z grup (konto serwisowe);
+- `scope.cql(Set.of("title", "label", ...))` dla Confluence (zawężenie do przestrzeni linku); `scope.jql(fields, true)` i
+  `scope.cql(fields, true)` (typ `Confluence::Space`) dodają zakresy z grup (konto serwisowe; rzucają, gdy grup brak);
 - `jqlProjectClause()`, `cqlSpaceClause()` zostają jako gotowe fragmenty (identyfikatory cytowane przez `QueryScope.quote`);
 - **OpenSearch:** `scope.opensearchIndexExpression()` (pary `p` i `p-*`, nigdy `p*`; dla linku i grup część wspólna) **rzuca wyjątek,
   gdy nie ma czego pytać**, bo puste wyrażenie przeszukałoby wszystkie indeksy; sprawdź `scope.nothingToQuery()` i zwróć pusty wynik. Do
   każdego żądania dodaj `QueryScope.OPENSEARCH_SEARCH_PARAMETERS` (`expand_wildcards=open`, `ignore_unavailable=true`,
   `allow_no_indices=true`). Wzorzec `p-*` obejmuje też **aliasy** o takiej nazwie, a filtr wyniku nie poprawia agregatów, `hits.total` ani
-  `_count`: narzędzie agregujące odmawia, gdy `GET _resolve/index/<wyrażenie>` zwraca alias. DSL zapytania OpenSearch buduj tak samo
+  `_count`: narzędzie agregujące woła `GET _resolve/index/<wyrażenie>` i przekazuje odpowiedź do `QueryScope.requireNoAliases(json)`, które odmawia
+  (`access_denied`), gdy lista zawiera alias albo data stream. DSL zapytania OpenSearch buduj tak samo
   po stronie serwera, nie przyjmuj go od modelu;
 - gdzie system sam stosuje prawa użytkownika (Jira, Confluence, GitLab z jego tokenem), wystarczy zawężenie linku; gdzie nie
   (OpenSearch, konto serwisowe) zapytanie ogranicza się do `grantedIds()`, a puste `grantsNothing()` znaczy: nie wykonuj zapytania.
@@ -861,7 +871,7 @@ Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera t
 ```xml
 <dependency>
   <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-  <version>3.0.0-beta-2</version><type>pom</type><scope>import</scope>
+  <version>3.0.0-beta-3</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
 

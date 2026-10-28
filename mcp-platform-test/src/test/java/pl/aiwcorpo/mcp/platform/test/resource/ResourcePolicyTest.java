@@ -225,6 +225,16 @@ class ResourcePolicyTest {
     }
 
     @Test
+    void theLimitOnCheckedElementsCountsTheWholeResultNotEachList() {
+        try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
+            McpSchema.CallToolResult result = call(client, "search_two_lists", Map.of("projectKeys", List.of("ABC")));
+
+            assertThat(result.isError()).isTrue();
+            assertThat(text(result)).contains("\"error\":\"internal_error\"");
+        }
+    }
+
+    @Test
     void aGenericPageIsFilteredLikeAnyOtherResultShape() {
         try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read"))
                 .virtualServer("abc-only", Map.of("jiraProjects", List.of("ABC"))))) {
