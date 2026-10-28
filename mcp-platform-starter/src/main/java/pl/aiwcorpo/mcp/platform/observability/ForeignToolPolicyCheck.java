@@ -7,6 +7,8 @@ import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.EnvironmentAware;
 import org.springframework.core.env.Environment;
+import pl.aiwcorpo.mcp.platform.auth.InternalJwtFilter;
+import pl.aiwcorpo.mcp.platform.auth.InternalJwtVerifier;
 import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
 import pl.aiwcorpo.mcp.platform.guard.RegisteredToolsCheck;
 import pl.aiwcorpo.mcp.platform.guard.ToolHintsPostProcessor;
@@ -40,8 +42,22 @@ public class ForeignToolPolicyCheck implements BeanFactoryPostProcessor, Environ
         this.environment = environment;
     }
 
+    static final String CONFIGURATION_GUARD_BEAN = "platformConfigurationGuard";
+    static final String JWT_VERIFIER_BEAN = "internalJwtVerifier";
+    static final String JWT_FILTER_BEAN = "internalJwtFilter";
+
     @Override
     public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) throws BeansException {
+        List<String> weakened = new ArrayList<>();
+        collect(beanFactory, PlatformConfigurationGuard.class, CONFIGURATION_GUARD_BEAN, weakened);
+        collect(beanFactory, InternalJwtVerifier.class, JWT_VERIFIER_BEAN, weakened);
+        collect(beanFactory, InternalJwtFilter.class, JWT_FILTER_BEAN, weakened);
+        if (!weakened.isEmpty()) {
+            throw new IllegalStateException("Bean(s) " + weakened + " replace the configuration guard or the internal "
+                    + "JWT check. They are not extension points in any profile: the 'dev' relaxations are tied to the "
+                    + "guard's loopback check and the JWT check is what every request passes. Replace GatewayKeys or "
+                    + "JtiReplayStore instead. See MIGRATION-3.0.md.");
+        }
         if (List.of(environment.getActiveProfiles()).equals(List.of(PlatformConfigurationGuard.DEV_PROFILE))) {
             return;
         }

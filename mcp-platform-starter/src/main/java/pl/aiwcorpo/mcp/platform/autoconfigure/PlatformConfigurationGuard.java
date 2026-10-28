@@ -81,6 +81,19 @@ public class PlatformConfigurationGuard implements InitializingBean {
                     + "mTLS, in-memory jti) must not be reachable from the network");
         }
 
+        if (dev) {
+            DevProfileEnvironment.deploymentSignal(environment)
+                    .ifPresent(signal -> problems.add(DevProfileEnvironment.refusal(signal)));
+            String managementPort = environment.getProperty("management.server.port");
+            if (managementPort != null && !managementPort.equals(environment.getProperty("server.port", "8080"))
+                    && !loopback(environment.getProperty("management.server.address"))) {
+                problems.add("with the 'dev' profile and a separate management.server.port the management server "
+                        + "must listen on a loopback address (management.server.address=127.0.0.1), not '"
+                        + environment.getProperty("management.server.address") + "': it is outside the internal JWT "
+                        + "and mTLS checks and would expose the actuator endpoints to the network");
+            }
+        }
+
         String system = properties.system();
         if (system != null && COMPONENT_ID.matcher(serverId).matches() && !SYSTEM_IDS.contains(system)) {
             String message = "aiwcorpo.mcp.platform.server-id '" + serverId + "': system '" + system + "' is not a "

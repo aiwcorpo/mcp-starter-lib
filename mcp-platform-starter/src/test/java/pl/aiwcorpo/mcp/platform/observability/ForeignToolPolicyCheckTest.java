@@ -13,6 +13,9 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import pl.aiwcorpo.mcp.platform.auth.InternalJwtFilter;
+import pl.aiwcorpo.mcp.platform.auth.InternalJwtVerifier;
+import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
 import pl.aiwcorpo.mcp.platform.error.PlatformErrorAutoConfiguration;
 import pl.aiwcorpo.mcp.platform.guard.RegisteredToolsCheck;
 import pl.aiwcorpo.mcp.platform.guard.RiskClassifiedTool;
@@ -65,6 +68,27 @@ class ForeignToolPolicyCheckTest {
         }
     }
 
+    @Configuration
+    static class OwnGuard {
+        @Bean
+        PlatformConfigurationGuard ownGuard() {
+            return null;
+        }
+    }
+
+    @Configuration
+    static class OwnJwtCheck {
+        @Bean
+        InternalJwtVerifier ownVerifier() {
+            return null;
+        }
+
+        @Bean
+        InternalJwtFilter ownFilter() {
+            return null;
+        }
+    }
+
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withConfiguration(AutoConfigurations.of(PlatformObservabilityAutoConfiguration.class,
                     PlatformErrorAutoConfiguration.class))
@@ -104,6 +128,17 @@ class ForeignToolPolicyCheckTest {
                 .getFailure().hasMessageContaining("ownCheck"));
         runner.withUserConfiguration(OwnHints.class).run(context -> assertThat(context).hasFailed()
                 .getFailure().hasMessageContaining("ownHints"));
+    }
+
+    @Test
+    void theConfigurationGuardAndTheJwtCheckCannotBeReplacedInAnyProfile() {
+        for (String profile : new String[] {"prod", "dev"}) {
+            runner.withUserConfiguration(OwnGuard.class).withPropertyValues("spring.profiles.active=" + profile)
+                    .run(context -> assertThat(context).hasFailed().getFailure().hasMessageContaining("ownGuard"));
+            runner.withUserConfiguration(OwnJwtCheck.class).withPropertyValues("spring.profiles.active=" + profile)
+                    .run(context -> assertThat(context).hasFailed().getFailure()
+                            .hasMessageContaining("ownVerifier").hasMessageContaining("ownFilter"));
+        }
     }
 
     @Test

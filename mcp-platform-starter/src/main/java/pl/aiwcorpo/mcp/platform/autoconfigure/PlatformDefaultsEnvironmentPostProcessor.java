@@ -28,9 +28,10 @@ import org.springframework.core.env.MapPropertySource;
  *       anyway.</li>
  *   <li>{@code spring.data.redis.timeout=2s}: a hung Redis answers 503 quickly instead of holding request
  *       threads for the client's default minute.</li>
- *   <li>With the {@code dev} profile active only: {@code server.address=127.0.0.1}. The dev relaxations (test
- *       keys, no mTLS) must not be reachable from the network; {@code PlatformConfigurationGuard} refuses any
- *       non-loopback address in dev.</li>
+ *   <li>With the {@code dev} profile active only: {@code server.address=127.0.0.1} and
+ *       {@code management.server.address=127.0.0.1} (a separate management server listens on all interfaces
+ *       otherwise). The dev relaxations (test keys, no mTLS) must not be reachable from the network;
+ *       {@code PlatformConfigurationGuard} refuses any non-loopback address in dev.</li>
  * </ul>
  *
  * <p>With {@code dev} as the only active profile the platform also forces, above the server's own
@@ -40,6 +41,9 @@ import org.springframework.core.env.MapPropertySource;
  * CA). So the configuration of a real server starts in {@code dev} as it is, without per-run overrides. This is safe
  * for the same reason the rest of {@code dev} is: the guard refuses a non-loopback {@code server.address} in {@code dev}.
  * {@code allow-test-keys} is not forced; set it where the gateway signs with the published test keys.
+ *
+ * With {@code dev} as the only profile in a deployment (a cloud platform or a systemd service, see
+ * {@link DevProfileEnvironment}) the server does not start at all.
  *
  * Runs after the config data (application*.yml, profiles) is loaded, so the active profiles are known.
  */
@@ -66,17 +70,26 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
                             "spring.data.redis.timeout", "2s"));
             if (Arrays.asList(environment.getActiveProfiles()).contains(PlatformConfigurationGuard.DEV_PROFILE)) {
                 defaults.put("server.address", "127.0.0.1");
+                defaults.put("management.server.address", "127.0.0.1");
             }
             environment.getPropertySources().addLast(new MapPropertySource(SOURCE_NAME, defaults));
         }
         List<String> active = Arrays.asList(environment.getActiveProfiles());
         if (active.equals(List.of(PlatformConfigurationGuard.DEV_PROFILE))
                 && !environment.getPropertySources().contains(DEV_SOURCE_NAME)) {
+            DevProfileEnvironment.deploymentSignal(environment).ifPresent(signal -> {
+                throw new IllegalStateException(DevProfileEnvironment.refusal(signal));
+            });
             Map<String, Object> overrides = Map.of(
                     "server.ssl.enabled", "false",
                     "aiwcorpo.mcp.platform.mtls.required", "false",
                     "aiwcorpo.mcp.platform.internal-jwt.replay-store", "memory",
                     "aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle", "");
+            // A value the server's own configuration sets differently is what a deployment looks like.
+            List<String> changed = overrides.entrySet().stream()
+                    .filter(entry -> environment.getProperty(entry.getKey()) != null
+                            && !entry.getValue().equals(environment.getProperty(entry.getKey())))
+                    .map(Map.Entry::getKey).sorted().toList();
             MapPropertySource source = new MapPropertySource(DEV_SOURCE_NAME, overrides);
             String firstConfigFile = environment.getPropertySources().stream().map(p -> p.getName())
                     .filter(name -> name.startsWith("Config resource") || name.startsWith("applicationConfig"))
@@ -86,8 +99,8 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
             } else {
                 environment.getPropertySources().addBefore(firstConfigFile, source);
             }
-            LOG.info("event=dev_profile_overrides detail=\"server.ssl disabled, mtls.required=false, replay-store=memory, "
-                    + "jwks-ssl-bundle ignored (profile dev, loopback only)\"");
+            LOG.warn("event=dev_profile_overrides overridden={} detail=\"server.ssl disabled, mtls.required=false, "
+                    + "replay-store=memory, jwks-ssl-bundle ignored (profile dev, loopback only)\"", changed);
         }
     }
 }

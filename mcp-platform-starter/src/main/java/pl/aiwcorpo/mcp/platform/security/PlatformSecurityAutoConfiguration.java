@@ -17,8 +17,8 @@ import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
 @EnableConfigurationProperties(McpPlatformProperties.class)
 public class PlatformSecurityAutoConfiguration {
 
+    /** Not {@code @ConditionalOnMissingBean}: the dev relaxations are bound to the loopback check made here. */
     @Bean
-    @ConditionalOnMissingBean
     PlatformConfigurationGuard platformConfigurationGuard(McpPlatformProperties props, Environment environment) {
         return new PlatformConfigurationGuard(props, environment);
     }

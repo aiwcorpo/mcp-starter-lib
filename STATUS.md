@@ -21,6 +21,23 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
 
+3.0.0-alpha-9: w pracy (`3.0.0-alpha-9-SNAPSHOT`, alpha-8 w `~/.m2` nietknięte). Instrukcja dla serwerów: `MIGRATION-3.0.md`,
+sekcja "Zmiany w 3.0.0-alpha-9". Kamienie:
+1. Profil `dev` i guard (A8-L1, A8-L2, A8-L3).
+   L1: w `dev` starter domyślnie ustawia też `management.server.address=127.0.0.1`, a guard przy osobnym
+   `management.server.port` wymaga loopbacku w `management.server.address` (pusty adres = wszystkie interfejsy, więc też
+   odmowa). L2: wybrane odmowa startu, nie zgoda jawna. Zgoda jawna (dodatkowa właściwość) dopisałaby ustawienie, które
+   każdy programista skopiuje razem z `dev` do pliku, a nie odróżnia ona maszyny developera od wdrożenia; sygnał środowiska
+   odróżnia. `dev` jako jedyny profil kończy start (w `PlatformDefaultsEnvironmentPostProcessor`, przed otwarciem gniazda, i
+   w guardzie), gdy Boot wykrywa platformę chmurową (`CloudPlatform.getActive`: Kubernetes, Cloud Foundry itd.) albo ustawione
+   jest `INVOCATION_ID` (jednostka systemd, czyli `install.sh` template'u). Obejścia nie ma; na maszynie dewelopera z
+   terminala `INVOCATION_ID` nie występuje. Obecność `server.ssl.bundle` nie jest sygnałem: README każe go mieć w `dev`.
+   Dodatkowo linia `dev_profile_overrides` jest na WARN i wymienia nadpisane klucze, które konfiguracja serwera ustawiała inaczej.
+   L3: `PlatformConfigurationGuard`, `InternalJwtVerifier` i `InternalJwtFilter` bez `@ConditionalOnMissingBean`;
+   `ForeignToolPolicyCheck` zatrzymuje start z własnym beanem któregoś z nich w każdym profilu (także `dev`). Punkty
+   rozszerzenia (`@ConditionalOnMissingBean`): `GatewayKeys`, `JtiReplayStore`, `AuditLogger`, `ToolRiskRegistry`,
+   `McpErrorMapper`, filtry nagłówków. Testy: `PlatformConfigurationGuardTest` (5 nowych), `ForeignToolPolicyCheckTest` (1).
+
 3.0.0-alpha-8: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-8`, tag
 `v3.0.0-alpha-8` (praca na `3.0.0-alpha-8-SNAPSHOT`, alpha-7 w `~/.m2` nietknięte). Instrukcja dla serwerów:
 `MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-8". Kamienie:

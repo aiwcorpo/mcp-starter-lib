@@ -16,8 +16,10 @@ import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
 
 /**
  * The internal JWT (C2): gateway keys, {@code jti} store, verifier and {@link InternalJwtFilter}. Always on;
- * there is no switch that serves requests without it. Beans are {@code @ConditionalOnMissingBean} so tests
- * and unusual deployments can replace a part (e.g. the key source), not remove the check.
+ * there is no switch that serves requests without it. The key source ({@link GatewayKeys}) and the {@code jti}
+ * store ({@link JtiReplayStore}) are {@code @ConditionalOnMissingBean} extension points; the verifier and the
+ * filter are not, because replacing them replaces the check itself ({@code ForeignToolPolicyCheck} refuses
+ * such a bean).
  */
 @AutoConfiguration
 @EnableConfigurationProperties(McpPlatformProperties.class)
@@ -50,7 +52,6 @@ public class PlatformAuthAutoConfiguration {
     }
 
     @Bean
-    @ConditionalOnMissingBean
     InternalJwtVerifier internalJwtVerifier(McpPlatformProperties props, GatewayKeys keys, JtiReplayStore replayStore) {
         McpPlatformProperties.InternalJwt jwt = props.getInternalJwt();
         return new InternalJwtVerifier(
@@ -60,7 +61,6 @@ public class PlatformAuthAutoConfiguration {
     }
 
     @Bean
-    @ConditionalOnMissingBean
     InternalJwtFilter internalJwtFilter(McpPlatformProperties props, InternalJwtVerifier verifier, AuditLogger audit) {
         return new InternalJwtFilter(verifier, props.getInternalJwt().getUnauthenticatedPaths(),
                 props.getInternalJwt().getMaxRequestBody().toBytes(), props.getMtls().isRequired(),

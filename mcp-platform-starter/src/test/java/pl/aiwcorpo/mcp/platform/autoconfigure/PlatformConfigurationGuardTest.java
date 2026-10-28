@@ -206,4 +206,79 @@ class PlatformConfigurationGuardTest {
             assertThat(env.getProperty("aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle")).isEqualTo("mcp-internal-ca");
         }
     }
+
+    @Test
+    void aSeparateManagementServerInDevMustListenOnLoopbackToo() {
+        MockEnvironment lan = profiles("dev").withProperty("server.port", "18600")
+                .withProperty("management.server.port", "18601");
+        assertThatThrownBy(() -> check(valid(), lan)).hasMessageContaining("management.server.address");
+
+        MockEnvironment elsewhere = profiles("dev").withProperty("server.port", "18600")
+                .withProperty("management.server.port", "18601").withProperty("management.server.address", "0.0.0.0");
+        assertThatThrownBy(() -> check(valid(), elsewhere)).hasMessageContaining("'0.0.0.0'");
+
+        MockEnvironment loopback = profiles("dev").withProperty("server.port", "18600")
+                .withProperty("management.server.port", "18601").withProperty("management.server.address", "127.0.0.1");
+        assertThatCode(() -> check(valid(), loopback)).doesNotThrowAnyException();
+
+        MockEnvironment sharedPort = profiles("dev").withProperty("server.port", "18600")
+                .withProperty("management.server.port", "18600");
+        assertThatCode(() -> check(valid(), sharedPort)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void theStarterDefaultsTheManagementAddressInDevOnly() {
+        MockEnvironment dev = new MockEnvironment();
+        dev.setActiveProfiles("dev");
+        new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(dev, null);
+        assertThat(dev.getProperty("management.server.address")).isEqualTo("127.0.0.1");
+
+        MockEnvironment prod = new MockEnvironment();
+        prod.setActiveProfiles("prod");
+        new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(prod, null);
+        assertThat(prod.getProperty("management.server.address")).isNull();
+    }
+
+    @Test
+    void devInADeploymentIsRefusedBeforeAnySocketIsOpened() {
+        MockEnvironment kubernetes = serverConfigAsInTheReadme("dev").withProperty("spring.main.cloud-platform", "kubernetes");
+        assertThatThrownBy(() -> new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(kubernetes, null))
+                .hasMessageContaining("cloud platform").hasMessageContaining("remove SPRING_PROFILES_ACTIVE=dev");
+        assertThat(kubernetes.getProperty("server.ssl.enabled")).isNull();
+
+        MockEnvironment systemd = serverConfigAsInTheReadme("dev").withProperty("INVOCATION_ID", "7f3a9c1e5b2d4e8f");
+        assertThatThrownBy(() -> new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(systemd, null))
+                .hasMessageContaining("systemd");
+        assertThatThrownBy(() -> check(valid(), profiles("dev").withProperty("INVOCATION_ID", "7f3a9c1e5b2d4e8f")))
+                .hasMessageContaining("systemd");
+    }
+
+    @Test
+    void theDeploymentCheckDoesNotTouchProductionProfilesOrADevelopersMachine() {
+        MockEnvironment prodInKubernetes = serverConfigAsInTheReadme("prod").withProperty("spring.main.cloud-platform", "kubernetes");
+        assertThatCode(() -> new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(prodInKubernetes, null))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> new PlatformDefaultsEnvironmentPostProcessor()
+                .postProcessEnvironment(serverConfigAsInTheReadme("dev"), null)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void theOverridesThatChangedTheServersConfigurationAreNamedInTheLog() {
+        ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory
+                .getLogger(PlatformDefaultsEnvironmentPostProcessor.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
+                new ch.qos.logback.core.read.ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(serverConfigAsInTheReadme("dev"), null);
+            String line = pl.aiwcorpo.mcp.platform.CapturedLogs.snapshot(appender).stream()
+                    .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                    .filter(m -> m.contains("dev_profile_overrides")).findFirst().orElseThrow();
+            assertThat(line).contains("aiwcorpo.mcp.platform.mtls.required").contains("replay-store")
+                    .contains("jwks-ssl-bundle");
+        } finally {
+            logger.detachAppender(appender);
+        }
+    }
 }
