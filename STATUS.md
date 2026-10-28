@@ -21,7 +21,7 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
 
-3.0.0-alpha-12: gotowe do wydania - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-12`, tag `v3.0.0-alpha-12` (praca na `3.0.0-alpha-12-SNAPSHOT`, wersji alpha-11 i wcześniejszych nie instalowano). Razem 431 testów (starter 353, mcp-platform-test 78). Kontrakty 2.2.5 (BOM i oba moduły). Instrukcja dla serwerów: `MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-12". Kamienie:
+3.0.0-alpha-12: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-12`, tag `v3.0.0-alpha-12` (praca na `3.0.0-alpha-12-SNAPSHOT`, wersji alpha-11 i wcześniejszych nie instalowano). Razem 431 testów (starter 353, mcp-platform-test 78). Kontrakty 2.2.5 (BOM i oba moduły). Instrukcja dla serwerów: `MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-12". Kamienie:
 1. Kontrakty 2.2.5, wersja `3.0.0-alpha-12-SNAPSHOT`. Bez zmian w kodzie; 352 testy zielone na 2.2.5 (schematy i wektory JWT bez zmian oczekiwań).
 2. A11-M1 (MEDIUM). Test serwera nie sprawdzał niczego w serwerze, a serwer z wykluczonym guardem przechodził testy w `dev` na `0.0.0.0`.
    Dwie warstwy: (a) `DevProfileGuardAssertions.assertServerIsGuarded(ApplicationContext)` w `mcp-platform-test`: w kontekście `@SpringBootTest`
