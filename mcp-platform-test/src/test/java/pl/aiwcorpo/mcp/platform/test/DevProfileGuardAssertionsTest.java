@@ -18,4 +18,17 @@ class DevProfileGuardAssertionsTest {
         assertThatThrownBy(() -> DevProfileGuardAssertions.assertDevProfileRefusesAddress("127.0.0.1"))
                 .isInstanceOf(AssertionError.class).hasMessageContaining("without naming the address");
     }
+
+    @Test
+    void aGuardThatRefusesLoopbackWithTheAddressMessageFailsTheAssertion() {
+        assertThatThrownBy(() -> DevProfileGuardAssertions.assertLoopbackRule(
+                address -> "server.address must be a loopback address, not '" + address + "'"))
+                .isInstanceOf(AssertionError.class).hasMessageContaining("refuses the loopback address");
+    }
+
+    @Test
+    void aGuardThatAcceptsANetworkAddressFailsTheAssertion() {
+        assertThatThrownBy(() -> DevProfileGuardAssertions.assertLoopbackRule(address -> null))
+                .isInstanceOf(AssertionError.class).hasMessageContaining("accepts server.address");
+    }
 }

@@ -11,7 +11,7 @@ import pl.aiwcorpo.mcp.platform.observability.ForeignToolPolicyCheck;
 import pl.aiwcorpo.mcp.platform.server.ForeignPrimaryCustomizerCheck;
 
 /**
- * Outside the {@code dev} profile, refuses to start when the beans that guard the server are not defined at all:
+ * Refuses to start when the beans that guard the server are not defined at all:
  * the configuration guard, the internal JWT verifier and filter, the audit post-processor and the MCP server
  * customizer (without it the SDK validates the input itself, before the audit wrapper, and the audit and error
  * contracts do not hold). They are missing when
@@ -19,12 +19,15 @@ import pl.aiwcorpo.mcp.platform.server.ForeignPrimaryCustomizerCheck;
  * that {@code PlatformDefaultsEnvironmentPostProcessor} could see. Registered through {@code spring.factories}
  * (an auto-configuration cannot check its own absence), so it works whatever the application excludes.
  *
- * <p>Not applied in a Spring test context: a slice test (for example a web layer test of one controller) leaves
- * the platform out on purpose.
+ * <p>Applied in the {@code dev} profile too: there the guard is what keeps the relaxations on a loopback address,
+ * so a server that excludes it would listen wherever {@code server.address} says. Not applied in a Spring test
+ * context: a slice test (for example a web layer test of one controller) leaves the platform out on purpose, and
+ * {@code DevProfileGuardAssertions#assertServerIsGuarded} checks the full application context of the server instead.
  */
 public class PlatformPresenceCheck implements ApplicationContextInitializer<ConfigurableApplicationContext> {
 
-    private static final List<String> REQUIRED_BEANS = List.of(ForeignToolPolicyCheck.CONFIGURATION_GUARD_BEAN,
+    /** Public for {@code DevProfileGuardAssertions}, which checks the same list in the server's own test context. */
+    public static final List<String> REQUIRED_BEANS = List.of(ForeignToolPolicyCheck.CONFIGURATION_GUARD_BEAN,
             ForeignToolPolicyCheck.JWT_VERIFIER_BEAN, ForeignToolPolicyCheck.JWT_FILTER_BEAN,
             ForeignToolPolicyCheck.AUDIT_POST_PROCESSOR_BEAN, ForeignPrimaryCustomizerCheck.STARTER_BEAN);
 
@@ -37,7 +40,7 @@ public class PlatformPresenceCheck implements ApplicationContextInitializer<Conf
 
         @Override
         public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) throws BeansException {
-            if (List.of(environment.getActiveProfiles()).equals(List.of(PlatformConfigurationGuard.DEV_PROFILE)) || DevProfileEnvironment.inSpringTestContext()) {
+            if (DevProfileEnvironment.inSpringTestContext()) {
                 return;
             }
             List<String> missing = REQUIRED_BEANS.stream().filter(name -> !beanFactory.containsBeanDefinition(name)).toList();
@@ -45,7 +48,8 @@ public class PlatformPresenceCheck implements ApplicationContextInitializer<Conf
                 throw new IllegalStateException("The platform's beans " + missing + " are not defined: its "
                         + "auto-configurations are excluded (spring.autoconfigure.exclude or exclude on "
                         + "@SpringBootApplication). Without them the server runs without the configuration guard or "
-                        + "the internal JWT check; remove the exclusion.");
+                        + "the internal JWT check, and in the 'dev' profile that is a server on a developer machine that "
+                        + "accepts anyone; remove the exclusion.");
             }
         }
     }

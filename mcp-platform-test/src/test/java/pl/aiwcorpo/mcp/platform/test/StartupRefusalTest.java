@@ -126,4 +126,23 @@ class StartupRefusalTest {
                 .properties(properties).properties("server.port=0").profiles("prod").run().close())
                 .hasMessageContaining("are not defined").hasMessageContaining("platformMcpServerCustomizer");
     }
+
+    /**
+     * In {@code dev} too: the guard is what ties the relaxations to a loopback address. On a host taken for a
+     * deployment the start is refused for that reason first, which is also a refusal.
+     */
+    @Test
+    void excludingThePlatformInDevIsRefused() {
+        assertThatThrownBy(() -> start(Map.of("spring.autoconfigure.exclude",
+                "pl.aiwcorpo.mcp.platform.security.PlatformSecurityAutoConfiguration"), "dev"))
+                .hasMessageContaining("spring.autoconfigure.exclude lists").hasMessageContaining("'dev' profile either");
+
+        Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
+        properties.put("spring.ai.mcp.server.name", "startup-refusal-test");
+        assertThatThrownBy(() -> new SpringApplicationBuilder(ExcludingServer.class).web(WebApplicationType.SERVLET)
+                .properties(properties).properties("server.port=0").profiles("dev").run("--server.address=0.0.0.0").close())
+                .satisfiesAnyOf(
+                        cause -> assertThat(cause).hasMessageContaining("platformConfigurationGuard"),
+                        cause -> assertThat(cause).hasMessageContaining("the 'dev' profile is active in"));
+    }
 }

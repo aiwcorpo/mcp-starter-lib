@@ -96,6 +96,24 @@ class TextHygieneTest {
     }
 
     @Test
+    void aMarkAfterALetterOfAMentionIsPartOfTheName() {
+        assertThat(UntrustedText.plain("x".repeat(60) + "/@all\u0301ison", 66).text()).isEqualTo("x".repeat(60) + "/@");
+    }
+
+    @Test
+    void aLongRunOfPunctuationAfterANameDoesNotLeaveTheShortName() {
+        String prefix = "x(@all";
+        for (String run : new String[] {".", "-", "_", "\u0301"}) {
+            String text = prefix + run.repeat(70) + "x";
+            assertThat(UntrustedText.plain(text, 75).text()).as("run of '%s'", run).isEqualTo("x(@");
+        }
+        assertThat(UntrustedText.plain("@all" + ".".repeat(70) + "x", 74).text()).isEqualTo("@");
+        assertThat(UntrustedText.plain("hi @all" + ".".repeat(70) + "x", 75).text()).isEqualTo("hi @");
+        assertThat(UntrustedText.plain("a".repeat(30) + ".".repeat(70) + "x", 75).text()).isEqualTo("a".repeat(30));
+        assertThat(UntrustedText.plain("." .repeat(100), 75).text()).hasSize(75);
+    }
+
+    @Test
     void oneDelimiterBeforeALongRunDoesNotRemoveTheRun() {
         UntrustedText cjk = UntrustedText.plain("\u300c" + "\u4e2d".repeat(300), 200);
         assertThat(cjk.text()).hasSize(200).startsWith("\u300c\u4e2d");

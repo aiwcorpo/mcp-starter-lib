@@ -75,6 +75,21 @@ class ToolInputValidatorTest {
     }
 
     @Test
+    void aKeyOfAMapFromTheInputIsNotInTheMessage() {
+        String schema = """
+                {"type":"object","additionalProperties":false,"required":["issueKey"],"properties":{
+                  "issueKey":{"type":"string","maxLength":20},
+                  "labels":{"type":"object","maxProperties":3,"propertyNames":{"maxLength":20},"additionalProperties":{"type":"string","maxLength":5}}}}
+                """;
+        ToolInputValidator validator = ToolInputValidator.compile(tool(schema), ToolInputPolicy.STRICT);
+
+        String message = assertThatThrownBy(() -> validator.validate("{\"issueKey\":\"A-1\",\"labels\":{\"SECRETKEY77\":\"too long value\"}}"))
+                .actual().getMessage();
+
+        assertThat(message).contains("labels.* is longer than 5 characters").doesNotContain("SECRETKEY77");
+    }
+
+    @Test
     void anUndeclaredArgumentIsRefusedAndItsNameIsNotEchoed() {
         String message = messageOf("{\"issueKey\":\"A-1\",\"leak_name_77\":\"x\"}");
 

@@ -211,7 +211,11 @@ public class PlatformConfigurationGuard implements InitializingBean {
         }
     }
 
-    private static boolean loopback(String address) {
+    /**
+     * True for a literal loopback address or {@code localhost}; a name is never resolved (DNS must not decide what
+     * "local" means), and a blank value is not loopback because it means the wildcard.
+     */
+    public static boolean loopback(String address) {
         if (address == null || address.isBlank()) {
             return false;
         }

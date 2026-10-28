@@ -362,7 +362,7 @@ class PlatformConfigurationGuardTest {
     }
 
     @Test
-    void excludingThePlatformsAutoConfigurationsStopsTheServerOutsideDev() {
+    void excludingThePlatformsAutoConfigurationsStopsTheServerInEveryProfile() {
         String guard = "pl.aiwcorpo.mcp.platform.security.PlatformSecurityAutoConfiguration";
         MockEnvironment prod = serverConfigAsInTheReadme("prod").withProperty("spring.autoconfigure.exclude",
                 "org.springframework.boot.data.redis.autoconfigure.DataRedisAutoConfiguration, " + guard);
@@ -382,7 +382,7 @@ class PlatformConfigurationGuardTest {
         assertThatCode(() -> new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(unrelated, null))
                 .doesNotThrowAnyException();
         MockEnvironment dev = serverConfigAsInTheReadme("dev").withProperty("spring.autoconfigure.exclude", guard);
-        assertThatCode(() -> new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(dev, null))
-                .doesNotThrowAnyException();
+        assertThatThrownBy(() -> new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(dev, null))
+                .hasMessageContaining(guard).hasMessageContaining("'dev' profile either");
     }
 }

@@ -32,7 +32,7 @@ final class DevProfileEnvironment {
 
     private static final Pattern CONTAINER_CGROUP = Pattern.compile("/(docker|kubepods|libpod|crio|containerd)[-/.]");
 
-    private static final Pattern TEST_FRAMEWORK_JAR = Pattern.compile("/spring-(boot-)?test-[0-9][^/]*\\.jar");
+    private static final Pattern TEST_FRAMEWORK_JAR = Pattern.compile("/spring-(boot-)?test-[0-9][^/]*\\.jar(!/)?$");
 
     private DevProfileEnvironment() {
     }
@@ -121,7 +121,16 @@ final class DevProfileEnvironment {
         }
         CodeSource source = type.getProtectionDomain().getCodeSource();
         return source != null && source.getLocation() != null
-                && TEST_FRAMEWORK_JAR.matcher(source.getLocation().toString()).find();
+                && testFrameworkLocation(source.getLocation().toString());
+    }
+
+    /**
+     * A jar file named like the framework's, as the end of the location: a directory that is called
+     * {@code spring-test-1.jar} (location ends in a slash) is not one, nor is a jar that only has such a path
+     * further up. Spring Boot's nested jars end in {@code !/}.
+     */
+    static boolean testFrameworkLocation(String location) {
+        return TEST_FRAMEWORK_JAR.matcher(location).find();
     }
 
     private static boolean set(String value) {

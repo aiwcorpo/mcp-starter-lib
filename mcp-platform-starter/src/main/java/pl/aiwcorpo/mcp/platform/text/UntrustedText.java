@@ -113,16 +113,39 @@ public record UntrustedText(String kind, String format, String text, boolean tru
             if (start > 0 && end - start <= WORD_LIMIT) {
                 end = start;
             } else {
-                int word = end;
-                while (word > start && isWordCharacter(Character.codePointBefore(text, word))) {
-                    word -= Character.charCount(Character.codePointBefore(text, word));
-                }
-                if (word > start && end - word <= WORD_LIMIT) {
+                int word = withoutWordTail(text, start, end);
+                if (word != end) {
                     end = word;
+                } else {
+                    // Staying at the limit must not leave a short name followed by a run of punctuation ("@all"
+                    // plus seventy dots): in the original that name ends with a letter, here a renderer that
+                    // trims trailing punctuation from a mention would see "@all". Drop the run, then judge the
+                    // name that is left like any other tail.
+                    int trimmed = end;
+                    while (trimmed > start && isNamePunctuation(Character.codePointBefore(text, trimmed))) {
+                        trimmed -= Character.charCount(Character.codePointBefore(text, trimmed));
+                    }
+                    if (trimmed > start && trimmed < end) {
+                        end = withoutWordTail(text, start, trimmed);
+                    }
                 }
             }
         }
         return text.substring(0, end).stripTrailing();
+    }
+
+    /** {@code end} moved back over the word characters at the end of {@code text[start, end)} when that is at most {@value #WORD_LIMIT} units and not all of it. */
+    private static int withoutWordTail(String text, int start, int end) {
+        int word = end;
+        while (word > start && isWordCharacter(Character.codePointBefore(text, word))) {
+            word -= Character.charCount(Character.codePointBefore(text, word));
+        }
+        return word > start && end - word <= WORD_LIMIT ? word : end;
+    }
+
+    /** Word characters that are neither a letter nor a digit: they can join a name but a name does not end with them. */
+    private static boolean isNamePunctuation(int point) {
+        return isWordCharacter(point) && !Character.isLetterOrDigit(point);
     }
 
     private static boolean isWordCharacter(int point) {

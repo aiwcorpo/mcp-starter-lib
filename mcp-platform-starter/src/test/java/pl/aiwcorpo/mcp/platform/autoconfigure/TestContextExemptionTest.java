@@ -42,6 +42,20 @@ class TestContextExemptionTest {
     }
 
     @Test
+    void onlyAJarFileNamedLikeTheFrameworkCounts() {
+        for (String location : new String[] {"file:/home/dev/.m2/org/springframework/spring-test/7.0.8/spring-test-7.0.8.jar",
+                "jar:file:/opt/app/lib/spring-boot-test-4.1.0.jar!/",
+                "jar:nested:/app/app.jar/!BOOT-INF/lib/spring-test-7.0.8.jar!/"}) {
+            assertThat(DevProfileEnvironment.testFrameworkLocation(location)).as(location).isTrue();
+        }
+        for (String location : new String[] {"file:/opt/srv/spring-test-1.jar/", "file:/opt/srv/spring-test-1.jar/classes/",
+                "file:/opt/srv/spring-test-1.jar/x/spring-boot-test-1.jar/", "file:/home/dev/spring-boot-test-autoconfigure-4.1.0.jar",
+                "file:/usr/share/java/spring-test.jar", "file:/cache/processed_spring-test-7.0.8.jar"}) {
+            assertThat(DevProfileEnvironment.testFrameworkLocation(location)).as(location).isFalse();
+        }
+    }
+
+    @Test
     void exclusionByPropertyIsRefusedOutsideATestContext() {
         assertThatThrownBy(() -> new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(
                 prodExcludingSecurity(), null)).hasMessageContaining("spring.autoconfigure.exclude lists");
@@ -65,14 +79,15 @@ class TestContextExemptionTest {
     }
 
     @Test
-    void missingPlatformBeansPassInATestContextAndInDev() {
+    void missingPlatformBeansPassInATestContextButNotInDev() {
         new ApplicationContextRunner().withInitializer(new PlatformPresenceCheck()).withPropertyValues()
                 .run(context -> assertThat(context).hasNotFailed());
 
         try (GenericApplicationContext context = new GenericApplicationContext()) {
             context.getEnvironment().setActiveProfiles("dev");
             new PlatformPresenceCheck().initialize(context);
-            context.refresh();
+            assertThatThrownBy(context::refresh).hasMessageContaining("are not defined")
+                    .hasMessageContaining("platformConfigurationGuard");
         }
     }
 

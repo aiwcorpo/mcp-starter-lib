@@ -2,10 +2,14 @@ package pl.aiwcorpo.mcp.platform.test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
+import org.springframework.context.ApplicationContext;
+import org.springframework.core.env.Environment;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.StandardEnvironment;
 import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
+import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformPresenceCheck;
 
 /**
  * Checks the starter's rule that the {@code dev} profile only listens on a loopback address, in a test that passes
@@ -18,16 +22,23 @@ import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
  * process variables or system properties of the host, and the deployment signals of a Kubernetes pod and a systemd
  * unit set on purpose, so the rule is shown to hold even where the {@code dev} profile is refused for that reason too.
  *
+ * <p>That alone says nothing about the server: the rule is the starter's. What can go wrong in the server is that
+ * its application context does not have the guard (an {@code exclude} of a platform auto-configuration, which a Spring
+ * test context does not refuse because slice tests leave the platform out on purpose) or that its own configuration
+ * sets an address other machines can reach. {@link #assertServerIsGuarded(ApplicationContext)} checks exactly that on
+ * the context of the server's {@code @SpringBootTest} in the {@code dev} profile.
+ *
  * <pre>{@code
- * class DevProfileLoopbackTest {
+ * class DevProfileLoopbackTest extends ServerTestSupport {
+ *     @Autowired ApplicationContext context;
+ *
  *     @Test
  *     void devListensOnLoopbackOnly() {
  *         DevProfileGuardAssertions.assertDevProfileLoopbackRule();
+ *         DevProfileGuardAssertions.assertServerIsGuarded(context);
  *     }
  * }
  * }</pre>
- * The rule is the starter's; the test only keeps it from disappearing unnoticed from the starter version the server
- * builds against.
  */
 public final class DevProfileGuardAssertions {
 
@@ -45,10 +56,15 @@ public final class DevProfileGuardAssertions {
      * @throws AssertionError when the rule does not hold
      */
     public static void assertDevProfileLoopbackRule() {
-        NETWORK_ADDRESSES.forEach(DevProfileGuardAssertions::assertDevProfileRefusesAddress);
-        assertDevProfileRefusesAddress("");
+        assertLoopbackRule(DevProfileGuardAssertions::guardMessage);
+    }
+
+    /** The rule against a guard given by {@code guard} (address to refusal message, {@code null} when accepted); for the helper's own tests. */
+    static void assertLoopbackRule(Function<String, String> guard) {
+        NETWORK_ADDRESSES.forEach(address -> assertRefuses(guard, address));
+        assertRefuses(guard, "");
         for (String address : LOOPBACK_ADDRESSES) {
-            String message = guardMessage(address);
+            String message = guard.apply(address);
             if (message != null && message.contains(LOOPBACK_PROBLEM)) {
                 throw new AssertionError("the dev profile refuses the loopback address '" + address + "': " + message);
             }
@@ -62,13 +78,42 @@ public final class DevProfileGuardAssertions {
      * @throws AssertionError when the guard does not name the address as a problem
      */
     public static void assertDevProfileRefusesAddress(String address) {
-        String message = guardMessage(address);
+        assertRefuses(DevProfileGuardAssertions::guardMessage, address);
+    }
+
+    private static void assertRefuses(Function<String, String> guard, String address) {
+        String message = guard.apply(address);
         if (message == null) {
             throw new AssertionError("the dev profile accepts server.address '" + address + "'");
         }
         if (!message.contains(LOOPBACK_PROBLEM)) {
             throw new AssertionError("the dev profile refuses server.address '" + address + "' without naming the "
                     + "address as the problem: " + message);
+        }
+    }
+
+    /**
+     * The application context of a server started in the {@code dev} profile has every bean of
+     * {@link PlatformPresenceCheck#REQUIRED_BEANS} (the configuration guard, the internal JWT verifier and filter, the
+     * audit post-processor and the server customizer) and its {@code server.address} is a loopback address. The
+     * guard refuses a network address at startup, but only when it exists; this fails when it does not.
+     *
+     * @throws AssertionError when a bean is missing or the address is not loopback
+     */
+    public static void assertServerIsGuarded(ApplicationContext context) {
+        List<String> missing = PlatformPresenceCheck.REQUIRED_BEANS.stream().filter(name -> !context.containsBean(name)).toList();
+        if (!missing.isEmpty()) {
+            throw new AssertionError("the server's context lacks the platform beans " + missing + ": an auto-configuration "
+                    + "of the platform is excluded, so nothing keeps the dev profile on a loopback address");
+        }
+        Environment environment = context.getEnvironment();
+        if (!List.of(environment.getActiveProfiles()).equals(List.of(PlatformConfigurationGuard.DEV_PROFILE))) {
+            throw new AssertionError("this check is for a context started with the 'dev' profile only, active: "
+                    + List.of(environment.getActiveProfiles()));
+        }
+        String address = environment.getProperty("server.address");
+        if (!PlatformConfigurationGuard.loopback(address)) {
+            throw new AssertionError("the server's server.address is '" + address + "', not a loopback address");
         }
     }
 
