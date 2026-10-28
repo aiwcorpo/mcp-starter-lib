@@ -93,9 +93,9 @@ Znalezisko -> status (przegląd Opus alpha-8):
 Incydent budowy: `./mvnw clean install` odpalony przed ustawieniem wersji `3.0.0-alpha-9-SNAPSHOT` (poms miały jeszcze
 `3.0.0-alpha-8`) nadpisał w `~/.m2` bom, rodzica i `mcp-platform-starter` 3.0.0-alpha-8 kodem roboczym alpha-9 (jar
 startera z 06:39, `mcp-platform-test` nie doszedł do `install`, bo testy modułu padły). Wersja poprawiona natychmiast na
-SNAPSHOT. Odtworzenie z tagu `v3.0.0-alpha-8` zbudowane (bez `install`) w
-`scratchpad/restore-a8/mcp-platform-starter/target/mcp-platform-starter-3.0.0-alpha-8.jar`; nie zainstalowane, bo próba
-`install` została zablokowana przez klasyfikator uprawnień. Do decyzji człowieka (patrz raport).
+SNAPSHOT. Odtworzenie nie jest zrobione: `install` z tagu została zablokowana przez klasyfikator uprawnień (nadpisanie wydanej
+wersji). Receptura: `git worktree add <katalog> v3.0.0-alpha-8 && cd <katalog> && ./mvnw -DskipTests install` (build z
+tagu daje jary identyczne z wydanymi poza MANIFEST i `pom.properties`, jak potwierdził przegląd alpha-8). Do decyzji człowieka.
 
 3.0.0-alpha-8: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-8`, tag
 `v3.0.0-alpha-8` (praca na `3.0.0-alpha-8-SNAPSHOT`, alpha-7 w `~/.m2` nietknięte). Instrukcja dla serwerów:
