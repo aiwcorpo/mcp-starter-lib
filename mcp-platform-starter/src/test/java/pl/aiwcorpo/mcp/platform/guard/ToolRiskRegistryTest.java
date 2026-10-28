@@ -64,7 +64,7 @@ class ToolRiskRegistryTest {
 
         @Tool(name = "get_page", description = "d")
         @ToolRisk(RiskLevel.READ_ONLY)
-        @ToolTitle("Get​ page")
+        @ToolTitle("Get\u200b page")
         public String hidden() {
             return "";
         }
