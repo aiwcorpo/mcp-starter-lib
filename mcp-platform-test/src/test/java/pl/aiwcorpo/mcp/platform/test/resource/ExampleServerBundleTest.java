@@ -26,7 +26,7 @@ class ExampleServerBundleTest {
             try (PolicyEngine engine = PolicyEngine.create(policy, null, null)) {
                 assertThat(engine.mainRevision()).contains("20261026130000-0e0e0e0");
                 assertThat(engine.snapshot().policies().policies).extracting(p -> p.policyID)
-                        .containsExactlyInAnyOrder("mcp-example-call-read", "mcp-example-call-write", "mcp-example-call-destructive");
+                        .contains("mcp-example-call-read", "mcp-example-call-write", "mcp-example-call-destructive", "jira-read", "jira-forbid-restricted-issue");
             }
         }
     }

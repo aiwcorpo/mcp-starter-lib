@@ -371,7 +371,9 @@ mniej ciche zachowania. Wersje: `<version>3.0.0-beta-2</version>` w imporcie BOM
 
    Politykę sprawdza się przez klienta MCP z `TestGateway`, nie przez bezpośrednie wywołanie metody.
 6. **Serwer przykładowy (`mcp-example` w template).** `TestGateway.start("mcp-example")` generuje i podpisuje kluczem testowym paczkę z
-   politykami `call` dla grup `mcp-example-read`, `mcp-example-write`, `mcp-example-destructive` (nie trzeba udawać `mcp-jira`). Poza listą pięciu
+   politykami `call` dla grup `mcp-example-read`, `mcp-example-write`, `mcp-example-destructive` oraz regułami z przykładów kontraktów na zasobach
+   (odczyt, zapis w zakresie grupy `mcp-jira-proj-ABC` itd., odmowa dla `restricted`, zawężenie linku) dla tych samych grup, więc testy odczytu,
+   odmowy i linku działają jak dla pięciu systemów (nie trzeba udawać `mcp-jira`). Poza listą pięciu
    systemów kontraktów: w `dev` start ostrzega (`SystemId`), a manifest nie przechodzi `server-manifest.schema.json` (`serverId` jest
    enumem), co w `dev` jest ostrzeżeniem `event=manifest_rejected_by_rules`; poza `dev` taki serwer nie wstanie. Test `ManifestTest` w
    template'cie zaplanuj więc tylko dla serwerów z listy kontraktów.

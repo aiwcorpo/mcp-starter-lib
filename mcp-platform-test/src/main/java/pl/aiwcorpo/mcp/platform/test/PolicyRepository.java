@@ -47,8 +47,10 @@ public final class PolicyRepository {
 
     /**
      * Publishes a bundle generated here for a server that is none of the five systems of the contracts (the template's
-     * {@code mcp-example}): the schema of the contracts, no static entities, and a {@code call} policy per risk for the
-     * groups {@code <serverId>-read}, {@code <serverId>-write} and {@code <serverId>-destructive}. Signed with the published
+     * {@code mcp-example}): the schema of the contracts, the static entities of the contracts' examples (scope groups such as
+     * {@code mcp-jira-proj-ABC}), a {@code call} policy per risk for the groups {@code <serverId>-read}, {@code <serverId>-write}
+     * and {@code <serverId>-destructive}, and the resource rules of the examples (read, update, restricted data, virtual server
+     * narrowing) for the same groups. Signed with the published
      * test key of the main channel (the key of the contracts' vectors; the bundle is for tests only).
      */
     public PolicyRepository publishGenerated(String revision, String serverId) {
@@ -63,8 +65,19 @@ public final class PolicyRepository {
             }
             String manifest = "{\"revision\":\"" + revision + "\",\"gitSha\":\"" + revision.substring(15).repeat(6).substring(0, 40)
                     + "\",\"createdAt\":\"2026-10-26T13:00:00Z\",\"schemaVersion\":\"3.1.0\"}";
-            byte[] archive = gzip(tar(Map.of("manifest.json", manifest, "schema.cedarschema", schema, "entities/static.json", "[]",
-                    "policies/call.cedar", policies.toString())));
+            Map<String, String> files = new java.util.HashMap<>(Map.of("manifest.json", manifest, "schema.cedarschema", schema,
+                    "entities/static.json", new String(readResource("mcp-contracts/cedar/examples/static-entities.json"),
+                            StandardCharsets.UTF_8),
+                    "policies/call.cedar", policies.toString()));
+            // The actions on resources and the restricted and virtual server rules of the contracts' examples, for this
+            // server's groups: a test of a read that is allowed, of one that is refused as restricted and of a link that
+            // narrows needs the same rules as for the five systems.
+            for (String example : new String[] {"read", "update", "forbid-restricted", "virtual-server"}) {
+                files.put("policies/" + example + ".cedar", new String(readResource("mcp-contracts/cedar/examples/" + example + ".cedar"),
+                        StandardCharsets.UTF_8).replaceAll("UserGroup::\"mcp-(?:jira|gitlab|confluence|servicedesk|opensearch)-(read|write|destructive)\"",
+                        "UserGroup::\"" + serverId + "-$1\""));
+            }
+            byte[] archive = gzip(tar(files));
             java.security.Signature signature = java.security.Signature.getInstance("Ed25519");
             String pem = new String(readResource("mcp-contracts/test-vectors/keys/test-policy-bundle.NOT-FOR-PRODUCTION.private.pem"),
                     StandardCharsets.UTF_8).replaceAll("-----[A-Z ]+-----", "").replaceAll("\\s", "");
