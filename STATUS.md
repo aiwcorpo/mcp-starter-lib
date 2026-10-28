@@ -24,9 +24,10 @@ poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i
 3.0.0-alpha-9: w pracy (`3.0.0-alpha-9-SNAPSHOT`, alpha-8 w `~/.m2` nietknięte). Instrukcja dla serwerów: `MIGRATION-3.0.md`,
 sekcja "Zmiany w 3.0.0-alpha-9". Kamienie:
 1. Profil `dev` i guard (A8-L1, A8-L2, A8-L3).
-   L1: w `dev` starter domyślnie ustawia też `management.server.address=127.0.0.1`, a guard przy osobnym
-   `management.server.port` wymaga loopbacku w `management.server.address` (pusty adres = wszystkie interfejsy, więc też
-   odmowa). L2: wybrane odmowa startu, nie zgoda jawna. Zgoda jawna (dodatkowa właściwość) dopisałaby ustawienie, które
+   L1: guard w `dev` przy osobnym `management.server.port` wymaga loopbacku w `management.server.address` (pusty adres =
+   wszystkie interfejsy, więc też odmowa). Domyślnej wartości `127.0.0.1` nie da się ustawić w starterze: Spring Boot odrzuca
+   `management.server.address` bez osobnego portu ("Management-specific server address cannot be configured..."), więc
+   pozostaje wymóg w guardzie. L2: wybrane odmowa startu, nie zgoda jawna. Zgoda jawna (dodatkowa właściwość) dopisałaby ustawienie, które
    każdy programista skopiuje razem z `dev` do pliku, a nie odróżnia ona maszyny developera od wdrożenia; sygnał środowiska
    odróżnia. `dev` jako jedyny profil kończy start (w `PlatformDefaultsEnvironmentPostProcessor`, przed otwarciem gniazda, i
    w guardzie), gdy Boot wykrywa platformę chmurową (`CloudPlatform.getActive`: Kubernetes, Cloud Foundry itd.) albo ustawione
@@ -36,7 +37,7 @@ sekcja "Zmiany w 3.0.0-alpha-9". Kamienie:
    L3: `PlatformConfigurationGuard`, `InternalJwtVerifier` i `InternalJwtFilter` bez `@ConditionalOnMissingBean`;
    `ForeignToolPolicyCheck` zatrzymuje start z własnym beanem któregoś z nich w każdym profilu (także `dev`). Punkty
    rozszerzenia (`@ConditionalOnMissingBean`): `GatewayKeys`, `JtiReplayStore`, `AuditLogger`, `ToolRiskRegistry`,
-   `McpErrorMapper`, filtry nagłówków. Testy: `PlatformConfigurationGuardTest` (5 nowych), `ForeignToolPolicyCheckTest` (1).
+   `McpErrorMapper`, filtry nagłówków. Testy: `PlatformConfigurationGuardTest` (4 nowe), `ForeignToolPolicyCheckTest` (1).
 
 2. A8-L4 (rezyduum A7-L6): wrapper i jego post-processor nie dają się zbudować spoza pakietu. `AuditingToolCallback` i
    `ToolCallbackAuditPostProcessor` są `final` z konstruktorami pakietowymi, `ToolInputPolicy` jest enumem (`STRICT`, `DEV`),

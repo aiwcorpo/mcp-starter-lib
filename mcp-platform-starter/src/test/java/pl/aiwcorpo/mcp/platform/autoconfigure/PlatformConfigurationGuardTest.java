@@ -227,19 +227,6 @@ class PlatformConfigurationGuardTest {
     }
 
     @Test
-    void theStarterDefaultsTheManagementAddressInDevOnly() {
-        MockEnvironment dev = new MockEnvironment();
-        dev.setActiveProfiles("dev");
-        new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(dev, null);
-        assertThat(dev.getProperty("management.server.address")).isEqualTo("127.0.0.1");
-
-        MockEnvironment prod = new MockEnvironment();
-        prod.setActiveProfiles("prod");
-        new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(prod, null);
-        assertThat(prod.getProperty("management.server.address")).isNull();
-    }
-
-    @Test
     void devInADeploymentIsRefusedBeforeAnySocketIsOpened() {
         MockEnvironment kubernetes = serverConfigAsInTheReadme("dev").withProperty("spring.main.cloud-platform", "kubernetes");
         assertThatThrownBy(() -> new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(kubernetes, null))

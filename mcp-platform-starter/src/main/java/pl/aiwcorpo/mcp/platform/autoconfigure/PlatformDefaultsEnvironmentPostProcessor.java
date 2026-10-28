@@ -28,10 +28,11 @@ import org.springframework.core.env.MapPropertySource;
  *       anyway.</li>
  *   <li>{@code spring.data.redis.timeout=2s}: a hung Redis answers 503 quickly instead of holding request
  *       threads for the client's default minute.</li>
- *   <li>With the {@code dev} profile active only: {@code server.address=127.0.0.1} and
- *       {@code management.server.address=127.0.0.1} (a separate management server listens on all interfaces
- *       otherwise). The dev relaxations (test keys, no mTLS) must not be reachable from the network;
- *       {@code PlatformConfigurationGuard} refuses any non-loopback address in dev.</li>
+ *   <li>With the {@code dev} profile active only: {@code server.address=127.0.0.1}. The dev relaxations (test
+ *       keys, no mTLS) must not be reachable from the network; {@code PlatformConfigurationGuard} refuses any
+ *       non-loopback address in dev, and for a separate management port it requires a loopback
+ *       {@code management.server.address} (Spring Boot rejects that property without a separate port, so it cannot
+ *       be defaulted here).</li>
  * </ul>
  *
  * <p>With {@code dev} as the only active profile the platform also forces, above the server's own
@@ -70,7 +71,6 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
                             "spring.data.redis.timeout", "2s"));
             if (Arrays.asList(environment.getActiveProfiles()).contains(PlatformConfigurationGuard.DEV_PROFILE)) {
                 defaults.put("server.address", "127.0.0.1");
-                defaults.put("management.server.address", "127.0.0.1");
             }
             environment.getPropertySources().addLast(new MapPropertySource(SOURCE_NAME, defaults));
         }

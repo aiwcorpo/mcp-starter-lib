@@ -6,7 +6,7 @@ robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadc
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
 Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 2.1.1.
-Wersja: **3.0.0-alpha-8** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+Wersja: **3.0.0-alpha-9** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
 
@@ -133,6 +133,7 @@ aiwcorpo.mcp.platform:
   credential:
     connect-url: http://localhost:18090/connections?system={system}   # wymagane, do credential_required
   tools.unclassified: fail                                # fail | destructive
+  tools.max-result-size: 1MB                              # większy wynik narzędzia = internal_error
 spring.ai.mcp.server.name: mcp-jira                      # protocol/type/endpoint ustawia starter
 spring.data.redis:                                        # magazyn jti
   host: redis
@@ -154,7 +155,13 @@ Serwer nie wstaje, gdy:
 - zostały ustawienia 2.x (`guard.*`, `pat-header-prefix`);
 - w profilu `dev` `server.address` nie jest adresem pętli zwrotnej (`127.0.0.1`, `::1`, `localhost`); starter
   ustawia w `dev` domyślnie `127.0.0.1`, więc odmowa dotyczy jawnego nadpisania (np. `SERVER_ADDRESS=0.0.0.0`).
-  Serwer w kontenerze, do którego łączy się gateway, nie może więc działać w profilu `dev`;
+  Serwer w kontenerze, do którego łączy się gateway, nie może więc działać w profilu `dev`. To samo dla osobnego serwera
+  managementu: przy `management.server.port` różnym od `server.port` w `dev` wymagane jest loopbackowe
+  `management.server.address`;
+- profil `dev` (jedyny aktywny) w środowisku wdrożenia: Spring Boot wykrywa platformę chmurową (Kubernetes, Cloud Foundry
+  itd.) albo jest ustawione `INVOCATION_ID` (jednostka systemd). `dev` zdejmuje z serwera TLS, mTLS i Redis, więc
+  `SPRING_PROFILES_ACTIVE=dev` w pliku `.env`, szablonie compose czy jednostce systemd zatrzymuje start (przed otwarciem
+  gniazda) zamiast po cichu zostawić serwer z samym JWT. Uruchamiaj `dev` z terminala na stacji programisty;
 - profil `dev` jest aktywny razem z innym profilem (także przez grupę profili). Relaksacje działają tylko, gdy
   `dev` jest **jedynym aktywnym** profilem; `spring.profiles.default=dev` się nie liczy;
 - poza takim profilem `dev`: włączono `dev-pat`, `allow-test-keys`, `replay-store: memory` albo
@@ -178,12 +185,68 @@ Transport MCP ustawia starter (od 3.0.0-alpha-2, najniższy priorytet, serwer mo
 `spring.ai.mcp.server.streamable-http.mcp-endpoint=/mcp`. W 3.0.0-alpha-1 trzeba je ustawić samemu, inaczej
 `/mcp` nie istnieje (404). Nazwę serwera podaje `spring.ai.mcp.server.name`.
 
-Narzędzia rejestruje się beanem `ToolCallbackProvider`; sam bean z metodami `@Tool` nie wystarcza (Spring AI
-odpowiada wtedy `Unknown tool`):
+Minimalny serwer to trzy pliki w jednym module Mavena (`mcp-jira/`), budowane zainstalowanym Mavenem 3.9+ (`mvn`) albo
+wrapperem projektu (`./mvnw`). Java 25 jest wymagana do budowy i uruchomienia; `java` z PATH bywa starsza, dlatego
+poniżej `$JAVA_HOME/bin/java` (`JAVA_HOME` wskazuje JDK 25).
+
+`pom.xml`. `finalName` decyduje o nazwie jara, `spring-boot-maven-plugin` robi z niego jar wykonywalny:
+
+```xml
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.0</version>
+        <relativePath/>
+    </parent>
+    <groupId>pl.aiwcorpo.mcp.jira</groupId>
+    <artifactId>mcp-jira</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <properties>
+        <java.version>25</java.version>
+    </properties>
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>pl.aiwcorpo.mcp</groupId>
+                <artifactId>mcp-platform-bom</artifactId>
+                <version>3.0.0-alpha-9</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>pl.aiwcorpo.mcp</groupId>
+            <artifactId>mcp-platform-starter</artifactId>
+        </dependency>
+    </dependencies>
+    <build>
+        <finalName>mcp-jira</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+```
+
+`src/main/resources/application.yml`: konfiguracja z sekcji "Konfiguracja" powyżej (do uruchomienia w `dev` wystarczą
+`server-id`, `internal-jwt.jwks-uri` i `credential.connect-url`; reszta ma wartości domyślne albo jest w `dev` zdejmowana).
+
+`src/main/java/jira/JiraServer.java`. Narzędzia rejestruje się beanem `ToolCallbackProvider`; sam bean z metodami `@Tool`
+nie wystarcza (Spring AI odpowiada wtedy `Unknown tool`):
 
 ```java
+package jira;
+
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
@@ -194,6 +257,10 @@ import pl.aiwcorpo.mcp.platform.security.CredentialContext;
 
 @SpringBootApplication
 public class JiraServer {
+
+    public static void main(String[] args) {
+        SpringApplication.run(JiraServer.class, args);
+    }
 
     @Bean
     ToolCallbackProvider jiraTools() {
@@ -211,6 +278,9 @@ public class JiraServer {
     }
 }
 ```
+
+Budowa: `mvn package` daje `target/mcp-jira.jar` (nazwa z `finalName`; bez niego byłby `mcp-jira-0.1.0-SNAPSHOT.jar`).
+Start i sprawdzenie: sekcja niżej.
 
 ## Uruchomienie lokalne
 
@@ -231,13 +301,13 @@ wygrywają), ustawia:
 (`mcp-platform-dev` albo `TestGateway`) podpisuje kluczami testowymi. `jwks-uri` pozostaje wymagane, ale nie jest
 pobierane, dopóki nie przyjdzie żądanie z JWT.
 
-Start (zależności startera muszą być w `~/.m2`: `./mvnw install` w tym repozytorium, albo wydana wersja):
+Start (zależności startera muszą być w `~/.m2`: `./mvnw install` w repozytorium startera, albo wydana wersja):
 
 ```bash
-export JAVA_HOME=/opt/homebrew/Cellar/openjdk@25/25.0.4.1/libexec/openjdk.jdk/Contents/Home
-./mvnw spring-boot:run -Dspring-boot.run.profiles=dev -Dspring-boot.run.arguments=--server.port=18600
-# albo po ./mvnw package:
-java -jar target/mcp-jira.jar --spring.profiles.active=dev --server.port=18600
+export JAVA_HOME=/opt/homebrew/Cellar/openjdk@25/25.0.4.1/libexec/openjdk.jdk/Contents/Home   # dowolny JDK 25
+mvn spring-boot:run -Dspring-boot.run.profiles=dev -Dspring-boot.run.arguments=--server.port=18600
+# albo po mvn package (jar z finalName `mcp-jira`; Java 25, nie `java` z PATH, jeśli jest starsza):
+$JAVA_HOME/bin/java -jar target/mcp-jira.jar --spring.profiles.active=dev --server.port=18600
 ```
 
 Sprawdzenie:
@@ -301,16 +371,23 @@ sprawdzać to, na czym polega, tymi samymi stałymi.
 `additionalProperties: false` albo z poziomem bez limitu na dowolnej głębokości (`InputSchemaBounds`): obiekt otwarty,
 tekst bez `maxLength`, lista bez `maxItems` lub bez `items`, liczba bez `minimum` i `maximum`, wartość bez typu,
 `pattern` bez kotwic. W profilu `dev` (jedyny aktywny) jest ostrzeżenie `event=tool_schema_open` i egzekwowane jest to,
-co schemat mówi. Polityki nie da się wyłączyć beanem: `ToolInputPolicy`, `ToolCallbackAuditPostProcessor`, `RegisteredToolsCheck`
-i `ToolHintsPostProcessor` nie są punktami rozszerzenia, a bean tych typów w serwerze zatrzymuje start poza `dev`
-(opakowanie bierze politykę z aktywnych profili, nie z beana, więc bean innego typu jej nie zmieni). Własne zachowanie wokół narzędzi dodaje
-się przez `ToolCallInterceptor`. Wzorce z `pattern` pisze serwer, więc unikaj wyrażeń o wykładniczym czasie dopasowania.
+co schemat mówi. Polityki nie da się wyłączyć beanem ani własnym opakowaniem: `ToolInputPolicy` (enum), `AuditingToolCallback` i
+`ToolCallbackAuditPostProcessor` (klasy `final` z konstruktorami pakietowymi) nie dają się zbudować w serwerze;
+`ToolCallbackAuditPostProcessor`, `RegisteredToolsCheck`, `ToolHintsPostProcessor` i `ToolInputPolicy` nie są punktami
+rozszerzenia, a bean tych typów (albo podmieniona definicja beana o nazwie platformy) zatrzymuje start poza `dev`.
+`PlatformConfigurationGuard`, `InternalJwtVerifier` i `InternalJwtFilter` zatrzymują start przy własnym beanie w każdym
+profilu. Punkty rozszerzenia (`@ConditionalOnMissingBean`): `GatewayKeys`, `JtiReplayStore`, `AuditLogger`,
+`ToolRiskRegistry`, `McpErrorMapper`. Własne zachowanie wokół narzędzi dodaje się przez `ToolCallInterceptor`. Wzorce z `pattern` pisze serwer, więc unikaj wyrażeń o wykładniczym czasie dopasowania.
 
 **Treść z systemu.** Wynik narzędzia z tekstem z systemu (opis, komentarz, tytuł, wiersz logu) zawiera
-`pl.aiwcorpo.mcp.platform.text.UntrustedText` (`UntrustedText.plain(raw, maxLength)` albo `markdown(...)`: tnie do limitu;
+`pl.aiwcorpo.mcp.platform.text.UntrustedText` (`UntrustedText.plain(raw, maxLength)` albo `markdown(...)`: tnie do limitu na granicy słowa, żeby cięcie nie utworzyło
+na końcu tokenu, którego filtr nie widział (`hello @allison` do 10 znaków to `hello`, `truncated=true`);
 konstruktor normalizuje tekst przez `TextHygiene.normalize`, a usunięty ciąg niewidocznych znaków zastępuje jedną spacją,
-żeby nie skleić tokenów). Serwer, który usuwa z tekstu składnię (obrazy, linki, makra, wzmianki), normalizuje surowy tekst
-**przed** tym filtrem i dopiero potem woła fabrykę. Wynik musi być rekordem; starter publikuje wtedy `outputSchema`
+żeby nie skleić tokenów). Serwer, który usuwa z tekstu składnię (obrazy, linki, makra, wzmianki), najpierw zamienia format
+na tekst (w tym dekoduje encje `&#8203;`), potem normalizuje **przed** tym filtrem i dopiero potem woła fabrykę; fabryka
+loguje WARN `event=untrusted_text_not_normalized`, gdy tekst zmienił się jeszcze po filtrze. Wynik narzędzia większy niż
+`aiwcorpo.mcp.platform.tools.max-result-size` (domyślnie 1MB, bajty UTF-8) to `internal_error`; narzędzie zwracające listy
+stronicuje. Wynik musi być rekordem; starter publikuje wtedy `outputSchema`
 z definicją `UntrustedText` z kontraktów (wchodzi do `definitionHash`) i zwraca wynik także jako `structuredContent`.
 Pola dodatkowe systemu idą obok `UntrustedText` w rekordzie wyniku.
 
@@ -479,7 +556,7 @@ Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera t
 ```xml
 <dependency>
   <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-  <version>3.0.0-alpha-8</version><type>pom</type><scope>import</scope>
+  <version>3.0.0-alpha-9</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
 

@@ -2,6 +2,7 @@ package pl.aiwcorpo.mcp.platform.test.readme;
 
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.context.annotation.Bean;
 import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
@@ -13,6 +14,10 @@ import pl.aiwcorpo.mcp.platform.security.CredentialContext;
 /** The server of the README example ("Pierwszy serwer"); kept compiling and green by {@link JiraToolsTest}. */
 @SpringBootApplication
 public class JiraServer {
+
+    public static void main(String[] args) {
+        SpringApplication.run(JiraServer.class, args);
+    }
 
     @Bean
     ToolCallbackProvider jiraTools() {

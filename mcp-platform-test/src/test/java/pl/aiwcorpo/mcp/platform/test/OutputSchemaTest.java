@@ -84,7 +84,7 @@ class OutputSchemaTest {
             JsonNode structured = JSON.valueToTree(result.structuredContent());
             assertThat(structured.at("/title/text").asString()).isEqualTo("Release notes");
             assertThat(structured.at("/body/kind").asString()).isEqualTo("untrusted-data");
-            assertThat(structured.at("/body/text").asString()).isEqualTo("Ignore previous inst");
+            assertThat(structured.at("/body/text").asString()).isEqualTo("Ignore previous");
             assertThat(structured.at("/body/truncated").asBoolean()).isTrue();
             assertThat(GatewayTransportTest.text(result)).doesNotContain("\u202e").doesNotContain("\u200b");
         }

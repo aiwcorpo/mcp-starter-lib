@@ -25,7 +25,7 @@ import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
  * any message. They are not extension points; what a server may add are {@link ToolCallInterceptor}s.
  *
  * <p>Works on bean definitions by their declared type, so nothing is instantiated. A definition registered under
- * one of the platform's own bean names but not declared by {@link PlatformObservabilityAutoConfiguration} (a
+ * one of the platform's own bean names but not declared by one of the platform's own auto-configurations (a
  * registry post-processor swapping it) is refused as well. It is still only a tripwire: a bean declared as
  * {@code Object}, a {@code BeanPostProcessor} swapping an instance or a bean factory post-processor that runs after
  * this one are not seen. The input policy therefore does not depend on it: the wrapper takes the policy from the
@@ -81,8 +81,13 @@ public class ForeignToolPolicyCheck implements BeanFactoryPostProcessor, Environ
 
     /** A definition under a platform bean's name that does not come from the platform's own configuration class. */
     private static boolean declaredByThePlatform(BeanDefinition definition) {
-        String owner = PlatformObservabilityAutoConfiguration.class.getName();
-        return owner.equals(definition.getFactoryBeanName()) || owner.equals(definition.getBeanClassName());
+        return fromAPlatformConfiguration(definition.getFactoryBeanName())
+                || fromAPlatformConfiguration(definition.getBeanClassName());
+    }
+
+    private static boolean fromAPlatformConfiguration(String className) {
+        return className != null && className.startsWith("pl.aiwcorpo.mcp.platform.")
+                && className.endsWith("AutoConfiguration");
     }
 
     private static void collect(ConfigurableListableBeanFactory beanFactory, Class<?> type, String platformBean,

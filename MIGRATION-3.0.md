@@ -253,6 +253,34 @@ podpisuje kluczami testowymi. Opis i komenda startu: README, "Uruchomienie lokal
   czterech typów zatrzymuje start poza `dev`.
 - `tool_failed` (WARN i ERROR): w łańcuchu przyczyn usunięte znaki sterujące i bidi, jedna linia, bez zapytania w URL.
 
+## Zmiany w 3.0.0-alpha-9
+
+Pracowano na `3.0.0-alpha-9-SNAPSHOT`; alpha-8 i wcześniejsze nietknięte. Przejście z alpha-8: podbić wersję BOM na
+`3.0.0-alpha-9`. API publiczne nie ma usunięć, które dotykałyby kodu serwera zgodnego z alpha-8; kod ma się zmienić tylko
+tam, gdzie poniższe punkty mówią wprost.
+
+- **Kolejność dla tekstu z systemu** (A8-L5): konwersja formatu do tekstu (w tym dekodowanie encji `&#8203;`, `&#x200B;`),
+  `TextHygiene.normalize`, filtr serwera, `UntrustedText.plain|markdown`. Fabryka loguje WARN
+  `event=untrusted_text_not_normalized tool=...`, gdy tekst zmienił się po filtrze (zwykle: encje dekodowane po
+  normalizacji); po przejściu na tę kolejność w testach serwera nie ma takiej linii.
+- **Cięcie w fabryce `UntrustedText`** cofa się do ostatniego białego znaku, jeśli zachowywana część ostatniego słowa ma
+  najwyżej 64 jednostki: `plain("hello @allison", 10)` daje `hello` (`truncated=true`), nie `hello @all`. Test serwera
+  porównujący dokładnie ucięty tekst trzeba poprawić; dłuższy ciąg bez spacji jest cięty tam, gdzie wypada limit.
+- **Limit wyniku** `aiwcorpo.mcp.platform.tools.max-result-size` (domyślnie 1MB, bajty UTF-8): większy wynik narzędzia to
+  C10 `internal_error` (audyt `error`). Narzędzie zwracające listy ma stronicować. Niezgodność wyniku z `outputSchema` jest
+  teraz zawsze `internal_error`, także gdy mapping błędów serwera obsługuje `IllegalStateException` (wyjątek platformy to
+  osobny typ, `ToolResultRejectedException`, sprawdzany przed mappingami serwera).
+- **Profil `dev`**: przy osobnym `management.server.port` guard wymaga loopbackowego `management.server.address`
+  (Spring Boot nie pozwala ustawić tego adresu bez osobnego portu, więc starter nie ma domyślnej wartości). `dev` jako jedyny profil w środowisku wdrożenia
+  (platforma chmurowa wykrywana przez Spring Boot, `INVOCATION_ID` jednostki systemd) kończy start: usuń
+  `SPRING_PROFILES_ACTIVE=dev` z `.env`, szablonów compose i jednostek (`install.sh` template'u go nie ustawia).
+  Linia `dev_profile_overrides` jest na WARN i wymienia klucze, które konfiguracja serwera ustawiała inaczej.
+- **Beany**: `PlatformConfigurationGuard`, `InternalJwtVerifier` i `InternalJwtFilter` nie są punktami rozszerzenia; własny
+  bean któregokolwiek zatrzymuje start w każdym profilu (punkty rozszerzenia: `GatewayKeys`, `JtiReplayStore`,
+  `AuditLogger`, `ToolRiskRegistry`, `McpErrorMapper`). `AuditingToolCallback` i `ToolCallbackAuditPostProcessor` mają
+  konstruktory pakietowe, `ToolInputPolicy` jest enumem (`STRICT`, `DEV`); kod serwera, który ich nie budował (żaden z
+  pięciu serwerów i template'u), nie wymaga zmian.
+
 ## Wdrożenie
 
 - Serwer potrzebuje Redisa (użytkownik `mcp-<system>`, klucze `jti:mcp-<system>:*`, komenda `SET`).
