@@ -479,7 +479,7 @@ odmową, więc argument, który może być nieobecny, nie jest `@ResourceRef` (w
 **GitLab: topics grup-przodków (CC-129, kontrakty 3.1.0).** Topics w GitLabie się nie dziedziczą, a `restricted` na grupie ma chronić całe
 poddrzewo, więc schemat Cedar ma wymagany `inheritedClassification` na `GitLab::Group` i `GitLab::Project`, który builder liczy z
 atrybutu `ancestorClassifications` podanego przez serwer. Starter nie ma na to osobnego API: to atrybut w `ResolvedResource`
-(mapa `<ścieżka grupy-przodka> -> topics`, dokładnie dla grup nad zasobem, `{}` dla grupy najwyższego poziomu), a **rodzic** projektu
+(mapa `<ścieżka grupy-przodka> -> topics`, dokładnie dla grup nad zasobem, dla projektu łącznie z jego rodzicem, `{}` jawnie dla grupy najwyższego poziomu), a **rodzic** projektu
 (grupa) dostaje swoją własną mapę (przodkowie grupy, bez niej samej). Brak mapy, brakujący albo nadmiarowy klucz (w tym sama grupa)
 lub topics niebędące listą napisów dają `internal_error`, czyli odmowę `not_found_or_denied` (zasób nie jest budowany). Resolver
 serwera GitLab pobiera topics każdej grupy na ścieżce (cache na czas wywołania):

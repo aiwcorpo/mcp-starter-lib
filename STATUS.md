@@ -18,7 +18,7 @@ Odstępstwa od briefu:
 - Klient pobierania paczek jest własny (`PolicyBundleClient`: ETag, 16 MiB, bez przekierowań, nazwy plików tylko obok `latest.json`), bo `mcp-policy-bundle` go nie ma (CC-132 odłożone).
 - Starter nie dopuszcza `@ResourceRef` na opcjonalnym argumencie bez wartości (`no_resource` = odmowa); wyszukiwanie bez identyfikatorów używa `QueryScope`.
 
-Nie zrobione / zostaje na 3.0.0: pełne `ResultFilter` dla nietypowych kształtów wyniku (mapy, tablice tablic), recenzja bezpieczeństwa beta-1, smoke "od README" (Haiku), test na prawdziwej paczce dev ws-09 po zmianie schematu na 3.1.0 (wektory kontraktów 3.1.0 przechodzą).
+Nie zrobione / zostaje na 3.0.0: pełne `ResultFilter` dla nietypowych kształtów wyniku (mapy, tablice tablic), recenzja bezpieczeństwa beta-1, smoke "od README" (Haiku), test wywołania na prawdziwej paczce dev ws-09 (samo pobranie i weryfikacja paczki dev 20261028201639-742561e z `:18747` sprawdzone: ładuje się na schemacie 3.1.0; wywołania zasobów sprawdzone na paczkach z wektorów kontraktów 3.1.0).
 
 3.0.0-alpha: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom:3.0.0-alpha-1` (import),
 `pl.aiwcorpo.mcp:mcp-platform-starter:3.0.0-alpha-1`, `pl.aiwcorpo.mcp:mcp-platform-test:3.0.0-alpha-1` (test),
