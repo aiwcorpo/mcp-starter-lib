@@ -1,7 +1,7 @@
 # STATUS - mcp-starter-lib (ws-02)
 
 Linia `pl.aiwcorpo.mcp:mcp-platform*` 3.x (niezależna od wersji kontraktów). Kontrakty:
-`pl.aiwcorpo.mcp:mcp-contracts:2.1.1` od alpha-7 (2.0.2 do alpha-6).
+`pl.aiwcorpo.mcp:mcp-contracts:2.2.5` od alpha-12 (2.1.1 od alpha-7, 2.0.2 do alpha-6).
 
 3.0.0-alpha: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom:3.0.0-alpha-1` (import),
 `pl.aiwcorpo.mcp:mcp-platform-starter:3.0.0-alpha-1`, `pl.aiwcorpo.mcp:mcp-platform-test:3.0.0-alpha-1` (test),
@@ -20,6 +20,55 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
+
+3.0.0-alpha-12: gotowe do wydania - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-12`, tag `v3.0.0-alpha-12` (praca na `3.0.0-alpha-12-SNAPSHOT`, wersji alpha-11 i wcześniejszych nie instalowano). Razem 431 testów (starter 353, mcp-platform-test 78). Kontrakty 2.2.5 (BOM i oba moduły). Instrukcja dla serwerów: `MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-12". Kamienie:
+1. Kontrakty 2.2.5, wersja `3.0.0-alpha-12-SNAPSHOT`. Bez zmian w kodzie; 352 testy zielone na 2.2.5 (schematy i wektory JWT bez zmian oczekiwań).
+2. A11-M1 (MEDIUM). Test serwera nie sprawdzał niczego w serwerze, a serwer z wykluczonym guardem przechodził testy w `dev` na `0.0.0.0`.
+   Dwie warstwy: (a) `DevProfileGuardAssertions.assertServerIsGuarded(ApplicationContext)` w `mcp-platform-test`: w kontekście `@SpringBootTest`
+   serwera w `dev` są wszystkie beany z `PlatformPresenceCheck.REQUIRED_BEANS` (publiczna lista) i `server.address` jest pętlą zwrotną
+   (`PlatformConfigurationGuard.loopback` publiczne); szablon `DevProfileLoopbackTest` dziedziczy po `ServerTestSupport` i woła obie asercje
+   (`ServerGuardedAssertionTest`: pełny serwer przechodzi, `ExcludingServer` z `server.address=0.0.0.0` w kontekście testowym nie, adres sieciowy
+   przy kompletnych beanach nie). (b) Zamknięte rezyduum A10-L3: `PlatformPresenceCheck` i `refuseExcludedPlatform` działają też w `dev`
+   (poza kontekstem testowym); `StartupRefusalTest.excludingThePlatformInDevIsRefused`, `PlatformConfigurationGuardTest`. Zmiana zachowania:
+   serwer z wykluczeniem platformy tylko w `dev` przestaje startować. Zdanie MIGRATION o guardzie w każdym `@SpringBootTest` poprawione.
+   Nadal otwarte (świadomie): wyjątek kontekstu testowego dla slice'ów (kontekst testowy nie jest sprawdzany; kompensuje go asercja serwera).
+3. A11-L1. `UntrustedText.cut`: gdy cięcie zostaje na limicie, zdejmuje z końca `.`, `-`, `_` i znaki łączące, po czym ocenia ogon jak zwykle
+   (`"x(@all" + 70 * "."` przy 75 -> `x(@`; także `-`, `_`, U+0301, tekst zaczynający się od `@all`, słowo po spacji); długi ciąg samej
+   interpunkcji i `a*30 + .*70` zachowane. `TextHygieneTest` (2 nowe).
+4. A11-L2. `DevProfileEnvironment.testFrameworkLocation`: wzorzec zakotwiczony na końcu (`...spring-(boot-)?test-N.jar(!/)?$`), katalog `spring-test-1.jar/`
+   i ścieżka z takim jarem wyżej nie liczą się; jar o takiej nazwie nadal poza modelem zagrożeń (jak w alpha-11). Test tabelaryczny w `TestContextExemptionTest`.
+5. A11-L3. Trzy luki testów: znak łączący w zachowywanej części (`/@all\u0301ison` przy 66, `TextHygieneTest`), klucz mapy z wejścia nie trafia do
+   komunikatu (`ToolInputValidatorTest.aKeyOfAMapFromTheInputIsNotInTheMessage`, schemat z `propertyNames`), pętla adresów pętli zwrotnej w pomocniku
+   (`assertLoopbackRule(Function)` pakietowe, `DevProfileGuardAssertionsTest` z guardem odrzucającym `127.0.0.1` i z guardem przyjmującym wszystko).
+   Mutacje M6, M8 i M10 przeglądu mają teraz testy, które je zabijają (sprawdzone przez konstrukcję przypadków, nie ręczną mutacją).
+6. CC-120 po stronie odbiorcy JWT. Starter emitował już wszystkie powody (`missing_token`, `client_certificate_rejected`, `jwks_unavailable` i
+   `replay_store_unavailable` z `errorCode: upstream_unavailable`, rzeczywiste 503); zrobione: (a) `AuthenticationAuditVectorsTest`: wszystkie 42 wektory
+   `audit-events/` 2.2.5 zgodne ze schematem wg `expected.valid`, każdy powód `InternalJwtRejection` (w tym infrastrukturalne) daje zdarzenie ważne
+   wg schematu, powód infrastrukturalny z `unauthenticated` jest odrzucany; wektor `server-authentication-denied-client-certificate` odtworzony
+   przez filtr; (b) `MissingTokenEventLimiter` (ten sam mechanizm i domyślne 20/s co w gateway'u): `missing_token` zapisywane do budżetu na sekundę
+   na proces, nadmiar tylko w liczniku `mcp_server_audit_authentication_suppressed_total{reason}` na rejestrze aplikacji (`SimpleMeterRegistry`, gdy
+   go brak), żądanie nadal dostaje 401; własność `internal-jwt.missing-token-events-per-second` (minimum 1, mniej zatrzymuje start w guardzie);
+   inne powody bez limitu (potrzebują certyfikatu albo tokenu poprawnego kształtu, a każdy jest osobnym sygnałem). Testy: `InternalJwtAuditTest`
+   (zalew, brak ukrywania innych powodów), `MissingTokenAuditCapTest` (przez HTTP, własność, licznik, suma zapisanych i policzonych = liczba żądań).
+   Odstępstwo od briefu: nie ma. `client_certificate_rejected` nie jest limitowane, bo poza `dev` TLS wymaga `client-auth=need`, więc anonimowe
+   żądanie nie dociera do kontroli aplikacji.
+
+### Do decyzji: A10-L2, devcontainer i dev w kontenerze programisty
+
+Problem: sygnał kontenera (`/.dockerenv`, `/run/.containerenv`, `container`, cgroup) odmawia `dev` także w devcontainerze VS Code, Codespaces, Toolboxie
+i Distroboxie, czyli tam, gdzie programista pracuje. Komunikat odmowy i README podają dziś trzy wyjścia (poza kontenerem, z testu, profil inny niż `dev`).
+Testy serwerów działają w kontenerze (kontekst testowy nie jest sprawdzany). Nikt nie zgłosił, że pracuje w devcontainerze; programista na macOS
+nie ma problemu. To decyzja o modelu zagrożeń i o tym, czy wspieramy devcontainer, więc nie rozstrzygam jej sam.
+
+- Opcja 1: zostaje jak jest (devcontainer nie jest wspierany dla uruchomienia aplikacji w `dev`, testy tak). Koszt: 0. Zaleta: sygnał kontenera
+  zatrzymuje skopiowany `SPRING_PROFILES_ACTIVE=dev` w obrazie wdrożeniowym bez wyjątków. Wada: programista w devcontainerze/Toolboxie uruchamia
+  serwer tylko z testu albo w profilu z TLS, mTLS i Redisem.
+- Opcja 2: dla samego sygnału kontenera dopuścić `dev`, gdy jest jawny znacznik środowiska programisty (`REMOTE_CONTAINERS=true`, `CODESPACES=true`,
+  `/run/.toolboxenv`), a `KUBERNETES_*` i `INVOCATION_ID` nadal odmawiają. Koszt: ok. pół dnia (kod w `DevProfileEnvironment`, testy, README),
+  lista znaczników do utrzymania. Ryzyko: znacznik to zmienna, którą ktoś skopiuje do Dockerfile razem z `dev` (ten sam model "siatka, nie granica"
+  co sygnały dziś), więc skutek jest taki, że ten jeden błąd konfiguracji przestaje być zatrzymywany; adres pętli zwrotnej i zakaz wykluczeń nadal obowiązują.
+- Rekomendacja: opcja 1 teraz. Nie ma zgłoszonej potrzeby, a opcja 2 osłabia jedyną kontrolę przed `dev` w obrazie wdrożeniowym. Wrócić do opcji 2,
+  gdy ktoś realnie pracuje w devcontainerze (wtedy z konkretnym znacznikiem tego środowiska, nie z całą listą).
 
 3.0.0-alpha-11: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-11`, tag `v3.0.0-alpha-11` (praca na `3.0.0-alpha-11-SNAPSHOT`, nic innego w `~/.m2` nie instalowane). Razem 352 testy (starter 281, mcp-platform-test 71). Instrukcja dla serwerów: `MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-11". Kamienie:
 1. A10-M1. `DevProfileGuardAssertions` w `mcp-platform-test` (`assertDevProfileLoopbackRule()`, `assertDevProfileRefusesAddress(adres)`):
@@ -323,6 +372,9 @@ przebiegach zielony: do uodpornienia w teście, nie w kodzie startera; `pattern`
 
 ## Propozycje CC (do przeniesienia przez ws-00 do CONTRACT_CHANGES.md; status proposed)
 
+Stan po kontraktach 2.2.5: punkty 1, 2 i 6 przyjęte jako CC-123, CC-121 i CC-122 (3.0.0), punkt 3 jako CC-112 (2.2.4), punkt 4 jako CC-120 (2.2.5).
+Pozostałe poniżej wymagają decyzji ws-00; nowe punkty na końcu listy.
+
 1. C6/C10 (rozszerzenie CC-078): `inputSchema` w manifeście ma limit na każdym poziomie: obiekt `additionalProperties:
    false`, tekst `maxLength`, lista `maxItems` i `items`, liczba `minimum` i `maximum`, wzorzec z kotwicami,
    bez `allOf/anyOf/oneOf/not/if`, bez map otwartych. Gateway (walidujący argumenty z manifestu) i serwer wtedy
@@ -345,6 +397,10 @@ przebiegach zielony: do uodpornienia w teście, nie w kodzie startera; `pattern`
    (`U+FF20 U+FF41 U+FF4C U+FF4C`) przechodzi `normalize` bez zmian, a po NFKC po stronie odbiorcy daje `@all`. Decyzja do podjęcia
    razem dla gateway'a i serwerów (NFKC zmienia też zwykły tekst: ligatury, znaki zgodnościowe, pełną szerokość w CJK); do
    czasu decyzji starter nie normalizuje NFKC, żeby nie rozjechać gateway'a i serwerów.
+7. C8 (opis, patch; nowe w alpha-12): zapisać, że odbiorca zdarzenia `authentication` może ograniczyć częstość `missing_token` na proces
+   (domyślnie 20 na sekundę w gateway'u i w starterze), a nadmiar wyłącznie liczyć; nazwy liczników dziś różne
+   (`gateway_audit_authentication_suppressed_total`, `mcp_server_audit_authentication_suppressed_total`), więc SIEM i alerty
+   potrzebują albo wspólnej nazwy, albo listy. Do rozstrzygnięcia przez ws-00 razem z ws-05.
 
 3.0.0-alpha-6: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-6`,
 tag `v3.0.0-alpha-6`. API bez usunięć; zgłoszenia pięciu serwerów ws-04 i template'u. Instrukcja dla serwerów

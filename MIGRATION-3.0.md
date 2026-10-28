@@ -1,6 +1,6 @@
 # Migracja z 2.x na 3.0
 
-Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-11**.
+Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-12**.
 
 ## Zmiana modelu
 
@@ -308,6 +308,62 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
+## Zmiany w 3.0.0-alpha-12
+
+Pracowano na `3.0.0-alpha-12-SNAPSHOT`. Przejście z alpha-11: podbić `mcp-platform.version` (BOM) na `3.0.0-alpha-12`, co
+podnosi też `mcp-contracts` do 2.2.5; w każdym serwerze i w template'cie rozszerzyć `DevProfileLoopbackTest` (pierwszy
+punkt) i usunąć wykluczenia platformy, jeśli są (drugi). Reszta zmienia się tylko tam, gdzie punkty mówią wprost.
+
+- **`DevProfileLoopbackTest` sprawdza prawdziwą konfigurację serwera (A11-M1).** Test z alpha-11 woła pomocnika na
+  domyślnych ustawieniach startera i nie dotykał niczego z serwera; serwer z `@SpringBootApplication(exclude =
+  PlatformSecurityAutoConfiguration.class)` miał w `dev` zielone testy mimo `server.address=0.0.0.0`. Nowy plik
+  `mcp-app/src/test/java/.../app/DevProfileLoopbackTest.java`:
+
+  ```java
+  package pl.aiwcorpo.mcp.<system>.app;
+
+  import org.junit.jupiter.api.Test;
+  import org.springframework.beans.factory.annotation.Autowired;
+  import org.springframework.context.ApplicationContext;
+  import pl.aiwcorpo.mcp.platform.test.DevProfileGuardAssertions;
+
+  /**
+   * The dev profile (test keys, no mTLS) does not listen on an address other machines can reach: the rule is the
+   * starter's, and the server's own context must have the guard that applies it.
+   */
+  class DevProfileLoopbackTest extends ServerTestSupport {
+
+      @Autowired
+      ApplicationContext context;
+
+      @Test
+      void devListensOnLoopbackOnly() {
+          DevProfileGuardAssertions.assertDevProfileLoopbackRule();
+          DevProfileGuardAssertions.assertServerIsGuarded(context);
+      }
+  }
+  ```
+
+  Klasa dziedziczy po `ServerTestSupport` (ten sam kontekst, bez dodatkowego startu aplikacji). Test nie zależy od hosta:
+  nie startuje niczego z adresem sieciowym.
+- **Wykluczenie platformy odmawiane także w `dev` (A10-L3, A11-M1).** `spring.autoconfigure.exclude` z klasą
+  `pl.aiwcorpo.mcp.platform.*` i `exclude` na `@SpringBootApplication`, które usuwa jeden z beanów z
+  `PlatformPresenceCheck.REQUIRED_BEANS`, kończą start we wszystkich profilach poza kontekstem testowym. Serwer, który miał
+  takie wykluczenie tylko dla `dev`, musi je usunąć (guard jest tym, co wiąże relaksacje `dev` z adresem pętli zwrotnej).
+  Slice'y (`@WebMvcTest` itd.) bez platformy działają jak dotąd.
+- **Zdarzenie `authentication` według CC-120 (kontrakty 2.2.5).** Starter emitował już `missing_token`, `client_certificate_rejected`,
+  `jwks_unavailable` i `replay_store_unavailable` z `errorCode: upstream_unavailable`; teraz jest to sprawdzane wektorami
+  `audit-events/` 2.2.5 i schematem dla każdego powodu (`AuthenticationAuditVectorsTest`). Nowe: limit zdarzeń `missing_token`
+  na proces, `aiwcorpo.mcp.platform.internal-jwt.missing-token-events-per-second` (domyślnie 20, minimum 1; wartość mniejsza
+  od 1 zatrzymuje start), nadmiar tylko w liczniku `mcp_server_audit_authentication_suppressed_total{reason="missing_token"}`.
+  Serwery nic nie zmieniają; SIEM i alerty, które liczą `missing_token`, powinny dodać ten licznik.
+- **Cięcie tekstu** (A11-L1): długi ciąg `.`, `-`, `_` albo znaków łączących po krótkiej nazwie nie zostawia już nazwy
+  (`"x(@all" + 70 * "."` przy limicie 75 daje `x(@`, nie `x(@all` z kropkami). Test serwera porównujący dokładnie ucięty
+  tekst z takim ogonem trzeba poprawić.
+- **Rozpoznanie jaru test frameworka** (A11-L2): ścieżka musi kończyć się na `spring-test-<wersja>.jar` albo
+  `spring-boot-test-<wersja>.jar` (z `!/` w jarze zagnieżdżonym); katalog o takiej nazwie już się nie liczy. Nic do zmiany w serwerach.
+- **Devcontainer** (A10-L2) nadal bez zmian: decyzja o dwóch opcjach czeka na człowieka (STATUS, "Do decyzji").
+
 ## Zmiany w 3.0.0-alpha-11
 
 Pracowano na `3.0.0-alpha-11-SNAPSHOT`. Przejście z alpha-10: podbić wersję BOM na `3.0.0-alpha-11` i zamienić
@@ -344,8 +400,9 @@ mówią wprost.
   `ServerTestSupport` znikają z tego pliku; zależność `mcp-platform-test` (scope `test`) już jest. Pomocnik buduje własne
   środowisko (bez zmiennych i właściwości hosta, z sygnałami poda i systemd ustawionymi na stałe), więc przechodzi tak samo
   na macOS, w kontenerze, na podzie i pod systemd. Szczególny adres: `DevProfileGuardAssertions.assertDevProfileRefusesAddress("10.0.0.5")`.
-  Co do tego, że `application-dev.yml` serwera nie ustawia adresu spoza pętli zwrotnej: pilnuje tego guard w każdym
-  `@SpringBootTest` z profilem `dev` (zły adres kończy start kontekstu).
+  Ten test sam nie dotyka konfiguracji serwera; od alpha-12 uzupełnia go `assertServerIsGuarded(context)` (sekcja
+  "Zmiany w 3.0.0-alpha-12"). Zdanie, że guard pilnuje adresu w każdym `@SpringBootTest`, jest prawdziwe tylko wtedy, gdy
+  guard istnieje w kontekście serwera (alpha-11 tego nie sprawdzała).
 - **Odmowa `dev` w kontenerze** (A10-L2) wymienia devcontainer, Codespaces, Toolbox i Distrobox i podaje, jak pracować:
   uruchom serwer poza kontenerem, uruchom go z testu (kontekst testowy nie jest sprawdzany) albo użyj profilu innego niż
   `dev` z TLS, mTLS i Redisem jak we wdrożeniu. Dopuszczenia `dev` w devcontainerze nie ma; decyzja czeka na człowieka.

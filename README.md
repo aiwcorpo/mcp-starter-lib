@@ -5,7 +5,7 @@ gateway'em: nie loguje użytkowników, nie decyduje o uprawnieniach do narzędzi
 robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadczenie do systemu docelowego,
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
-Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 2.1.1.
+Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 2.2.5.
 Wersja: **3.0.0-alpha-11** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
@@ -182,7 +182,9 @@ Serwer nie wstaje, gdy:
 - `spring.autoconfigure.exclude` (także `SPRING_AUTOCONFIGURE_EXCLUDE`) z klasą z pakietu `pl.aiwcorpo.mcp.platform.`
   albo `exclude` na `@SpringBootApplication`, które usuwa `platformConfigurationGuard`, `internalJwtVerifier`,
   `internalJwtFilter`, `toolCallbackAuditPostProcessor` lub `platformMcpServerCustomizer` (auto-konfiguracja serwera MCP
-  platformy), poza `dev` i poza kontekstem testowym;
+  platformy), w każdym profilu, także `dev` (guard wiąże relaksacje `dev` z adresem pętli zwrotnej), poza kontekstem
+  testowym. Kontekst testowy serwera sprawdza `DevProfileGuardAssertions.assertServerIsGuarded(context)` (patrz "Testy
+  serwera bez gateway'a");
 - profil `dev` jest aktywny razem z innym profilem (także przez grupę profili). Relaksacje działają tylko, gdy
   `dev` jest **jedynym aktywnym** profilem; `spring.profiles.default=dev` się nie liczy;
 - poza takim profilem `dev`: włączono `dev-pat`, `allow-test-keys`, `replay-store: memory` albo
@@ -432,8 +434,13 @@ schematu **przed** zapisem audytu: niezgodność to C10 `internal_error`, zdarze
 ERROR z ścieżką pola (`/assignee (type)`), bez wartości. Komunikat SDK (`output validation failed`) nie dochodzi do klienta.
 
 **Audyt odrzuceń.** Odrzucone żądanie (brak/zły JWT, certyfikat, niedostępny JWKS albo Redis) zostawia w audycie C8
-zdarzenie `authentication` (`outcome=denied`, `reason` = kod odrzucenia) tylko z pól dozwolonych w kontraktach 2.1.1,
-bez `sub`, `client`, `tool` z niezweryfikowanego tokenu.
+zdarzenie `authentication` (`outcome=denied`, `reason` = kod odrzucenia) tylko z pól dozwolonych w kontraktach 2.2.5
+(CC-071, CC-120), bez `sub`, `client`, `tool` z niezweryfikowanego tokenu. Powody to kody z wektorów JWT oraz
+`client_certificate_rejected` (certyfikat gateway'a) i, z `errorCode: upstream_unavailable` (odpowiedź 503),
+`jwks_unavailable` i `replay_store_unavailable` (magazyn `jti`). Zdarzeń `missing_token` proces zapisuje najwyżej
+`aiwcorpo.mcp.platform.internal-jwt.missing-token-events-per-second` na sekundę (domyślnie 20, jak w gateway'u, minimum 1);
+nadmiar nie trafia do audytu, tylko do licznika `mcp_server_audit_authentication_suppressed_total` (tag `reason`), a żądanie
+dostaje 401 jak zawsze. Pozostałe powody nie są ograniczane.
 
 Gateway usuwa `confirmation_code` z argumentów przed wywołaniem serwera (C11), więc schemat serwera go nie
 deklaruje.
@@ -465,17 +472,29 @@ systemd, kontener) nie obejmuje kontekstu budowanego przez Spring TestContext, w
 Kubernetesie i pod runnerem uruchomionym jako usługa systemd. Aplikacja uruchamiana ręcznie z `SpringApplication` w
 takim środowisku nadal jest odrzucana, także w teście. Dlatego test, że `dev` nie nasłuchuje poza pętlą zwrotną, nie
 startuje aplikacji z `--server.address=0.0.0.0` (na hoście CI w kontenerze odmowa "wdrożenie" pada przed sprawdzeniem
-adresu i komunikatu o adresie nie ma), tylko wywołuje pomocnika, który sprawdza regułę guarda bez zależności od hosta:
+adresu i komunikatu o adresie nie ma), tylko wywołuje pomocnika, który sprawdza regułę guarda bez zależności od hosta, a
+konfigurację samego serwera sprawdza na jego prawdziwym kontekście `@SpringBootTest` w profilu `dev` (ten sam kontekst, co
+w pozostałych testach, więc bez kosztu drugiego startu):
 
 ```java
-class DevProfileLoopbackTest {
+class DevProfileLoopbackTest extends ServerTestSupport {
+
+    @Autowired
+    ApplicationContext context;
 
     @Test
     void devListensOnLoopbackOnly() {
         DevProfileGuardAssertions.assertDevProfileLoopbackRule();
+        DevProfileGuardAssertions.assertServerIsGuarded(context);
     }
 }
 ```
+
+`assertServerIsGuarded(context)` wymaga, żeby w kontekście serwera były wszystkie beany z
+`PlatformPresenceCheck.REQUIRED_BEANS` (guard, weryfikator i filtr JWT, post-processor audytu, customizer serwera MCP) i
+żeby `server.address` było adresem pętli zwrotnej. Kontekst testowy nie podlega odmowie wykluczenia (slice'y pomijają
+platformę celowo), więc bez tego sprawdzenia serwer z `exclude` na `PlatformSecurityAutoConfiguration` przeszedłby wszystkie
+swoje testy.
 
 `DevProfileGuardAssertions` (`pl.aiwcorpo.mcp.platform.test`) buduje własne środowisko (bez zmiennych procesu i
 właściwości systemowych hosta, z ustawionymi na stałe sygnałami poda i systemd) i woła `PlatformConfigurationGuard`;
