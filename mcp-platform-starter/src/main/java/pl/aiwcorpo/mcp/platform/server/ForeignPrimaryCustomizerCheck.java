@@ -17,7 +17,7 @@ import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
  */
 public class ForeignPrimaryCustomizerCheck implements BeanFactoryPostProcessor {
 
-    static final String STARTER_BEAN = "platformMcpServerCustomizer";
+    public static final String STARTER_BEAN = "platformMcpServerCustomizer";
 
     @Override
     public void postProcessBeanFactory(ConfigurableListableBeanFactory beanFactory) throws BeansException {

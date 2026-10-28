@@ -1,5 +1,6 @@
 package pl.aiwcorpo.mcp.platform.test;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.HashMap;
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
 import pl.aiwcorpo.mcp.platform.test.app.ProbeServer;
+import pl.aiwcorpo.mcp.platform.test.excluding.ExcludingMcpServer;
 import pl.aiwcorpo.mcp.platform.test.excluding.ExcludingServer;
 
 /** Development relaxations outside the {@code dev} profile stop the server instead of weakening it. */
@@ -52,7 +54,11 @@ class StartupRefusalTest {
                 .rootCause().hasMessageContaining("server-id").hasMessageContaining("jwks-uri");
     }
 
-    /** As SERVER_ADDRESS or --server.address would do on a real deployment (above the starter's default). */
+    /**
+     * As SERVER_ADDRESS or --server.address would do on a real deployment (above the starter's default). On a host the
+     * starter takes for a deployment (a CI container, a pod, systemd) the start is refused for that reason first, so
+     * the message about the address cannot be asserted here; {@link DevProfileGuardAssertions} checks the rule itself.
+     */
     @Test
     void devOnANetworkAddress() {
         Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
@@ -60,7 +66,23 @@ class StartupRefusalTest {
         assertThatThrownBy(() -> new SpringApplicationBuilder(ProbeServer.class).web(WebApplicationType.SERVLET)
                 .properties(properties).properties("server.port=0").profiles("dev")
                 .run("--server.address=0.0.0.0").close())
-                .rootCause().hasMessageContaining("loopback");
+                .rootCause().satisfiesAnyOf(
+                        cause -> assertThat(cause).hasMessageContaining("loopback"),
+                        cause -> assertThat(cause).hasMessageContaining("the 'dev' profile is active in"));
+    }
+
+    @Test
+    void devOnANetworkAddressOnAPodUnderSystemdIsStillRefused() {
+        Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
+        properties.put("spring.ai.mcp.server.name", "startup-refusal-test");
+        properties.put("INVOCATION_ID", "7f3a9c1e5b2d4e8f");
+        properties.put("KUBERNETES_SERVICE_HOST", "10.96.0.1");
+        properties.put("KUBERNETES_SERVICE_PORT", "443");
+        assertThatThrownBy(() -> new SpringApplicationBuilder(ProbeServer.class).web(WebApplicationType.SERVLET)
+                .properties(properties).properties("server.port=0").profiles("dev")
+                .run("--server.address=0.0.0.0").close())
+                .hasMessageContaining("the 'dev' profile is active in");
+        DevProfileGuardAssertions.assertDevProfileRefusesAddress("0.0.0.0");
     }
 
     /** The same properties pass in a Spring test context (DeploymentContextTest); started by hand they are a deployment. */
@@ -94,5 +116,14 @@ class StartupRefusalTest {
         assertThatThrownBy(() -> new SpringApplicationBuilder(ExcludingServer.class).web(WebApplicationType.SERVLET)
                 .properties(properties).properties("server.port=0").profiles("prod").run().close())
                 .hasMessageContaining("are not defined").hasMessageContaining("platformConfigurationGuard");
+    }
+
+    @Test
+    void excludingThePlatformServerCustomizerInCodeOutsideDev() {
+        Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
+        properties.put("spring.ai.mcp.server.name", "startup-refusal-test");
+        assertThatThrownBy(() -> new SpringApplicationBuilder(ExcludingMcpServer.class).web(WebApplicationType.SERVLET)
+                .properties(properties).properties("server.port=0").profiles("prod").run().close())
+                .hasMessageContaining("are not defined").hasMessageContaining("platformMcpServerCustomizer");
     }
 }

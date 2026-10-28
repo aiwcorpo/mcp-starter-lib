@@ -1,6 +1,6 @@
 # Migracja z 2.x na 3.0
 
-Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-10**.
+Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-11**.
 
 ## Zmiana modelu
 
@@ -148,12 +148,12 @@ podbiciem sprawdź wszystkie `@Tool`:
 | --- | --- |
 | `Integer`, `Long`, `int`, `Double`... | `@ArgumentLimits(minimum = ..., maximum = ...)`, oba obowiązkowe (opcjonalny `limit` w jira, gitlab, opensearch, servicedesk) |
 | `List<String>`, `String[]` | `@ArgumentLimits(maxItems = ..., maxLength = ..., pattern = ...)`: `maxItems` obowiązkowe, reszta opisuje elementy |
-| rekord (filtr, np. `JqlFilter`) | `@ArgumentLimits` na każdym komponencie rekordu; komponent opcjonalny z `@Nullable`; nic na samym parametrze |
+| rekord (filtr, np. `JqlFilter`) | `@ArgumentLimits` na każdym komponencie rekordu; komponent opcjonalny z `@Nullable` (`org.springframework.lang.Nullable` albo `org.jspecify.annotations.Nullable`, oba działają na wejściu i na wyniku, test `BoundedSchemaTest`); nic na samym parametrze |
 | `List<Rekord>` | `@ArgumentLimits(maxItems = ...)` na parametrze, limity na komponentach rekordu |
-| `Map<String, String>` | zastąpić rekordem z nazwanymi polami albo listą rekordów `{name, value}` (mapa nie daje się ograniczyć, start zatrzymany) |
+| `Map<String, String>` (argument) | zastąpić rekordem z nazwanymi polami albo listą rekordów `{name, value}` z `@ArgumentLimits(maxItems = ...)` na liście i limitami na obu komponentach (mapa nie daje się ograniczyć, start zatrzymany) |
 | `Object`, `JsonNode`, klasa niebędąca rekordem | zastąpić rekordem |
 | ręcznie pisany schemat | każdy poziom: `additionalProperties: false`, `maxLength`, `maxItems` + `items`, `minimum`/`maximum`; mapa tylko z `maxProperties`, `propertyNames.maxLength` i ograniczoną wartością; po `prefixItems` wymagane `items` (`false` albo ograniczony) |
-| `pattern` | musi zaczynać się od `^`, kończyć na `$` i nie mieć `|` poza grupą: `[0-9]+` -> `^[0-9]+$`, `^a|b$` -> `^(?:a|b)$` (confluence: `NON_BLANK_LINE`) |
+| `pattern` | musi zaczynać się od `^`, kończyć na `$` i nie mieć `|` poza grupą: `[0-9]+` -> `^[0-9]+$`, `^a|b$` -> `^(?:a|b)$` (`NON_BLANK_LINE` z confluence, `^(?=.*\S)[^\u0000-\u001f\u007f]+$`, jest już zgodny: zakotwiczony, bez `|`, więc nic do zmiany) |
 
 **jira.** `McpToolsConfiguration.boundedFilter` i `withBoundedFilter` do usunięcia: `JqlFilter` dostaje
 `@ArgumentLimits(minLength = 1, maxLength = JiraTool.MAX_NAME)` na `status` i `type`, `maxLength = MAX_USERNAME` na
@@ -307,6 +307,73 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
   długi ciąg trzeba poprawić.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
+
+## Zmiany w 3.0.0-alpha-11
+
+Pracowano na `3.0.0-alpha-11-SNAPSHOT`. Przejście z alpha-10: podbić wersję BOM na `3.0.0-alpha-11` i zamienić
+`DevProfileLoopbackTest` (pierwszy punkt). Reszta kodu serwera zgodnego z alpha-10 zmienia się tylko tam, gdzie punkty
+mówią wprost.
+
+- **`DevProfileLoopbackTest` w każdym serwerze i w template'cie (A10-M1).** Test z alpha-5..alpha-10 startuje aplikację
+  przez `SpringApplicationBuilder(...).profiles("dev")` z `--server.address=0.0.0.0` i oczekuje komunikatu o adresie. W
+  CI w kontenerze (executor Docker, `/.dockerenv`), na Kubernetesie i pod systemd start jest odrzucany wcześniej, z
+  komunikatem "the 'dev' profile is active in ...", więc asercja pada. Nie usuwaj asercji i nie ustawiaj nic w CI: zamień
+  ciało testu na pomocnika, który sprawdza regułę guarda niezależnie od hosta. Cały plik
+  `mcp-app/src/test/java/.../app/DevProfileLoopbackTest.java` ma wyglądać tak (pakiet i nazwa serwera zostają Twoje):
+
+  ```java
+  package pl.aiwcorpo.mcp.<system>.app;
+
+  import org.junit.jupiter.api.Test;
+  import pl.aiwcorpo.mcp.platform.test.DevProfileGuardAssertions;
+
+  /**
+   * The dev profile (test keys, no mTLS) does not listen on an address other machines can reach. The rule is the
+   * starter's; this test keeps it from disappearing unnoticed from the starter version the server builds against.
+   */
+  class DevProfileLoopbackTest {
+
+      @Test
+      void devListensOnLoopbackOnly() {
+          DevProfileGuardAssertions.assertDevProfileLoopbackRule();
+      }
+  }
+  ```
+
+  Importy `TestGateway`, `SpringApplicationBuilder` i `assertThatThrownBy` oraz odwołania do `McpServerApplication` i
+  `ServerTestSupport` znikają z tego pliku; zależność `mcp-platform-test` (scope `test`) już jest. Pomocnik buduje własne
+  środowisko (bez zmiennych i właściwości hosta, z sygnałami poda i systemd ustawionymi na stałe), więc przechodzi tak samo
+  na macOS, w kontenerze, na podzie i pod systemd. Szczególny adres: `DevProfileGuardAssertions.assertDevProfileRefusesAddress("10.0.0.5")`.
+  Co do tego, że `application-dev.yml` serwera nie ustawia adresu spoza pętli zwrotnej: pilnuje tego guard w każdym
+  `@SpringBootTest` z profilem `dev` (zły adres kończy start kontekstu).
+- **Odmowa `dev` w kontenerze** (A10-L2) wymienia devcontainer, Codespaces, Toolbox i Distrobox i podaje, jak pracować:
+  uruchom serwer poza kontenerem, uruchom go z testu (kontekst testowy nie jest sprawdzany) albo użyj profilu innego niż
+  `dev` z TLS, mTLS i Redisem jak we wdrożeniu. Dopuszczenia `dev` w devcontainerze nie ma; decyzja czeka na człowieka.
+  Testy serwera, które sprawdzały treść odmowy, nie istnieją (poza `DevProfileLoopbackTest` wyżej).
+- **Kontekst testowy po jarze, nie po samej nazwie klasy** (A10-L1): klasa z pakietu `org.springframework.test.context`
+  albo `org.springframework.boot.test.context` liczy się jako test framework tylko wtedy, gdy jest załadowana z jaru
+  `spring-test` albo `spring-boot-test`. Własna klasa serwera w tych pakietach nie wyłącza już kontroli. To siatka, nie
+  granica: kod serwera, który świadomie fałszuje jar albo stos, nie jest w modelu zagrożeń.
+- **Kontrola obecności beanów** (A10-L3) obejmuje też `platformMcpServerCustomizer`: `@SpringBootApplication(exclude =
+  PlatformMcpServerAutoConfiguration.class)` kończy start poza `dev` i poza kontekstem testowym (bez tego SDK walidowałoby
+  wejście przed opakowaniem audytu). Serwer, który tak robił, ma przestać.
+- **Cięcie tekstu** (A10-L4, uwagi z migracji): `-`, `.` i znaki łączące (`\p{M}`) liczą się do słowa, więc
+  `/@all-hands` daje `/@`, nie `/@all-`. Cięcie na limicie zostaje, gdy cofnięcie usunęłoby więcej niż 64 jednostki albo
+  przed końcem nie ma ogranicznika: ciąg CJK po jednym nawiasie nie znika. **Pojedyncze długie słowo** (bez spacji i bez
+  ogranicznika w zachowywanej części) daje teraz prefiks z `truncated=true`, wcześniej pusty tekst (`plain("supercalifragilistic", 5)`
+  to `super`). Wybrane prefiks, bo bez ogranicznika nie ma początku tokenu, a pusty opis ukrywał, że coś w ogóle było;
+  ograniczniki (`@`, `/`, `(`) nadal są granicą cofania (`@allison` do 4 jednostek to `@`). Test serwera porównujący
+  dokładny ucięty tekst, który oczekiwał pustego tekstu, trzeba poprawić. `UntrustedText.cut(tekst, -1)` rzuca
+  `IllegalArgumentException("maxLength must not be negative")`.
+- **Komunikat walidacji zagnieżdżonego pola** podaje ścieżkę i limit: `jql_filter.status is longer than 40 characters`,
+  `jql_filter.labels[1] is longer than 8 characters`, `jql_filter.status is required` (wcześniej
+  `jql_filter is longer than allowed characters`). Ścieżka składa się z nazw pól ze schematu i indeksów tablic; klucz mapy
+  z wejścia to `*`; wartości nie ma w komunikacie. Test serwera sprawdzający stary komunikat trzeba poprawić.
+- **`Map` w wyniku narzędzia**: gdy wynik zawiera `UntrustedText`, starter publikuje `outputSchema` z typu rekordu, a mapa
+  nie ma nazw pól ani typu wartości, więc start kończy się błędem "cannot describe the result type". Zamiast
+  `Map<String, String>` zwracaj listę rekordów `Pair(String name, String value)` albo rekord z nazwanymi polami; tekst z
+  systemu w wartości to `UntrustedText`, nie `String`. Wynik bez `UntrustedText` nie dostaje schematu i mapa w nim nie jest
+  sprawdzana.
 
 ## Wdrożenie
 

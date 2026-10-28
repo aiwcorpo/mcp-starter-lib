@@ -21,6 +21,40 @@ względem alpha-1 (zgodne dla ws-03). Zmiany po smoke teście "konsument według
 Wersja Mavena `3.0.0-alpha-1` zamiast `3.0.0-alpha`: kolejne wydania wstępne (`alpha-2`, `beta-1`) sortują się
 poprawnie (`ComparableVersion`), a `3.0.0-alpha` byłoby mniejsze od `alpha-1` i niejednoznaczne.
 
+3.0.0-alpha-11: (w pracy na `3.0.0-alpha-11-SNAPSHOT`; po wydaniu: `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-11`, tag `v3.0.0-alpha-11`). Instrukcja dla serwerów: `MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-11". Kamienie:
+1. A10-M1. `DevProfileGuardAssertions` w `mcp-platform-test` (`assertDevProfileLoopbackRule()`, `assertDevProfileRefusesAddress(adres)`):
+   woła `PlatformConfigurationGuard` z własnym środowiskiem (bez zmiennych procesu i właściwości systemowych hosta, z ustawionymi na
+   stałe `INVOCATION_ID` i `KUBERNETES_*`), więc reguła loopbacku jest sprawdzana tak samo na każdym hoście. Wybrane zamiast
+   zmiany komunikatu odmowy w EPP (jedna przyczyna z dwoma powodami): serwery i tak muszą zmienić jeden plik, a test nie zależy od
+   treści komunikatów platformy. `StartupRefusalTest.devOnANetworkAddress` też nie zakłada hosta (akceptuje oba komunikaty), nowy
+   `devOnANetworkAddressOnAPodUnderSystemdIsStillRefused` ma `INVOCATION_ID` i `KUBERNETES_*` ustawione. Instrukcja zamiany testu w serwerach: MIGRATION.
+2. A10-L1. Kontekst testowy: klasa z pakietów test frameworka musi pochodzić z jaru `spring-test` / `spring-boot-test` (`CodeSource`,
+   `StackWalker` z `RETAIN_CLASS_REFERENCE`). Własna klasa w pakiecie Springa w jarze serwera nie wyłącza już trzech kontroli
+   (`TestContextExemptionTest`, klasa `ForgedTestFrameworkClass` w `org.springframework.boot.test.context` w katalogu testów startera).
+   To nadal siatka, nie granica: kod serwera, który świadomie fałszuje jar albo stos (np. własny jar o nazwie `spring-test-*.jar`),
+   nie jest w modelu zagrożeń; kto steruje kodem serwera, steruje też jego konfiguracją. Opisane w README.
+3. A10-L2. Komunikat odmowy dla sygnału kontenera wymienia devcontainer, Codespaces, Toolbox i Distrobox i podaje trzy wyjścia
+   (poza kontenerem; z testu; profil inny niż `dev` z TLS, mTLS i Redisem). README (konfiguracja i "Uruchomienie lokalne") to samo.
+   Decyzji o dopuszczeniu `dev` w devcontainerze NIE podjęto (opcja (2) przeglądu: znaczniki `REMOTE_CONTAINERS`, `CODESPACES`,
+   `/run/.toolboxenv`); czeka na człowieka.
+4. A10-L3. `PlatformPresenceCheck` wymaga też `platformMcpServerCustomizer` (`ForeignPrimaryCustomizerCheck.STARTER_BEAN` jest publiczne):
+   `exclude = PlatformMcpServerAutoConfiguration.class` kończy start poza `dev` (`StartupRefusalTest.excludingThePlatformServerCustomizerInCodeOutsideDev`).
+   Wyjątki dla kontekstu testowego mają testy (`TestContextExemptionTest`); mutacje M1 i M2 z przeglądu (bez wyjątku testowego w
+   `PlatformPresenceCheck` i w `refuseExcludedPlatform`) są teraz czerwone (sprawdzone ręcznie). NIE zrobione z kierunku przeglądu:
+   odmowa wykluczenia `PlatformAuthAutoConfiguration` i `PlatformSecurityAutoConfiguration` w `dev` oraz zawężenie wyjątku do
+   slice'ów; w `dev` wykluczenie auth nadal daje `initialize` bez JWT na loopbacku (rezyduum, nie w zakresie alpha-11).
+5. A10-L4. `UntrustedText.cut`: `-`, `.` i `\p{M}` są znakami słowa przy cofaniu (`/@all-hands` -> `/@`); gdy cofnięcie usunęłoby
+   więcej niż 64 jednostki albo przed końcem nie ma ogranicznika, cięcie zostaje na limicie (CJK po jednym nawiasie, blob po `#`
+   zachowane); ujemny limit w `cut` to `IllegalArgumentException`. Pojedyncze długie słowo: wybrany prefiks z `truncated=true`
+   zamiast pustego tekstu (bez ogranicznika nie ma początku tokenu; pusty opis ukrywał, że tekst istniał); opisane w MIGRATION.
+   Zmiana zachowania: `plain("@allison", 4)` to `@` (było pusty tekst). Testy: `TextHygieneTest` (4 nowe).
+6. A10-L5. Literówka w README ("tnie"), `containerd` na liście cgroup.
+7. Uwagi z migracji serwerów. Komunikat walidacji zagnieżdżonego pola: ścieżka z nazw pól schematu i indeksów (`jql_filter.status`),
+   limit z węzła schematu, klucz mapy z wejścia jako `*`, bez wartości (`ToolInputValidator.target`, test
+   `aNestedViolationIsNamedByPathAndLimitWithoutTheValue`). Wiersz MIGRATION o `NON_BLANK_LINE` poprawiony (wzorzec jest zgodny, nic
+   do zmiany). `@Nullable` z jspecify na komponentach rekordu wejścia działa (test `BoundedSchemaTest`), na wyniku działał już
+   (`ToolOutputSchemas.isNullable`); MIGRATION wymienia obie adnotacje. `Map` w wyniku: opisana alternatywa (lista par) w MIGRATION.
+
 3.0.0-alpha-10: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-alpha-10`, tag `v3.0.0-alpha-10` (praca na `3.0.0-alpha-10-SNAPSHOT`, nic innego w `~/.m2` nie instalowane). Ostatnia przed migracją serwerów. Instrukcja dla serwerów: `MIGRATION-3.0.md`, sekcja "Zmiany w 3.0.0-alpha-10". Kamienie:
 1. A9-M2. `DevProfileEnvironment`: `CloudPlatform.NONE` nie jest środowiskiem wdrożenia; kontekst budowany przez Spring TestContext
    (ramki `org.springframework.test.context.` i `org.springframework.boot.test.context.` na stosie wątku, który buduje kontekst)

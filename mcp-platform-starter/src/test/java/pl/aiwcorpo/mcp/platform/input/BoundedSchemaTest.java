@@ -27,6 +27,19 @@ class BoundedSchemaTest {
             @ArgumentLimits(minimum = 0, maximum = 1000) @Nullable Integer page) {
     }
 
+    record JSpecifyFilter(
+            @ArgumentLimits(minLength = 1, maxLength = 40) @org.jspecify.annotations.Nullable String status,
+            @ArgumentLimits(maxLength = 20) String type) {
+    }
+
+    static class JSpecifyNested {
+        @Tool(name = "search", description = "d")
+        @ToolRisk(RiskLevel.READ_ONLY)
+        public String search(JSpecifyFilter filter) {
+            return "";
+        }
+    }
+
     record Field(@ArgumentLimits(maxLength = 20) String name, @ArgumentLimits(maxLength = 200) String value) {
     }
 
@@ -110,6 +123,15 @@ class BoundedSchemaTest {
         assertThat(fields.path("maxItems").asInt()).isEqualTo(10);
         assertThat(fields.path("items").path("properties").path("value").path("maxLength").asInt()).isEqualTo(200);
         assertThat(properties.path("limit").path("minimum").asInt()).isEqualTo(1);
+    }
+
+    @Test
+    void aJSpecifyNullableOnARecordComponentMakesItOptionalInTheInputSchema() {
+        JsonNode filter = schemaOf(new JSpecifyNested()).path("properties").path("filter");
+
+        assertThat(filter.path("required").toString()).contains("type").doesNotContain("status");
+        assertThat(filter.path("properties").path("status").path("maxLength").asInt()).isEqualTo(40);
+        validatorOf(new JSpecifyNested()).validate("{\"filter\":{\"type\":\"bug\"}}");
     }
 
     @Test

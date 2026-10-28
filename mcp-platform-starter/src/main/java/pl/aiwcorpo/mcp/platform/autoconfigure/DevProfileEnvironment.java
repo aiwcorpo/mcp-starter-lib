@@ -3,6 +3,7 @@ package pl.aiwcorpo.mcp.platform.autoconfigure;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.CodeSource;
 import java.util.Optional;
 import java.util.function.BooleanSupplier;
 import java.util.regex.Pattern;
@@ -30,6 +31,8 @@ import org.springframework.core.env.Environment;
 final class DevProfileEnvironment {
 
     private static final Pattern CONTAINER_CGROUP = Pattern.compile("/(docker|kubepods|libpod|crio|containerd)[-/.]");
+
+    private static final Pattern TEST_FRAMEWORK_JAR = Pattern.compile("/spring-(boot-)?test-[0-9][^/]*\\.jar");
 
     private DevProfileEnvironment() {
     }
@@ -97,11 +100,28 @@ final class DevProfileEnvironment {
         return Optional.empty();
     }
 
-    /** True when Spring's test framework is building this context (it is on the stack of the thread that does it). */
+    /**
+     * True when Spring's test framework is building this context: a class of the spring-test or spring-boot-test jar
+     * is on the stack of the thread that does it. The class is recognized by its package and by the jar it was loaded
+     * from, so a class a server puts in {@code org.springframework.boot.test.context} does not count. Still a net
+     * and not a boundary: whoever can add a jar named like spring-test to the server's classpath controls its code
+     * anyway.
+     */
     static boolean inSpringTestContext() {
-        return StackWalker.getInstance().walk((Stream<StackWalker.StackFrame> frames) -> frames
-                .anyMatch(frame -> frame.getClassName().startsWith("org.springframework.test.context.")
-                        || frame.getClassName().startsWith("org.springframework.boot.test.context.")));
+        return StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE)
+                .walk((Stream<StackWalker.StackFrame> frames) -> frames
+                        .anyMatch(frame -> fromTestFramework(frame.getDeclaringClass())));
+    }
+
+    private static boolean fromTestFramework(Class<?> type) {
+        String name = type.getName();
+        if (!name.startsWith("org.springframework.test.context.")
+                && !name.startsWith("org.springframework.boot.test.context.")) {
+            return false;
+        }
+        CodeSource source = type.getProtectionDomain().getCodeSource();
+        return source != null && source.getLocation() != null
+                && TEST_FRAMEWORK_JAR.matcher(source.getLocation().toString()).find();
     }
 
     private static boolean set(String value) {
@@ -109,8 +129,15 @@ final class DevProfileEnvironment {
     }
 
     static String refusal(String signal) {
-        return "the 'dev' profile is active in " + signal + ": it removes TLS, mTLS and Redis from the server and is "
+        String message = "the 'dev' profile is active in " + signal + ": it removes TLS, mTLS and Redis from the server and is "
                 + "meant for a developer's machine; remove SPRING_PROFILES_ACTIVE=dev (and 'dev' from any .env or unit "
                 + "file) from this deployment";
+        if (signal.startsWith("a container")) {
+            message += ". A devcontainer, Codespaces, Toolbox or Distrobox is a container too: run the server outside "
+                    + "the container, run it from a test (TestGateway starts it in the test context, which is not "
+                    + "checked), or use a profile other than 'dev' with TLS, mTLS and Redis configured as in a "
+                    + "deployment (see 'Uruchomienie lokalne' in the starter's README)";
+        }
+        return message;
     }
 }

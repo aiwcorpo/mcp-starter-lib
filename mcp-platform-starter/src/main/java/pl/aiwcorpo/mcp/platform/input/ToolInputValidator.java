@@ -316,9 +316,9 @@ public final class ToolInputValidator {
 
     private String describe(Error error) {
         String keyword = error.getKeyword();
-        String argument = argumentOf(error, keyword);
-        JsonNode rule = argument == null ? JSON.missingNode() : properties.path(argument);
-        String subject = argument == null ? "arguments" : argument;
+        Target target = target(error, keyword);
+        JsonNode rule = target.rule();
+        String subject = target.name();
         return switch (keyword) {
             case "required" -> subject + " is required";
             case "additionalProperties", "unevaluatedProperties", "propertyNames" ->
@@ -336,14 +336,48 @@ public final class ToolInputValidator {
         };
     }
 
-    /** The declared top-level argument the error is about, or {@code null} (undeclared names are not echoed). */
-    private String argumentOf(Error error, String keyword) {
-        String name = null;
-        if ("required".equals(keyword)) {
-            name = error.getProperty();
-        } else if (error.getInstanceLocation() != null && error.getInstanceLocation().getNameCount() > 0) {
-            name = error.getInstanceLocation().getName(0);
+    /** What a violation is about: the path of the field as the schema declares it, and the schema node that failed. */
+    private record Target(String name, JsonNode rule) {
+    }
+
+    /**
+     * Follows the instance location through the schema, so a violation in a nested field is named by its path
+     * ({@code jql_filter.status}) and carries that field's limit. A segment is written only when the schema declares
+     * it (a property) or when it is an array index; a map key is client input and becomes {@code *}. Whatever cannot
+     * be followed is reported as {@code arguments}.
+     */
+    private Target target(Error error, String keyword) {
+        List<String> segments = new ArrayList<>();
+        if (error.getInstanceLocation() != null) {
+            for (int i = 0; i < error.getInstanceLocation().getNameCount(); i++) {
+                segments.add(error.getInstanceLocation().getName(i));
+            }
         }
-        return name != null && declared.contains(name) ? name : null;
+        if ("required".equals(keyword) && error.getProperty() != null) {
+            segments.add(error.getProperty());
+        }
+        StringBuilder path = new StringBuilder();
+        JsonNode node = resolve(root);
+        for (String segment : segments) {
+            if (node == null) {
+                break;
+            }
+            JsonNode property = node.path("properties").get(segment);
+            if (property != null) {
+                path.append(path.isEmpty() ? "" : ".").append(segment);
+                node = resolve(property);
+            } else if (segment.matches("[0-9]{1,9}") && (node.has("items") || node.has("prefixItems"))) {
+                int index = Integer.parseInt(segment);
+                JsonNode prefix = node.path("prefixItems");
+                path.append("[").append(index).append("]");
+                node = resolve(index < prefix.size() ? prefix.get(index) : node.get("items"));
+            } else if (node.path("additionalProperties").isObject()) {
+                path.append(path.isEmpty() ? "" : ".").append("*");
+                node = resolve(node.get("additionalProperties"));
+            } else {
+                node = null;
+            }
+        }
+        return new Target(path.isEmpty() ? "arguments" : path.toString(), node == null ? JSON.missingNode() : node);
     }
 }

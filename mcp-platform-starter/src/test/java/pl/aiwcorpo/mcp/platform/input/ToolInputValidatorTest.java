@@ -53,6 +53,28 @@ class ToolInputValidatorTest {
     }
 
     @Test
+    void aNestedViolationIsNamedByPathAndLimitWithoutTheValue() {
+        String schema = """
+                {"type":"object","additionalProperties":false,"required":["jql_filter"],"properties":{
+                  "jql_filter":{"type":"object","additionalProperties":false,"required":["status"],"properties":{
+                    "status":{"type":"string","maxLength":40},
+                    "labels":{"type":"array","maxItems":3,"items":{"type":"string","maxLength":8}}}}}}
+                """;
+        ToolInputValidator validator = ToolInputValidator.compile(tool(schema), ToolInputPolicy.STRICT);
+        String secret = "LEAK-marker-9f3a";
+
+        String tooLong = assertThatThrownBy(() -> validator.validate("{\"jql_filter\":{\"status\":\"" + secret.repeat(4) + "\"}}"))
+                .actual().getMessage();
+        String item = assertThatThrownBy(() -> validator.validate("{\"jql_filter\":{\"status\":\"a\",\"labels\":[\"ok\",\"" + secret + "\"]}}"))
+                .actual().getMessage();
+        String missing = assertThatThrownBy(() -> validator.validate("{\"jql_filter\":{}}")).actual().getMessage();
+
+        assertThat(tooLong).contains("jql_filter.status is longer than 40 characters").doesNotContain(secret);
+        assertThat(item).contains("jql_filter.labels[1] is longer than 8 characters").doesNotContain(secret);
+        assertThat(missing).contains("jql_filter.status is required");
+    }
+
+    @Test
     void anUndeclaredArgumentIsRefusedAndItsNameIsNotEchoed() {
         String message = messageOf("{\"issueKey\":\"A-1\",\"leak_name_77\":\"x\"}");
 

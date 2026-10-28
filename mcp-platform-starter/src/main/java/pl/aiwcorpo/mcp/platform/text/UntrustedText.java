@@ -80,15 +80,23 @@ public record UntrustedText(String kind, String format, String text, boolean tru
      *
      * <p>A cut inside a word would make a new token at the end of the text ({@code "hello @allison"} cut to 10
      * units is {@code "hello @all"}). So the cut moves back to the last white space when the part of the last
-     * word it would keep is at most {@value #WORD_LIMIT} units. In a longer unbroken run (text in a script written
-     * without spaces, a blob, {@code "((((...(@allison"}) the cut drops the word characters at its end
-     * ({@code [\p{L}\p{N}_]}), so no name or scheme is left half written after a delimiter; a run made only of
-     * word characters is cut where the limit falls, because there is no delimiter for a token to start from. The
-     * cut never splits a surrogate pair.
+     * word it would keep is at most {@value #WORD_LIMIT} units and white space precedes it. Otherwise (the word
+     * starts the text, or it is longer: text in a script written without spaces, a blob,
+     * {@code "((((...(@allison"}) the cut drops the word characters at its end ({@code [\p{L}\p{N}\p{M}_.-]}: a
+     * name such as {@code all-hands} or {@code a.b} is one word), so no name or scheme is left half written after a
+     * delimiter ({@code "/@all-hands"} becomes {@code "/@"}, not {@code "/@all-"}). When that would drop more than
+     * {@value #WORD_LIMIT} units, or the text up to the limit has no delimiter at all, the cut stays where the limit
+     * falls: a long run is not a short name for a token to complete, and without a delimiter there is no token start.
+     * A single word longer than the limit therefore keeps its first {@code maxLength} units
+     * ({@code truncated} is true) instead of becoming empty. The cut never splits a surrogate pair.
      *
      * @return the text to keep, without trailing white space; shorter than {@code text} exactly when something was cut
+     * @throws IllegalArgumentException when {@code maxLength} is negative
      */
     public static String cut(String text, int maxLength) {
+        if (maxLength < 0) {
+            throw new IllegalArgumentException("maxLength must not be negative");
+        }
         if (text.length() <= maxLength) {
             return text;
         }
@@ -102,14 +110,14 @@ public record UntrustedText(String kind, String format, String text, boolean tru
             while (start > 0 && !Character.isWhitespace(text.charAt(start - 1))) {
                 start--;
             }
-            if (end - start <= WORD_LIMIT) {
+            if (start > 0 && end - start <= WORD_LIMIT) {
                 end = start;
             } else {
                 int word = end;
                 while (word > start && isWordCharacter(Character.codePointBefore(text, word))) {
                     word -= Character.charCount(Character.codePointBefore(text, word));
                 }
-                if (word > start) {
+                if (word > start && end - word <= WORD_LIMIT) {
                     end = word;
                 }
             }
@@ -118,7 +126,12 @@ public record UntrustedText(String kind, String format, String text, boolean tru
     }
 
     private static boolean isWordCharacter(int point) {
-        return Character.isLetterOrDigit(point) || point == '_';
+        if (Character.isLetterOrDigit(point) || point == '_' || point == '-' || point == '.') {
+            return true;
+        }
+        int type = Character.getType(point);
+        return type == Character.NON_SPACING_MARK || type == Character.COMBINING_SPACING_MARK
+                || type == Character.ENCLOSING_MARK;
     }
 
     private static String withUnifiedLineBreaks(String raw) {

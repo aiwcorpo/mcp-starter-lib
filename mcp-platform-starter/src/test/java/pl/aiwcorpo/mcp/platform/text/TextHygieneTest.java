@@ -75,7 +75,41 @@ class TextHygieneTest {
         assertThat(UntrustedText.plain("hello @allison", 6).text()).isEqualTo("hello");
         assertThat(UntrustedText.plain("hello world", 5).text()).isEqualTo("hello");
         assertThat(UntrustedText.markdown("see ![x](https://host/a.png) now", 12).text()).isEqualTo("see");
-        assertThat(UntrustedText.plain("@allison", 4)).isEqualTo(new UntrustedText("untrusted-data", "text/plain", "", true));
+        assertThat(UntrustedText.plain("@allison", 4)).isEqualTo(new UntrustedText("untrusted-data", "text/plain", "@", true));
+    }
+
+    @Test
+    void aSingleLongWordKeepsItsPrefixInsteadOfBecomingEmpty() {
+        UntrustedText word = UntrustedText.plain("supercalifragilistic", 5);
+        assertThat(word.text()).isEqualTo("super");
+        assertThat(word.truncated()).isTrue();
+        assertThat(UntrustedText.plain("abcdefgh ijk", 4).text()).isEqualTo("abcd");
+    }
+
+    @Test
+    void aHyphenOrDotInANameDoesNotLeaveAShorterMention() {
+        assertThat(UntrustedText.plain("x".repeat(60) + "/@all-hands", 66).text()).isEqualTo("x".repeat(60) + "/@");
+        assertThat(UntrustedText.plain("x".repeat(60) + "/@all.hands", 66).text()).isEqualTo("x".repeat(60) + "/@");
+        assertThat(UntrustedText.plain("x".repeat(60) + "/@alli\u0301son", 66).text()).isEqualTo("x".repeat(60) + "/@");
+        assertThat(UntrustedText.plain("https://evil.example/", 14).text()).isEqualTo("https://");
+        assertThat(UntrustedText.plain("/@all-hands", 6).text()).isEqualTo("/@");
+    }
+
+    @Test
+    void oneDelimiterBeforeALongRunDoesNotRemoveTheRun() {
+        UntrustedText cjk = UntrustedText.plain("\u300c" + "\u4e2d".repeat(300), 200);
+        assertThat(cjk.text()).hasSize(200).startsWith("\u300c\u4e2d");
+        assertThat(cjk.truncated()).isTrue();
+        assertThat(UntrustedText.plain("(" + "\u4e2d\u6587".repeat(200), 300).text()).hasSize(300);
+        assertThat(UntrustedText.plain("#" + "a".repeat(5000), 4000).text()).hasSize(4000);
+    }
+
+    @Test
+    void aNegativeLimitIsRefusedWithAMessage() {
+        assertThatThrownBy(() -> UntrustedText.cut("abc", -1)).isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("maxLength must not be negative");
+        assertThatThrownBy(() -> UntrustedText.plain("abc", -1)).isInstanceOf(IllegalArgumentException.class);
+        assertThat(UntrustedText.cut("abc", 0)).isEmpty();
     }
 
     @Test
