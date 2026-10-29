@@ -251,7 +251,11 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         if (containers.stream().anyMatch(container -> !builder.queryConstraint(user, container).granted().isEmpty())) {
             return;
         }
-        Optional<ResolvedResource> probe = GrantProbe.withoutScopes(type, value);
+        String container = "ServiceDesk::Ticket".equals(type) ? "ServiceDesk::Queue" : "Confluence::Page";
+        String linkContainer = builder.queryConstraint(user, container).virtualServer().filter(ids -> !ids.isEmpty())
+                .map(ids -> ids.first()).orElse(null);
+        Optional<ResolvedResource> probe = GrantProbe.withoutScopes(type, value,
+                linkContainer != null ? linkContainer : "ServiceDesk::Ticket".equals(type) ? "0" : "NOGRANT");
         if (probe.isEmpty()) {
             return;
         }

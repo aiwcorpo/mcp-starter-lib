@@ -46,6 +46,11 @@ class ScopeGrantTest {
     private Map<String, ResolvedResource> tickets = Map.of();
     private boolean failing;
 
+    @org.junit.jupiter.api.BeforeEach
+    void defaults() {
+        types = List.of("service-account");
+    }
+
     @BeforeAll
     static void start() throws Exception {
         gateway = TestGateway.start("mcp-servicedesk");
@@ -65,6 +70,8 @@ class ScopeGrantTest {
         engine.close();
         gateway.close();
     }
+
+    private List<String> types = List.of("service-account");
 
     private ResourcePolicy policy() {
         ToolRiskRegistry registry = new ToolRiskRegistry(ToolRiskRegistry.Unclassified.FAIL);
@@ -90,11 +97,16 @@ class ScopeGrantTest {
             }
         };
         return new ResourcePolicy(engine, new ResourceResolvers(List.of(resolver)), registry,
-                new AuditLogger("test.scope.grant", "mcp-servicedesk"), "mcp-servicedesk", "servicedesk", java.util.List.of("service-account"), 200);
+                new AuditLogger("test.scope.grant", "mcp-servicedesk"), "mcp-servicedesk", "servicedesk", types, 200);
     }
 
     private String call(List<String> groups, String ticketId) {
-        CallerContext claims = new CallerContext("6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "sdreader", groups, "claude-code", null, null,
+        return call(groups, ticketId, null);
+    }
+
+    private String call(List<String> groups, String ticketId, Map<String, List<String>> link) {
+        CallerContext claims = new CallerContext("6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "sdreader", groups, "claude-code",
+                link == null ? null : "queues", link,
                 "get_ticket", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", "00000000000000-0000000", null);
         try (ResourceContext context = ResourceContext.open(claims, "get_ticket", Map.of("ticketId", ticketId))) {
             policy().authorizeCall();
@@ -156,6 +168,29 @@ class ScopeGrantTest {
         tickets = Map.of("T-5", ResolvedResource.of("ServiceDesk::Ticket", "T 5", Map.of("id", "T 5")));
 
         assertThat(call(List.of("mcp-servicedesk-read", "mcp-servicedesk-queue-42"), "T-5")).isEqualTo(DENIED);
+    }
+
+    @Test
+    void aLinkOnlyNarrowsAndDoesNotAddTheNeedForAScopeGroup() {
+        // A reader of the system with no queue group: without a link the policy lets the user's own rights decide, and the link must not change that.
+        tickets = Map.of("T-1", ticket("T-1", "42"), "T-2", ticket("T-2", "7"));
+        types = List.of("user-secret");
+        List<String> reader = List.of("mcp-servicedesk-read");
+        Map<String, List<String>> link = Map.of("servicedeskQueues", List.of("42"));
+
+        assertThat(call(reader, "T-1")).isEqualTo("allowed");
+        assertThat(call(reader, "T-1", link)).isEqualTo("allowed");
+        assertThat(call(reader, "T-2", link)).as("outside the link, after the resolution").isEqualTo(DENIED);
+        assertThat(call(reader, "T-404", link)).isEqualTo(DENIED);
+    }
+
+    @Test
+    void theServiceAccountWithoutAQueueGrantIsStillRefusedThroughALink() {
+        tickets = Map.of("T-1", ticket("T-1", "42"));
+        types = List.of("service-account");
+
+        assertThat(call(List.of("mcp-servicedesk-read"), "T-1", Map.of("servicedeskQueues", List.of("42")))).isEqualTo(DENIED);
+        assertThat(asked).isEmpty();
     }
 
     @Test
