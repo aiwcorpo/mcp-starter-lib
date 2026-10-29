@@ -337,8 +337,20 @@ environment:
 ```
 
 Zmienna `MCP_DEVSTACK_ACKNOWLEDGED` jest czytana tylko ze środowiska procesu (od beta-5; property o tej nazwie, także z `application.yml` czy
-`DynamicPropertySource`, nie liczy się), a właściwość `aiwcorpo.mcp.platform.devstack.acknowledged` z dowolnego źródła konfiguracji, więc obie zgody
-pochodzą z dwóch różnych miejsc.
+`DynamicPropertySource`, nie liczy się), a właściwość `aiwcorpo.mcp.platform.devstack.acknowledged` z dowolnego źródła konfiguracji (relaxed binding przyjmuje ją też ze zmiennej
+`AIWCORPO_MCP_PLATFORM_DEVSTACK_ACKNOWLEDGED`, więc obie mogą stać w jednym bloku `environment:` stosu). Chroni to przed przeniesieniem zgody plikiem
+konfiguracyjnym spakowanym w jar albo obraz, nie przed skopiowaniem całego bloku `environment:`; obraz z `ENV` o obu zgodach i profilu `devstack`
+dalej ją ma, a poza kluczami `test-*` zostają wymagania produkcji (mTLS, https).
+
+**Test serwera pod `devstack` w kontekście Springa.** Zmienna procesu nie da się podać przez `@DynamicPropertySource` ani `@TestPropertySource`
+(takie źródło nie jest środowiskiem procesu), więc test kontekstu pod profilem `devstack` dostaje odmowę startu. Dwa wyjścia: ustawić zmienną w konfiguracji
+Surefire/Failsafe (`<environmentVariables><MCP_DEVSTACK_ACKNOWLEDGED>true</MCP_DEVSTACK_ACKNOWLEDGED></environmentVariables>`) w osobnym wykonaniu, albo testować konfigurację bez
+kontekstu: `new PlatformConfigurationGuard(props, environment, name -> "true").afterPropertiesSet()` (trzeci argument to źródło zmiennych procesu). Testy serwera
+z `TestGateway` zostają w profilu `dev`.
+
+**Wersja w szablonie.** Serwery wygenerowane z `mcp-server-template` mają wersję startera we właściwości `mcp-platform.version` w `<properties>` pomu, a BOM
+importują przez `${mcp-platform.version}`; podbicie to zmiana tej jednej właściwości (`<mcp-platform.version>3.0.0-beta-6</mcp-platform.version>`). Serwery bez tej
+właściwości podbijają `<version>` w bezpośrednim imporcie `mcp-platform-bom` w `dependencyManagement`. Kontrakty wchodzą przez BOM w obu wariantach.
 
 `devstack` zdejmuje wyłącznie zakaz kluczy `test-*` i opublikowanych kluczy testowych. Reszta jest jak na produkcji i nadal wymagana: TLS i mTLS
 (`server.ssl.client-auth=need`), Redis na `jti`, https do JWKS i do repozytorium paczek, `policy.state-dir`, brak `dev-pat`. Bez obu zgód albo z drugim

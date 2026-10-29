@@ -239,8 +239,10 @@ bez `dev-pat`, `replay-store: memory`, `mtls.required: false`) poza tym, że prz
 (`internal-jwt.allow-test-keys` i `policy.allow-test-keys`). Wymaga dwóch zgód jednocześnie, żeby skopiowana konfiguracja nie trafiła na produkcję:
 właściwość `aiwcorpo.mcp.platform.devstack.acknowledged=true` **i** zmienna środowiskowa `MCP_DEVSTACK_ACKNOWLEDGED=true` (obie w konfiguracji stosu
 deweloperskiego, nie w obrazie serwera). Zmienna jest czytana wyłącznie ze środowiska procesu: właściwość o tej nazwie z `application.yml`, linii poleceń
-albo `SPRING_APPLICATION_JSON` nie wystarcza. Strażnik konfiguracji działa przed pobraniem paczki polityk i kluczy (jawne wywołanie na początku beanów, także przy
-`spring.main.lazy-initialization=true`). Musi być jedynym aktywnym profilem. Każdy start loguje `WARN event=devstack_profile`, a metryka
+albo `SPRING_APPLICATION_JSON` nie wystarcza. Strażnik konfiguracji działa przed pobraniem paczki polityk i kluczy przez beany platformy (jawne wywołanie na początku `policyEngine`, `gatewayKeys`,
+`jtiReplayStore` i `internalJwtVerifier`, także przy `spring.main.lazy-initialization=true`); własne `GatewayKeys` i `JtiReplayStore` serwera są tworzone przed
+`internalJwtVerifier`, ale po strażniku, o ile nie robią I/O w konstruktorze. Wersja startera w serwerze: właściwość `mcp-platform.version` (szablon) albo `<version>`
+importu `mcp-platform-bom` (opis w `MIGRATION-3.0.md`). Musi być jedynym aktywnym profilem. Każdy start loguje `WARN event=devstack_profile`, a metryka
 `mcp_server_devstack_active` ma wartość 1 (manifest C6 nie ma pola na środowisko). Klucze `test-*` pod innym profilem niż `dev` i `devstack` są
 odrzucane jak dotąd, więc klucz produkcyjny nie może nazywać się `test-...`, a klucz stosu nie przejdzie na produkcji.
 

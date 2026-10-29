@@ -50,7 +50,8 @@ public class PlatformConfigurationGuard implements InitializingBean {
     /**
      * Property and environment variable that must both be {@code true} for the {@code devstack} profile. The variable is read from
      * the environment of the process only: a property of that name in {@code application.yml}, on the command line or in
-     * {@code SPRING_APPLICATION_JSON} does not count, so the two acknowledgements come from two different places.
+     * {@code SPRING_APPLICATION_JSON} does not count, so a configuration file packed in the image cannot carry the acknowledgement. The
+     * property may come from anywhere (the same block of the stack's {@code environment:} sets both).
      */
     public static final String DEVSTACK_ACK_PROPERTY = "aiwcorpo.mcp.platform.devstack.acknowledged";
     public static final String DEVSTACK_ACK_ENVIRONMENT = "MCP_DEVSTACK_ACKNOWLEDGED";

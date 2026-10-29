@@ -59,9 +59,15 @@ public class PlatformAuthAutoConfiguration {
     }
 
     @Bean
-    InternalJwtVerifier internalJwtVerifier(McpPlatformProperties props, GatewayKeys keys, JtiReplayStore replayStore,
+    InternalJwtVerifier internalJwtVerifier(McpPlatformProperties props, ObjectProvider<GatewayKeys> keysProvider,
+                                            ObjectProvider<JtiReplayStore> replayStoreProvider,
                                             ObjectProvider<PlatformConfigurationGuard> guard) {
-        guard.getIfAvailable();    // the guard first
+        // The guard before the keys and the replay store are resolved, so that a server's own GatewayKeys or JtiReplayStore
+        // (extension points) is created after the refusal too, not only the platform's. The guard is absent only in a Spring
+        // test context that leaves the platform out on purpose (PlatformPresenceCheck refuses its absence everywhere else).
+        guard.getIfAvailable();
+        GatewayKeys keys = keysProvider.getObject();
+        JtiReplayStore replayStore = replayStoreProvider.getObject();
         McpPlatformProperties.InternalJwt jwt = props.getInternalJwt();
         return new InternalJwtVerifier(
                 new InternalJwtVerifier.Settings(jwt.getIssuer(), props.getServerId(), jwt.getClockSkew(),

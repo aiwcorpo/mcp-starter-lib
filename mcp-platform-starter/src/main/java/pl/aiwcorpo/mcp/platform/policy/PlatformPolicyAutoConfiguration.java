@@ -28,8 +28,10 @@ import pl.aiwcorpo.mcp.platform.resource.ResourceResolvers;
 public class PlatformPolicyAutoConfiguration {
 
     /**
-     * Eager: a server without a signed policy must not finish starting. After the configuration guard, stated here (the guard is
-     * created by the first line) and not an accident of bean order: the guard refuses test keys and plain http outside dev and devstack, and nothing may be pulled before it has.
+     * Eager: a server without a signed policy must not finish starting. The configuration guard is created by the first line of the
+     * method, before anything is pulled: it refuses test keys and plain http outside dev and devstack. The order is stated in
+     * code, not left to bean order. {@code getIfAvailable} and not {@code getObject}: the guard is missing only in a Spring test
+     * context that leaves the platform out on purpose; {@code PlatformPresenceCheck} refuses its absence everywhere else.
      */
     @Bean(destroyMethod = "close")
     @Lazy(false)
