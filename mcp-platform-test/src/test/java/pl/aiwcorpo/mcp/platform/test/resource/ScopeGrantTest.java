@@ -159,8 +159,26 @@ class ScopeGrantTest {
         tickets = Map.of("T-1", ticket("T-1", "7"));
         failing = true;
 
-        assertThat(call(List.of("mcp-servicedesk-read", "mcp-servicedesk-queue-42"), "T-1")).isEqualTo(DENIED);
+        ch.qos.logback.classic.Logger auditLog = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("test.scope.grant");
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> lines = new ch.qos.logback.core.read.ListAppender<>();
+        lines.start();
+        auditLog.addAppender(lines);
+        ch.qos.logback.classic.Logger resourceLog =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(pl.aiwcorpo.mcp.platform.resource.ResourcePolicy.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs = new ch.qos.logback.core.read.ListAppender<>();
+        logs.start();
+        resourceLog.addAppender(logs);
+        try {
+            assertThat(call(List.of("mcp-servicedesk-read", "mcp-servicedesk-queue-42"), "T-1")).isEqualTo(DENIED);
+        } finally {
+            auditLog.detachAppender(lines);
+            resourceLog.detachAppender(logs);
+        }
         assertThat(asked).as("the resolver was asked: the queue of a ticket is not in its id").containsExactly("T-1");
+        assertThat(lines.list).anySatisfy(line -> assertThat(line.getFormattedMessage())
+                .contains("\"reason\":\"upstream_unavailable\"", "\"outcome\":\"error\"").doesNotContain("not_granted"));
+        assertThat(logs.list).anySatisfy(line -> assertThat(line.getFormattedMessage())
+                .contains("event=resolver_failed_hidden", "java.lang.IllegalStateException").doesNotContain("the system is down"));
     }
 
     @Test

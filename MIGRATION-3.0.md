@@ -308,6 +308,15 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
+## Z beta-8 na beta-9
+
+Dla serwerów podbicie wersji: `<mcp-platform.version>3.0.0-beta-9</mcp-platform.version>` (szablon) albo `<version>3.0.0-beta-9</version>` w imporcie `mcp-platform-bom`; kontrakty bez zmian (4.1.0). Zmiany zachowania:
+
+- **Link tylko zawęża (poprawka błędu beta-8).** `Confluence::Page` i `ServiceDesk::Ticket` wywołane przez link (`vsScopes`) odmawiały czytelnikowi z tokenem użytkownika bez grupy zakresu (`mcp-confluence-space-*`, `mcp-servicedesk-queue-*`), choć bez linku
+  ten sam czytelnik czytał według `read.cedar`. Teraz link nie dodaje wymogu grupy zakresu. Jeśli serwer albo jego testy obchodziły to grupą zakresu dla linku, **usuń obejście**. Konto serwisowe bez grantu kolejki nadal jest odmawiane, także przez link.
+- **Awaria systemu przy rozwiązywaniu strony albo zgłoszenia dla konta serwisowego:** na zewnątrz dalej `not_found_or_denied`, ale audyt ma teraz `policy_decision` z powodem `upstream_unavailable` i `outcome: error` (było `not_granted`),
+  a log `WARN event=resolver_failed_hidden` z klasą wyjątku i statusem HTTP (bez treści odpowiedzi). Alert na awarię systemu może więc opierać się na powodzie `upstream_unavailable`, a przestój nie wygląda już jak fala odmów.
+
 ## Z beta-7 na beta-8
 
 Dla serwerów praktycznie tylko podbicie wersji: `<mcp-platform.version>3.0.0-beta-8</mcp-platform.version>` (szablon) albo `<version>3.0.0-beta-8</version>` w imporcie `mcp-platform-bom`; kontrakty bez zmian (4.1.0).

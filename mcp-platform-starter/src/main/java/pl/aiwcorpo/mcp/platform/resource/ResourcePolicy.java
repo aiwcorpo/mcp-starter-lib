@@ -173,9 +173,15 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         }
         if ("not_resolved".equals(reason) && failure.get() != null) {
             if (hidesResolverFailure(result.deniedType().orElse(""), failure.get())) {
-                // For a service account the system sees everything: a failure on an existing page or ticket must not differ from a missing one.
-                deny(caller, tool, result.deniedType().orElse(null), result.deniedId().orElse(null), null, "not_granted", snapshot,
-                        ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
+                // For a service account the system sees everything: a failure on an existing page or ticket must not differ from a missing one
+                // for the client. The operator sees the real cause: an outage must not look like a wave of denials (reason not_granted).
+                Throwable cause = failure.get().getCause() == null ? failure.get() : failure.get().getCause();
+                LOG.warn("event=resolver_failed_hidden tool=\"{}\" type={} exception={} status={}", tool, result.deniedType().orElse("-"),
+                        cause.getClass().getName(), cause instanceof org.springframework.web.client.RestClientResponseException http
+                                ? http.getStatusCode().value() : "-");
+                audit.policyRefused(caller, tool, registry.riskOf(tool).orElse(null), "upstream_unavailable",
+                        ToolErrorCode.NOT_FOUND_OR_DENIED.code(), argsLength());
+                throw new SanitizedToolException(new McpErrorMapper.SafeError(ToolErrorCode.NOT_FOUND_OR_DENIED.code(), NOT_FOUND));
             }
             throw failure.get();
         }
