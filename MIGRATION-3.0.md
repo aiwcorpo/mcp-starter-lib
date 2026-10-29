@@ -308,6 +308,14 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
+## Z beta-4 na beta-5
+
+Dla serwerów tylko podbicie wersji: `<version>3.0.0-beta-5</version>` w imporcie BOM (kontrakty 3.1.0). Zmiany dotyczą profilu `devstack` i kolejności startu:
+zgoda `MCP_DEVSTACK_ACKNOWLEDGED=true` musi być **zmienną środowiskową procesu** (właściwość o tej nazwie z `application.yml`, linii poleceń,
+`SPRING_APPLICATION_JSON` albo `DynamicPropertySource` nie wystarcza; druga zgoda, `aiwcorpo.mcp.platform.devstack.acknowledged`, może pochodzić z
+dowolnego źródła konfiguracji), a strażnik konfiguracji działa przed pobraniem paczki polityk i kluczy JWT, także przy
+`spring.main.lazy-initialization=true`. Stos deweloperski, który ustawiał zgodę inaczej niż przez zmienną środowiskową, ustawia ją w `environment:` kontenera.
+
 ## Z beta-3 na beta-4
 
 Jedna nowa możliwość i nic obowiązkowego dla serwera, który działa na beta-3. Wersja: `<version>3.0.0-beta-4</version>` w imporcie BOM.
