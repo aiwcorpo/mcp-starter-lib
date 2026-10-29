@@ -31,7 +31,7 @@
     <properties>
         <java.version>25</java.version>
         <spring-ai.version>2.0.0</spring-ai.version>
-        <mcp-contracts.version>4.0.0</mcp-contracts.version>
+        <mcp-contracts.version>4.0.1</mcp-contracts.version>
         <!-- Same version Spring Security 7.1.0 (Boot 4.1.0) brings; Boot does not manage it. -->
         <nimbus-jose-jwt.version>10.9</nimbus-jose-jwt.version>
         <json-schema-validator.version>3.0.8</json-schema-validator.version>

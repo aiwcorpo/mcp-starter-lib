@@ -92,7 +92,12 @@ class GatewayTransportTest {
                     .httpRequestCustomizer(GATEWAY.asGateway(user -> { }, "Bearer " + PAT, type)).build();
             try (McpSyncClient client = McpClient.sync(transport).requestTimeout(Duration.ofSeconds(20)).build()) {
                 client.initialize();
-                assertThat(text(call(client, "probe_credential"))).isEqualTo("\"" + type.wireName() + " Bearer " + PAT + "\"");
+                if (type == BackendCredential.Type.USER_SECRET) {
+                    assertThat(text(call(client, "probe_credential"))).isEqualTo("\"" + type.wireName() + " Bearer " + PAT + "\"");
+                } else {
+                    // The server is configured for user-secret (TestGateway); another type is a mismatch and the call is refused.
+                    assertThat(text(call(client, "probe_credential"))).contains("\"error\":\"internal_error\"").doesNotContain(PAT);
+                }
             }
         }
     }

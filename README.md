@@ -5,7 +5,7 @@ gateway'em: nie loguje użytkowników, nie decyduje o uprawnieniach do narzędzi
 robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadczenie do systemu docelowego,
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
-Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 4.0.0.
+Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 4.0.1.
 Wersja: **3.0.0-beta-6** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
@@ -561,6 +561,11 @@ reguły takie jak "konto serwisowe czyta kolejkę Service Desku tylko w przyznan
 Serwer bez ustalonego typu nie wstaje, a `ResourcePolicy` utworzona bez niego rzuca wyjątek; `EntityBuilder.withCredentialType` z wartością spoza
 czterech typów (`user-oauth`, `user-secret`, `token-exchange`, `service-account`) kończy wywołanie `internal_error`.
 
+**Rozjazd typu.** Gateway podaje typ użytego poświadczenia w `X-MCP-Credential-Type`; Cedar dostaje typ z konfiguracji. Gdy się różnią (administrator przełączył system na konto
+serwisowe, a serwer ma `credential-type: user-secret`), reguła napisana dla konta serwisowego nie zadziałałaby, więc starter **odmawia wywołania przed oceną polityki**:
+`internal_error` na zewnątrz (błąd konfiguracji, nie winy wywołującego), `ERROR event=credential_type_mismatch` w logu i zdarzenie `policy_decision` z powodem `credential_type_mismatch`.
+Kod i powód wg kontraktów 4.1.0 (zmiana po ich wydaniu).
+
 ### Jedna odmowa dla zasobów i kolejność ocen (CC-146)
 
 `not_found_or_denied` ma zawsze jeden tekst, `The resource does not exist or you do not have access to it.` (stała w schemacie C10): starter ustawia go
@@ -569,8 +574,14 @@ wywołaniem resolvera, przed budową encji z danych systemu i przed odczytem kla
 identyfikatora argumentu (i jego kontenera, który identyfikator nazywa: projekt klucza zgłoszenia, grupa ścieżki GitLaba) z najmniej restrykcyjną
 klasyfikacją (`category: ""`, puste `labels` i `tags`). Odmowa sondy to `not_found_or_denied` bez wywołania systemu; zgoda przepuszcza do pełnej
 oceny po rozwiązaniu. Dzięki temu wywołujący bez grantu na typ nie dostaje `internal_error` (brak wymaganej klasyfikacji) ani `upstream_unavailable` z
-resolvera, które zdradziłyby istnienie zasobu. Typy bez kontenera w identyfikatorze (`Confluence::Page`, `ServiceDesk::Ticket`) nie mają sondy i są oceniane po
-rozwiązaniu, jak dotąd. Kolejka Service Desku poza zakresem linku w argumencie to `not_found_or_denied`, nie `access_denied`.
+resolvera, które zdradziłyby istnienie zasobu. W audycie odmowa sondy ma powód `policy_forbid` (odmówiła polityka: `forbid`, brak `permit` albo zawężenie linku).
+**Ograniczenie sondy:** zakłada, że polityka jest monotoniczna w klasyfikacji, czyli klasyfikacja tylko zawęża (reguły `forbid`, jak w przykładach kontraktów). Reguła, która przyznaje
+dostęp dopiero przy wybranej klasyfikacji (`permit ... when resource.category == "public"`), odrzuciłaby sondę z `category: ""` mimo grantu; i odwrotnie, sonda z kontenera z identyfikatora
+odmówi zgłoszenia przeniesionego do projektu, na który użytkownik ma grant, a na stary projekt klucza nie ma. W obu przypadkach odmowa jest bezpieczna (fail-closed), ale nieprecyzyjna.
+**`Confluence::Page` i `ServiceDesk::Ticket`** (kontener nie wynika z identyfikatora) nie mają sondy. Tu "grant" to zakres w paczce (grupa `mcp-confluence-space-*`, `mcp-servicedesk-queue-*`
+w `static.json`): wywołujący bez żadnego zakresu na przestrzeń/stronę albo kolejkę dostaje `not_found_or_denied` przed resolverem, a zasób, który system zwrócił poza zakresami wywołującego i
+którego nie da się ocenić (brak klasyfikacji, zły identyfikator), też `not_found_or_denied` zamiast `internal_error`. Polityka, która przyznaje odczyt tych typów bez zakresów
+(`servicedesk-read` z przykładów kontraktów), nie wystarcza więc wywołującemu bez zakresu kolejki; paczka serwera Service Desku musi nadawać zakresy kolejek. Kolejka Service Desku poza zakresem linku w argumencie to `not_found_or_denied`, nie `access_denied`.
 
 ### `@ResourceRef` i `ResourceResolver`
 
@@ -688,8 +699,10 @@ String jql = scope.jql(Set.of("status", "assignee", "text"))   // pola warunków
   Serwer może dopuścić mniej (`scope.jql(fields)` z podzbiorem; `scope.jql(fields, orderFields)` zawęża też `ORDER BY`), nigdy więcej: pole spoza listy to
   `IllegalArgumentException` już przy tworzeniu buildera (stałe `StructuredQuery.JQL_CONDITION_FIELDS` itd.). Nowe pole wymaga zmiany kontraktu. Jedno `ORDER BY` na zapytanie;
 - wartość: 1 do 1000 znaków, bez znaków zakazanych przez higienę tekstu (CC-121) i bez znaków sterujących, do 30 warunków; naruszenie to
-  `IllegalArgumentException` (platforma zgłasza `invalid_argument`). Znaków Lucene (`* ? ~`) w wyszukiwaniu tekstowym starter nie escapuje (tak jak odniesienie): działają
-  w obrębie tego jednego warunku i nie sięgają poza zakres;
+  `IllegalArgumentException` (platforma zgłasza `invalid_argument`). Znaków Lucene (`* ? ~ ( ) - + ! ^ : / & |`) w wyszukiwaniu tekstowym starter nie escapuje, tak jak odniesienie
+  kontraktu (`query-rendering.mjs`; decyzja koordynatora). Nie poszerza to zakresu: literał kończy tylko nieescapowany `"`, a `\` i `"` są escapowane, więc składnia Lucene działa wyłącznie wewnątrz
+  warunku `text ~ "..."`, który jest koniunkcją z zakresem (`project in (...)`, `space in (...)`) i z uprawnieniami użytkownika w systemie. Zmienia się tylko semantyka wyszukiwania
+  (`*` i `?` jako wildcard, `foo-bar` jako wykluczenie, `x~` jako fuzzy); gdy kontrakt tego zażąda, escapowanie dojdzie z nową wersją odniesienia;
 - `scope.cql(Set.of("title", "label", ...))` dla Confluence (zawężenie do przestrzeni linku); `scope.jql(fields, true)` i
   `scope.cql(fields, true)` (typ `Confluence::Space`) dodają zakresy z grup (konto serwisowe; rzucają, gdy grup brak: pusty zakres to brak zapytania, nigdy zapytanie bez filtra);
 - `jqlProjectClause()`, `cqlSpaceClause()` zostają jako gotowe fragmenty (identyfikatory cytowane przez `QueryScope.quote`, który odrzuca znaki sterujące);
@@ -703,7 +716,11 @@ String jql = scope.jql(Set.of("status", "assignee", "text"))   // pola warunków
   `scope.resolveIndexArgument(argument, odpowiedź)` rzuca `invalid_argument` dla wzorca, listy po przecinku, `_all` i nazwy z kropką na początku (przed jakimkolwiek wywołaniem systemu), a
   `not_found_or_denied` dla aliasu, strumienia, indeksu poza zakresem i nazwy nieznanej systemowi. Do żądań dodaj `QueryScope.OPENSEARCH_SEARCH_PARAMETERS`
   (`expand_wildcards=open`, `ignore_unavailable=true`, `allow_no_indices=true`). Między rozwiązaniem a zapytaniem jest krótkie okno (administrator mógłby zamienić indeks na alias o tej samej nazwie):
-  ryzyko znane i przyjęte w kontrakcie. `QueryScope.requireNoAliases` jest przestarzałe (zapytanie do nazw nie wymaga odmowy). Dzięki temu `aggregate_logs` może wrócić po wdrożeniu tego
+  ryzyko znane i przyjęte w kontrakcie; **nie cache'uj odpowiedzi `_resolve/index` między wywołaniami narzędzia**, bo wtedy okno trwa tyle co TTL. Cel wyszukiwania, `_count` i agregacji
+  daje `scope.opensearchSearchTarget(odpowiedź)`: puste `Optional` znaczy "nie wykonuj zapytania" (żądanie z pustym celem przeszukuje wszystkie indeksy, więc nie sklejaj nazw sam).
+  Nazwy niezgodne ze wzorcem `OpenSearchIndexName` (np. z `%` albo `=`) są pomijane, więc nazwy są bezpieczne w ścieżce bez kodowania. Do `_resolve/index` dodaj
+  `QueryScope.OPENSEARCH_RESOLVE_PARAMETERS` (`expand_wildcards=open`); odpowiedź 404 `index_not_found_exception` (nie ma indeksu o nazwie samego prefiksu) traktuj jak `QueryScope.EMPTY_RESOLVE_RESPONSE`
+  (zachowanie `_resolve/index` dla nieistniejącej nazwy nie jest potwierdzone na żywym klastrze: ws-01). `QueryScope.requireNoAliases` jest przestarzałe (zapytanie do nazw nie wymaga odmowy). Dzięki temu `aggregate_logs` może wrócić po wdrożeniu tego
   w serwerze OpenSearch (reguła wyłączająca w paczce polityk znika dopiero wtedy). DSL zapytania OpenSearch buduj po stronie serwera, nie przyjmuj go od modelu;
 - gdzie system sam stosuje prawa użytkownika (Jira, Confluence, GitLab z jego tokenem), wystarczy zawężenie linku; gdzie nie
   (OpenSearch, konto serwisowe) zapytanie ogranicza się do `grantedIds()`, a puste `grantsNothing()` znaczy: nie wykonuj zapytania.

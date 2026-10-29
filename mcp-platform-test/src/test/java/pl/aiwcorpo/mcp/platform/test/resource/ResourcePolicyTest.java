@@ -110,6 +110,33 @@ class ResourcePolicyTest {
     }
 
     @Test
+    void aCredentialTypeOtherThanTheConfiguredOneRefusesTheCallAndIsAudited() {
+        jira.calls.clear();
+        ch.qos.logback.classic.Logger auditLog = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("pl.aiwcorpo.mcp.audit");
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> lines = new ch.qos.logback.core.read.ListAppender<>();
+        lines.start();
+        auditLog.addAppender(lines);
+        try {
+            HttpClientStreamableHttpTransport transport = HttpClientStreamableHttpTransport
+                    .builder("http://127.0.0.1:" + port).endpoint("/mcp").openConnectionOnStartup(false)
+                    .httpRequestCustomizer(GATEWAY.asGateway(ResourcePolicyTest::reader, "Bearer test-jira-pat",
+                            pl.aiwcorpo.mcp.platform.security.BackendCredential.Type.SERVICE_ACCOUNT)).build();
+            try (McpSyncClient client = McpClient.sync(transport).build()) {
+                client.initialize();
+                McpSchema.CallToolResult result = call(client, "get_issue", Map.of("issueKey", "ABC-1"));
+
+                assertThat(result.isError()).isTrue();
+                assertThat(text(result)).contains("\"error\":\"internal_error\"");
+            }
+        } finally {
+            auditLog.detachAppender(lines);
+        }
+        assertThat(lines.list).anySatisfy(line -> assertThat(line.getFormattedMessage())
+                .contains("\"event\":\"policy_decision\"", "\"reason\":\"credential_type_mismatch\""));
+        assertThat(jira.calls).as("refused before the resolver").doesNotContain("ABC-1");
+    }
+
+    @Test
     void everyNotFoundOrDeniedAnswerIsTheSameText() {
         try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
             String missing = text(call(client, "get_issue", Map.of("issueKey", "ABC-999")));

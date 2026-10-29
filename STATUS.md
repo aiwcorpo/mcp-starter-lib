@@ -18,6 +18,22 @@ Wektory 4.0.0 uruchamiane przez starter: `jwt/` (60, w tym trzy z kluczami `dev-
 Wektory, których starter nie wykonuje, bo należą do innych komponentów: `gateway-authentication*`, `catalog-actions`, `activity-*`, `confirmation-binding`, `login-redirects`, `return-paths`, `totp`, `servicedesk-service-account` (adapter serwera: ws-04),
 `entity-builder/` i `policy-decisions/` (biblioteka `mcp-cedar-entities`: testy w kontraktach; starter sprawdza wejście `credentialType` w `CredentialTypeTest`).
 
+## Po recenzji beta-6 (praca na 3.0.0-beta-7-SNAPSHOT; beta-7 nie wydane, czekamy na kontrakty 4.1.0)
+
+BOM na kontraktach 4.0.1 (wektory bez zmian dla startera; 736 + 163 testów (razem 899)). Decyzje koordynatora z 2026-10-29:
+
+| Punkt | Co zrobione |
+| --- | --- |
+| M1 | rozjazd `X-MCP-Credential-Type` i `credential-type`: wywołanie kończy się `internal_error` przed oceną Cedar, audyt `policy_decision` z `credential_type_mismatch`; test `ResourcePolicyTest`. Do przejścia na kod i powód z 4.1.0 |
+| M2 | `Confluence::Page`, `ServiceDesk::Ticket`: brak zakresu kontenera w paczce -> `not_found_or_denied` przed resolverem; zasób spoza zakresów wywołującego, którego nie da się ocenić -> też `not_found_or_denied`; `ScopeGrantTest` (resolver nie jest pytany, ten sam kod dla istniejącego i brakującego). Resolver, który rzuca dla zasobu z częściowym grantem, nadal zwraca błąd resolvera (nie da się ustalić zakresu bez zasobu) |
+| M3 | `QueryScope.opensearchSearchTarget(odpowiedź)` zwraca `Optional`, puste = nie pytaj; przykład w MIGRATION na nim; test |
+| L1 | Lucene bez escapowania zostaje jak w odniesieniu; README tłumaczy, dlaczego zakres się nie poszerza |
+| L2 | opisane w README (założenie monotoniczności polityki w klasyfikacji, fałszywe odmowy sondy) |
+| L3 | odmowa sondy: powód audytu `policy_forbid`; brak zakresu Page/Ticket: `not_granted` |
+| L4 | `resolveIndexNames` pomija nazwy niezgodne z `OpenSearchIndexName`; test z `%2c` i `=` |
+| L5 | `OPENSEARCH_RESOLVE_PARAMETERS`, `EMPTY_RESOLVE_RESPONSE` dla 404; zachowanie `_resolve/index` na żywym klastrze niepotwierdzone (ws-01) |
+| L6 | README i MIGRATION: nie cache'ować odpowiedzi `_resolve/index` |
+
 ## Odstępstwa i decyzje M4
 
 - `credential-type` w konfiguracji serwera: wymagane, gdy `manifest.accepted-credential-types` nie wymienia dokładnie jednego typu. Wartość spoza listy przyjmowanych typów zatrzymuje start (gateway odrzuciłby manifest: `credential_type_mismatch`).

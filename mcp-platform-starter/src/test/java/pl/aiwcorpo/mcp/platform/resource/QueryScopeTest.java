@@ -85,6 +85,20 @@ class QueryScopeTest {
     }
 
     @Test
+    void thereIsNoEmptySearchTargetAndAnIndexNameThePatternRefusesIsDropped() {
+        QueryScope scope = scope("OpenSearch::Index", "OpenSearch::Index", null, Set.of("logs-team-a"));
+        String none = "{\"indices\":[{\"name\":\"logs-team-b-1\"}],\"aliases\":[],\"data_streams\":[]}";
+        String hostile = "{\"indices\":[{\"name\":\"logs-team-a-%2clogs-team-b-1\"},{\"name\":\"logs-team-a-1\"},{\"name\":\"logs-team-a-x=y\"}]}";
+
+        assertThat(scope.opensearchSearchTarget(none)).as("no index of the scope exists: nothing to query, never an empty target").isEmpty();
+        assertThat(scope.opensearchSearchTarget(QueryScope.EMPTY_RESOLVE_RESPONSE)).isEmpty();
+        assertThat(scope.opensearchSearchTarget(hostile)).contains("logs-team-a-1");
+        assertThat(scope("OpenSearch::Index", "OpenSearch::Index", null, Set.of()).opensearchSearchTarget(hostile)).isEmpty();
+        assertThat(scope.opensearchSearchTarget("{\"indices\":[{\"name\":\"logs-team-a-2\"},{\"name\":\"logs-team-a\"}]}"))
+                .contains("logs-team-a,logs-team-a-2");
+    }
+
+    @Test
     void openSearchPrefixesBecomeAPairAndNeverAWildcardOnTheName() {
         assertThat(scope("OpenSearch::Index", "OpenSearch::Index", null, Set.of("logs-team-a", "metrics"))
                 .opensearchIndexPatterns()).containsExactly("logs-team-a", "logs-team-a-*", "metrics", "metrics-*");

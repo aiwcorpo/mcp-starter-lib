@@ -8,6 +8,7 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeSet;
 import pl.aiwcorpo.mcp.cedar.entities.QueryConstraint;
+import pl.aiwcorpo.mcp.cedar.entities.ResourceIds;
 
 /**
  * What a search or list query must be limited to for one resource type (cedar/entity-builder.md, section 8, CC-036),
@@ -183,11 +184,28 @@ public final class QueryScope {
         SortedSet<String> names = new TreeSet<>();
         for (tools.jackson.databind.JsonNode index : resolvedIndices(resolveIndexResponse)) {
             String name = index.path("name").isString() ? index.path("name").asString() : null;
-            if (name != null && prefixes.stream().anyMatch(prefix -> name.equals(prefix) || name.startsWith(prefix + "-"))) {
+            if (name != null && ResourceIds.isValid("OpenSearch::Index", ResourceIds.Kind.RESOURCE, name)
+                    && prefixes.stream().anyMatch(prefix -> name.equals(prefix) || name.startsWith(prefix + "-"))) {
                 names.add(name);
             }
         }
         return List.copyOf(names);
+    }
+
+    /**
+     * The target of a search, {@code _count} or aggregation: the names of {@link #resolveIndexNames} joined with commas, for the path of the
+     * request. <b>Empty when there is nothing to query</b> (the scope excludes everything, or no index of the scope exists): the server must
+     * then return an empty result without calling the system, because a request with an empty target searches every index. Use this and
+     * not {@code String.join} on the names. A name is checked against the pattern of {@code OpenSearchIndexName} (CC-056, section 9 of the
+     * entity builder): an index whose name does not match it (an administrator or an ingest pipeline can create names with {@code %} or
+     * {@code =}) is dropped, so every name is safe in a path without encoding.
+     */
+    public Optional<String> opensearchSearchTarget(String resolveIndexResponse) {
+        if (nothingToQuery()) {
+            return Optional.empty();
+        }
+        List<String> names = resolveIndexNames(resolveIndexResponse);
+        return names.isEmpty() ? Optional.empty() : Optional.of(String.join(",", names));
     }
 
     /**
@@ -227,6 +245,20 @@ public final class QueryScope {
         }
         return answer.path("indices");
     }
+
+    /**
+     * Parameters of {@code GET _resolve/index/<expression>}: only open indices. The answer must not be cached between calls of a tool: the
+     * window between the resolution and the query in which an index could be replaced by an alias (entity-builder.md, section 8) then lasts
+     * as long as the cache does.
+     */
+    public static final java.util.Map<String, String> OPENSEARCH_RESOLVE_PARAMETERS = java.util.Map.of("expand_wildcards", "open");
+
+    /**
+     * What to give {@link #resolveIndexNames} when {@code GET _resolve/index/} answers 404 {@code index_not_found_exception}: the pair
+     * {@code p,p-*} has a concrete name {@code p} that need not exist (the usual layout is {@code p-2026.10} only). Not confirmed on a live
+     * cluster (ws-01); no other status is an empty answer.
+     */
+    public static final String EMPTY_RESOLVE_RESPONSE = "{\"indices\":[],\"aliases\":[],\"data_streams\":[]}";
 
     /**
      * Search parameters for the request to the list of names of {@link #resolveIndexNames}: only open indexes, no error for a name

@@ -126,6 +126,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         ResourceContext context = ResourceContext.require();
         CallerContext caller = context.caller();
         String tool = context.tool();
+        refuseOnCredentialTypeMismatch(caller, tool);
         engine.hintRevision(caller.policyRevision());
         Snapshot snapshot = snapshot();
         Caller user = user(caller);
@@ -150,11 +151,12 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
             return;
         }
         refuseWithoutGrant(caller, tool, descriptor, user, snapshot, authorizer, context.arguments());
+        Map<String, ResolvedResource> resolved = new java.util.HashMap<>();
         AtomicReference<RuntimeException> failure = new AtomicReference<>();
         pl.aiwcorpo.mcp.cedar.entities.ResultFilter filter =
                 new pl.aiwcorpo.mcp.cedar.entities.ResultFilter(builder(snapshot), authorizer);
         pl.aiwcorpo.mcp.cedar.entities.ResultFilter.CheckResult result = filter.checkAll(user, descriptor, context.arguments(),
-                (type, id) -> resolve(type, id, failure), Optional.empty());
+                (type, id) -> resolve(type, id, failure, resolved), Optional.empty());
         if (result.allowed()) {
             return;
         }
@@ -167,6 +169,12 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         }
         LOG.info("event=resource_refused tool=\"{}\" reason={} type={}", tool, reason, result.deniedType().orElse("-"));
         if ("evaluation_error".equals(reason) || "resource_id_invalid".equals(reason) || "resource_type_mismatch".equals(reason)) {
+            ResolvedResource seen = resolved.get(result.deniedType().orElse("") + "\u0000" + result.deniedId().orElse(""));
+            if (seen != null && outsideGrants(builder(snapshot), user, seen)) {
+                // A resource the caller holds no grant on must not turn into a different answer than a missing one (CC-146).
+                deny(caller, tool, result.deniedType().orElse(null), result.deniedId().orElse(null), null, "not_granted", snapshot,
+                        ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
+            }
             // The resolver gave something the policy cannot be evaluated on: a required attribute is missing (a project
             // without category, a space without labels, a GitLab project without ancestorClassifications), the id does not
             // match its type's pattern, the type differs. Contract (entity-builder.md, section 6): internal_error. The call
@@ -187,6 +195,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
                                     pl.aiwcorpo.mcp.cedar.entities.ResultFilter.Authorizer authorizer, Map<String, Object> arguments) {
         for (pl.aiwcorpo.mcp.cedar.entities.ResourceRef ref : descriptor.resourceRefs()) {
             for (String value : GrantProbe.values(arguments.get(ref.argument()))) {
+                refuseWithoutScopeGrant(caller, tool, ref.type(), value, user, snapshot);
                 Optional<ResolvedResource> probe = GrantProbe.of(ref.type(), value);
                 if (probe.isEmpty()) {
                     continue;
@@ -198,18 +207,84 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
                     continue;
                 }
                 if (!granted) {
-                    deny(caller, tool, ref.type(), value, null, "not_granted", snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
+                    // The policy itself refused the probe (a forbid rule, a missing permit, the narrowing of the link): C8 policy_forbid.
+                    deny(caller, tool, ref.type(), value, null, "policy_forbid", snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
                 }
             }
         }
     }
 
-    private ResolvedResource resolve(String type, String id, AtomicReference<RuntimeException> failure) {
+    /**
+     * CC-146 for the types whose container the identifier does not name ({@code Confluence::Page}, {@code ServiceDesk::Ticket}):
+     * a caller with no scope grant on the container type gets {@code not_found_or_denied} before the resolver is asked. Here a grant is a
+     * scope of the bundle ({@code mcp-confluence-space-*}, {@code mcp-servicedesk-queue-*}), not any permit of a policy.
+     */
+    private void refuseWithoutScopeGrant(CallerContext caller, String tool, String type, String value, Caller user, Snapshot snapshot) {
+        List<String> containers = switch (type) {
+            case "Confluence::Page" -> List.of("Confluence::Space", "Confluence::Page");
+            case "ServiceDesk::Ticket" -> List.of("ServiceDesk::Queue");
+            default -> List.of();
+        };
+        if (containers.isEmpty()) {
+            return;
+        }
+        EntityBuilder builder = builder(snapshot);
+        boolean any = containers.stream().anyMatch(container -> !builder.queryConstraint(user, container).granted().isEmpty());
+        if (!any) {
+            deny(caller, tool, type, value, null, "not_granted", snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
+        }
+    }
+
+    /** True when the resolved page or ticket lies in no container the caller's groups grant; other types are judged by the probe. */
+    private boolean outsideGrants(EntityBuilder builder, Caller user, ResolvedResource resource) {
+        try {
+            if ("ServiceDesk::Ticket".equals(resource.type())) {
+                return resource.parent().map(queue -> !builder.queryConstraint(user, "ServiceDesk::Queue").granted().contains(queue.id()))
+                        .orElse(false);
+            }
+            if ("Confluence::Page".equals(resource.type())) {
+                boolean inSpace = resource.parent().map(space -> builder.queryConstraint(user, "Confluence::Space").granted()
+                        .contains(space.id())).orElse(false);
+                java.util.Set<String> pages = builder.queryConstraint(user, "Confluence::Page").granted();
+                Object ancestors = resource.attributes().get("ancestorIds");
+                boolean inPages = pages.contains(resource.id()) || (ancestors instanceof java.util.Collection<?> ids
+                        && ids.stream().anyMatch(id -> pages.contains(String.valueOf(id))));
+                return resource.parent().isPresent() && !inSpace && !inPages;
+            }
+        } catch (RuntimeException ex) {
+            return false;
+        }
+        return false;
+    }
+
+    /**
+     * The credential type of the request ({@code X-MCP-Credential-Type}) must be the one the server's configuration names: the policy
+     * is evaluated with the configured type, so a different one would switch off a rule written for the real credential (a service
+     * account). Refused as {@code internal_error} (a misconfiguration, not the caller's doing) and audited as {@code credential_type_mismatch}.
+     * The code and reason follow the contracts 4.1.0 once they are released.
+     */
+    private void refuseOnCredentialTypeMismatch(CallerContext caller, String tool) {
+        java.util.Optional<pl.aiwcorpo.mcp.platform.security.BackendCredential.Type> actual =
+                pl.aiwcorpo.mcp.platform.security.CredentialContext.type();
+        if (actual.isPresent() && !actual.get().wireName().equals(credentialType)) {
+            LOG.error("event=credential_type_mismatch tool=\"{}\" configured={} actual={}", tool, credentialType, actual.get().wireName());
+            audit.policyRefused(caller, tool, registry.riskOf(tool).orElse(null), "credential_type_mismatch", "internal_error");
+            throw new SanitizedToolException(new McpErrorMapper.SafeError(ToolErrorCode.INTERNAL_ERROR.code(),
+                    "The tool could not complete the request."));
+        }
+    }
+
+    private ResolvedResource resolve(String type, String id, AtomicReference<RuntimeException> failure,
+                                     Map<String, ResolvedResource> resolved) {
         ResourceBinding binding = registry.resourceRefsOf(ResourceContext.require().tool()).stream()
                 .filter(candidate -> candidate.type().equals(type)).findFirst().orElse(null);
         ResourceResolver<?> resolver = resolvers.forRef(type, binding == null ? Void.class : binding.resolver(), "tool");
         try {
-            return resolvers.resolve(resolver, type, id).orElse(null);
+            ResolvedResource found = resolvers.resolve(resolver, type, id).orElse(null);
+            if (found != null) {
+                resolved.put(type + "\u0000" + id, found);
+            }
+            return found;
         } catch (ResourceResolvers.ResolverFailedException ex) {
             failure.set(ex);
             return null;

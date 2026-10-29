@@ -308,6 +308,20 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
+## Z beta-6 na beta-7 (w pracy, nie wydane)
+
+Poprawki po recenzji beta-6 (0 HIGH, 3 MEDIUM, 6 LOW); kontrakty 4.0.1 (BOM), po wydaniu 4.1.0 przejście na nie (kod i powód rozjazdu typu wg 4.1.0). Zmiany zachowania:
+
+- **Rozjazd typu poświadczenia.** `X-MCP-Credential-Type` różny od `credential-type` serwera kończy wywołanie `internal_error` przed oceną polityki (audyt: `credential_type_mismatch`).
+  Serwer z kilkoma `accepted-credential-types` musi więc ustawić `credential-type` na typ, którego naprawdę używa gateway dla jego systemu; zmiana typu systemu w gateway'u wymaga zmiany
+  konfiguracji serwera. Test serwera, który wywołuje `TestGateway.asGateway(user, credential, type)` z typem innym niż `credential-type`, dostaje teraz `internal_error`:
+  ustaw `aiwcorpo.mcp.platform.credential-type` na ten typ w `serverProperties()`.
+- **`Confluence::Page` i `ServiceDesk::Ticket`:** wywołujący bez zakresu w paczce (przestrzeń/strona, kolejka) dostaje `not_found_or_denied` przed resolverem. Paczka serwera Service Desku
+  musi nadawać zakresy kolejek (`mcp-servicedesk-queue-*`); samo `mcp-servicedesk-read` nie wystarcza.
+- **OpenSearch:** zamiast `String.join(",", names)` używaj `scope.opensearchSearchTarget(odpowiedź)` (puste `Optional` = nie pytaj); `resolveIndexNames` pomija nazwy niezgodne z `OpenSearchIndexName`.
+  Do `_resolve/index` dodaj `QueryScope.OPENSEARCH_RESOLVE_PARAMETERS`, a 404 traktuj jak `QueryScope.EMPTY_RESOLVE_RESPONSE`. Nie cache'uj odpowiedzi `_resolve/index` między wywołaniami.
+- Odmowa sondy ma w audycie powód `policy_forbid` (było `not_granted`).
+
 ## Z beta-5 na beta-6
 
 Przejście na kontrakty **4.0.0** (pakiet M4; CHANGELOG kontraktów, "4.0.0"). Biblioteki, paczki polityk i serwery przechodzą razem: nowe bajty `mcp.cedarschema`
@@ -397,11 +411,11 @@ if (scope.nothingToQuery()) {
     return emptyResult();
 }
 String resolved = openSearch.get("/_resolve/index/" + scope.opensearchIndexExpression());   // wzorzec tylko tutaj
-List<String> names = scope.resolveIndexNames(resolved);                                      // tylko "indices", bez aliasów i strumieni, w zakresie
-if (names.isEmpty()) {
-    return emptyResult();
+Optional<String> target = scope.opensearchSearchTarget(resolved);                            // tylko "indices", bez aliasów i strumieni, w zakresie
+if (target.isEmpty()) {
+    return emptyResult();                                                                    // pusty cel przeszukałby wszystkie indeksy
 }
-// wyszukiwanie, _count i agregacje: String.join(",", names) w ścieżce + QueryScope.OPENSEARCH_SEARCH_PARAMETERS
+// wyszukiwanie, _count i agregacje: target.get() w ścieżce + QueryScope.OPENSEARCH_SEARCH_PARAMETERS
 // indeks z argumentu: String name = scope.resolveIndexArgument(argument, resolved);          // invalid_argument | not_found_or_denied
 ```
 
