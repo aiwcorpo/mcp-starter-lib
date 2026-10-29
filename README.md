@@ -5,7 +5,7 @@ gateway'em: nie loguje użytkowników, nie decyduje o uprawnieniach do narzędzi
 robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadczenie do systemu docelowego,
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
-Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 3.1.0.
+Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 4.0.0.
 Wersja: **3.0.0-beta-5** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
@@ -116,6 +116,8 @@ zatrzymuje start (`CredentialTransportGuard`).
 aiwcorpo.mcp.platform:
   server-id: mcp-jira                                     # wymagane
   auth-mode: gateway                                      # gateway | dev-pat (tylko profil dev)
+  credential-type: user-secret                            # typ poświadczenia systemu (context.credentialType w Cedar, CC-136); opcjonalne przy jednym
+                                                          # typie w manifest.accepted-credential-types, wtedy brany stamtąd
   internal-jwt:
     issuer: https://mcp-gateway.internal                  # domyślnie
     jwks-uri: https://mcp-gateway.internal:8443/.well-known/jwks.json   # wymagane
@@ -181,7 +183,9 @@ Serwer nie wstaje, gdy:
 - `unauthenticated-paths` zawiera coś spoza `/actuator/health`, `/actuator/health/liveness`,
   `/actuator/health/readiness`; protokół MCP jest inny niż `STREAMABLE`;
 - brakuje `policy.main.url`, `key-id` albo klucza publicznego (`public-key` albo `public-key-file`), `manifest.version`
-  (SemVer), `manifest.internal-url` (https) albo `manifest.accepted-credential-types` przy `credential-required`; poza
+  (SemVer), `manifest.internal-url` (https) albo `manifest.accepted-credential-types` przy `credential-required`; nie da się ustalić
+  typu poświadczenia (`credential-type` brak, a manifest nie wymienia dokładnie jednego typu) albo `credential-type` nie jest na liście
+  przyjmowanych typów (gateway odrzuciłby manifest: `credential_type_mismatch`); poza
   `dev` brakuje `policy.state-dir`, adres paczki nie jest https albo `policy.allow-test-keys=true`;
 - nie da się załadować pierwszej paczki polityk w `startup-timeout` (brak repozytorium, zły podpis, klucz `test-*` bez
   `allow-test-keys`, rewizja niższa od zapisanej w `state-dir`): serwer bez podpisanej polityki nie wstaje;
@@ -243,8 +247,12 @@ albo `SPRING_APPLICATION_JSON` nie wystarcza. Strażnik konfiguracji działa prz
 `jtiReplayStore` i `internalJwtVerifier`, także przy `spring.main.lazy-initialization=true`); własne `GatewayKeys` i `JtiReplayStore` serwera są tworzone przed
 `internalJwtVerifier`, ale po strażniku, o ile nie robią I/O w konstruktorze. Wersja startera w serwerze: właściwość `mcp-platform.version` (szablon) albo `<version>`
 importu `mcp-platform-bom` (opis w `MIGRATION-3.0.md`). Musi być jedynym aktywnym profilem. Każdy start loguje `WARN event=devstack_profile`, a metryka
-`mcp_server_devstack_active` ma wartość 1 (manifest C6 nie ma pola na środowisko). Klucze `test-*` pod innym profilem niż `dev` i `devstack` są
-odrzucane jak dotąd, więc klucz produkcyjny nie może nazywać się `test-...`, a klucz stosu nie przejdzie na produkcji.
+`mcp_server_devstack_active` ma wartość 1, a manifest C6 dostaje `"environment": "dev"` (CC-138; gateway w trybie produkcyjnym odrzuca taki manifest:
+`422 manifest_rejected`, powód `environment_mismatch`; pole nie wchodzi do `definitionHash`, a w pozostałych profilach go nie ma, czyli znaczy produkcję).
+Klucze `test-*` pod innym profilem niż `dev` i `devstack` są odrzucane jak dotąd, więc klucz produkcyjny nie może nazywać się `test-...`.
+**Klucze `dev-` (CC-137)** (`kid` weryfikatora JWT i identyfikator klucza paczki polityk, które stos deweloperski generuje lokalnie) przechodzą tylko w
+trybie dev, czyli przy profilu `devstack` (z obiema zgodami) **i** `allow-test-keys=true`; samo `allow-test-keys` (testy jednostkowe serwerów, profil
+`dev`) przyjmuje klucze `test-*`, ale `dev-` odrzuca z powodem `test_key_not_allowed` (JWT: 401) albo `test_key_not_allowed` (paczka: zostaje poprzednia).
 
 **Tryb `dev-pat`** (tylko gdy `dev` jest jedynym aktywnym profilem): poza `X-MCP-Credential` serwer przyjmuje token
 programisty w `X-PAT-<system>` (np. `X-PAT-Jira`) jako `Bearer` typu `user-secret`. Wewnętrzny JWT nadal jest
@@ -496,8 +504,8 @@ zdarzenie `authentication` (`outcome=denied`, `reason` = kod odrzucenia) tylko z
 `client_certificate_rejected` (certyfikat gateway'a) i, z `errorCode: upstream_unavailable` (odpowiedź 503),
 `jwks_unavailable` i `replay_store_unavailable` (magazyn `jti`). Zdarzeń dla żądań, których tokenu nie da się sparsować (`missing_token`: brak lub pusty nagłówek; `malformed`: obcy schemat, nie trzy segmenty, nagłówek JWT nie jest obiektem), proces zapisuje (jako zdarzenie i jako linię logu), osobno dla każdego z dwóch powodów, najwyżej
 `aiwcorpo.mcp.platform.internal-jwt.missing-token-events-per-second` na sekundę (domyślnie 20, minimum 1; gateway ma ten sam budżet dla samego `missing_token`);
-nadmiar nie trafia do audytu ani do logu, tylko do licznika `mcp_server_audit_authentication_suppressed_total` (tag `reason`), a żądanie
-dostaje 401 jak zawsze. Pozostałe powody nie są ograniczane, także token z `crit` albo `typ` innym niż `JWT` w nagłówku po rozwiązaniu `kid` (raportowany jako `alg_not_allowed`).
+nadmiar nie trafia do audytu ani do logu, tylko do licznika `mcp_audit_authentication_suppressed_total{component="server",reason}` (nazwa wspólna z brokerem i gateway'em, CC-143), a żądanie
+dostaje 401 jak zawsze. Żądanie odrzucone `400` (treść nie jest jednym obiektem JSON) albo `413` (za duża) przed weryfikacją tokenu nie jest zdarzeniem `authentication` (CC-152). Pozostałe powody nie są ograniczane, także token z `crit` albo `typ` innym niż `JWT` w nagłówku po rozwiązaniu `kid` (raportowany jako `alg_not_allowed`).
 
 Gateway usuwa `confirmation_code` z argumentów przed wywołaniem serwera (C11), więc schemat serwera go nie
 deklaruje.
@@ -525,8 +533,9 @@ w narzędziu poza deklaracją, co jest zasobem.
 
 `PolicyEngine` pobiera `latest.json` (z `ETag`, co 30 s) i pliki, które wskazuje (limit 16 MiB, bez przekierowań, nazwy
 plików tylko obok `latest.json`), a `PolicyStore` z `mcp-policy-bundle` sprawdza podpis Ed25519 (klucz `test-*` i
-opublikowane klucze testowe tylko z `allow-test-keys` w `dev`), ścisłą kolejność rewizji, schemat równy schematowi
-kontraktów, polityki względem schematu i `static.json`, po czym podmienia migawkę atomowo. Rewizja niższa albo równa
+opublikowane klucze testowe tylko z `allow-test-keys` w `dev` albo `devstack`; identyfikator klucza `dev-` tylko w trybie dev), ścisłą
+kolejność rewizji, schemat równy schematowi kontraktów (**bajt w bajt: od kontraktów 4.0.0 inny niż w 3.1.x** (CC-136), więc paczka zbudowana na
+schemacie 3.1.x jest odrzucana jako `schema_mismatch` i zostaje poprzednia; pierwsza taka paczka nie pozwala wstać serwerowi), polityki względem schematu i `static.json`, po czym podmienia migawkę atomowo. Rewizja niższa albo równa
 załadowanej jest odrzucana, także po restarcie (`state-dir`, CC-066).
 
 - Błąd (zły podpis, starsza rewizja, uszkodzona zawartość, repozytorium niedostępne) **zostawia poprzednią paczkę**:
@@ -534,13 +543,34 @@ załadowanej jest odrzucana, także po restarcie (`state-dir`, CC-066).
   licznik `mcp_server_policy_bundle_rejected_total{channel,reason}` albo `mcp_server_policy_bundle_fetch_failed_total{channel,reason}`.
   Odrzucona rewizja jest zgłaszana raz, nie przy każdym pobraniu.
 - Start bez paczki kończy się odmową. Bez żadnej polityki serwer nie podejmuje decyzji: wywołanie wymagające decyzji
-  dostaje `upstream_unavailable`, nigdy zgody.
+  dostaje `upstream_unavailable` (tekst `Policies are not available. Try again later.`), nigdy zgody (CC-141). Audyt: `policy_decision`,
+  `decision: deny`, `outcome: error`, powód `policy_unavailable` (brak paczki: np. czekamy na paczkę awaryjną po restarcie) albo `policy_error`
+  (silnik polityk zawiódł na tym żądaniu).
 - Paczka awaryjna (`overrides`, osobny klucz, tylko `forbid`, co 5 s) jest ładowana na wierzch. Jeśli przed restartem była
   aktywna, a po restarcie jej nie ma, wywołania są odmawiane do `overrides-grace` (potem serwer działa i loguje
   `event=policy_overrides_missing_alarm`): reguły wyłącznika nie znikają po cichu.
 - `prv` w tokenie nowszy niż załadowana rewizja zleca natychmiastowe pobranie (najwyżej co 2 s, na wątku silnika: wywołanie z hintem
   nie czeka i jest oceniane załadowaną paczką), więc następne wywołania nie są odmawiane tego, co gateway właśnie dopuścił. Każde żądanie
   do repozytorium ma limit czasu na całość, z treścią (`read-timeout`), a kanały `main` i `overrides` są pobierane niezależnie. `prv` `00000000000000-0000000` (gateway bez paczki) niczego nie wymusza.
+
+### Typ poświadczenia w żądaniu Cedar (CC-136)
+
+Każde żądanie Cedar serwera (`Action::"call"` na narzędziu, odczyt i zapis na zasobie) ma `context.credentialType` z **konfiguracji serwera**
+(`aiwcorpo.mcp.platform.credential-type`, a przy jednym typie w `manifest.accepted-credential-types` stamtąd): kontrakt nie dodaje nagłówka, a
+reguły takie jak "konto serwisowe czyta kolejkę Service Desku tylko w przyznanym zakresie" muszą się stosować także wtedy, gdy atrybutu by brakowało.
+Serwer bez ustalonego typu nie wstaje, a `ResourcePolicy` utworzona bez niego rzuca wyjątek; `EntityBuilder.withCredentialType` z wartością spoza
+czterech typów (`user-oauth`, `user-secret`, `token-exchange`, `service-account`) kończy wywołanie `internal_error`.
+
+### Jedna odmowa dla zasobów i kolejność ocen (CC-146)
+
+`not_found_or_denied` ma zawsze jeden tekst, `The resource does not exist or you do not have access to it.` (stała w schemacie C10): starter ustawia go
+niezależnie od tekstu, który napisała mapa błędów serwera, więc treść odmowy nie zdradza, czy zasób istnieje. Kolejność: najpierw grant. Przed
+wywołaniem resolvera, przed budową encji z danych systemu i przed odczytem klasyfikacji starter ocenia politykę na **sondzie**: zasobie z samego
+identyfikatora argumentu (i jego kontenera, który identyfikator nazywa: projekt klucza zgłoszenia, grupa ścieżki GitLaba) z najmniej restrykcyjną
+klasyfikacją (`category: ""`, puste `labels` i `tags`). Odmowa sondy to `not_found_or_denied` bez wywołania systemu; zgoda przepuszcza do pełnej
+oceny po rozwiązaniu. Dzięki temu wywołujący bez grantu na typ nie dostaje `internal_error` (brak wymaganej klasyfikacji) ani `upstream_unavailable` z
+resolvera, które zdradziłyby istnienie zasobu. Typy bez kontenera w identyfikatorze (`Confluence::Page`, `ServiceDesk::Ticket`) nie mają sondy i są oceniane po
+rozwiązaniu, jak dotąd. Kolejka Service Desku poza zakresem linku w argumencie to `not_found_or_denied`, nie `access_denied`.
 
 ### `@ResourceRef` i `ResourceResolver`
 
@@ -630,7 +660,7 @@ Jacksonie), kończy wywołanie `internal_error` zamiast przepuścić nieprzefilt
 `ToolCallback` (nie metoda `@Tool`) deklaruje to samo przez `RiskClassifiedTool#resultWithoutResources()` albo nie wystartuje.
 Pozostałe znane granice: słowa `AND`, `OR`, `NOT` w wartości `CONTAINS` działają jako operatory wyszukiwania tekstowego Jiry/Confluence
 (w obrębie tego jednego pola, nie poszerzają zakresu); `IS EMPTY`, `membersOf(...)` i funkcje dat nie da się wyrazić w
-`StructuredQuery` (dodaj stały, nazwany filtr w narzędziu, nie przez wartość).
+`StructuredQuery` (kontrakt zamyka listę pól i operatorów; nowe pole wymaga jego zmiany).
 
 Dla wyniku budowanego inaczej wstrzyknij `ResourcePolicy` (implementuje `ResultFilter`): `retainAllowed(items, item -> resolvedResource)` albo
 `retainAllowedById("Jira::Issue", items, Item::key)`; `allows(resource)` i `require(resource)` dla zasobu, który narzędzie znajduje samo
@@ -639,42 +669,50 @@ na komponencie rekordu będącego argumentem zatrzymuje start (byłby pominięty
 
 ### `QueryScope` i `StructuredQuery`: zapytanie buduje serwer
 
-Model **nie podaje tekstu zapytania**. JQL i CQL budujesz z ustrukturyzowanych filtrów; starter dokleja zakres i cytuje
-wartości według gramatyki, więc wartość nie zamknie cudzysłowu ani nawiasu, nie wywoła funkcji (`currentUser()`), nie doda
-`OR project = HR`. Poprzednie `restrictJql(clause, userJql)` (surowy JQL od modelu) nie istnieje: jego wykrywanie nawiasów dawało się
-obejść ucieczką `\"` poza cudzysłowem, której lekser Jiry też używa.
+Model **nie podaje tekstu zapytania**. JQL i CQL budujesz z ustrukturyzowanych warunków; starter składa je tak jak odniesienie z kontraktów
+(`scripts/lib/query-rendering.mjs`, wektory `test-vectors/query-rendering/`, CC-160): warunki użytkownika w **jednym nawiasie**, zakres po nim przez `AND`, więc
+`OR` w wartości nie poszerza zakresu; każda wartość to jeden literał w cudzysłowie (`\` i `"` poprzedzone `\`, znak sterujący odrzucony);
+wartość nie zamknie cudzysłowu ani nawiasu, nie wywoła funkcji (`currentUser()`), nie doda `OR project = HR`.
 
 ```java
 QueryScope scope = policy.queryScope("Jira::Project");     // zakres z tokenu (link vsc) i grup z paczki
-String jql = scope.jql(Set.of("status", "assignee", "labels", "text", "created"))     // pola, po których wolno filtrować i sortować
-        .where("status", Operator.EQUALS, filter.status())        // null albo pusta lista = filtr pominięty
-        .where("labels", Operator.IN, filter.labels())
-        .where("text", Operator.CONTAINS, filter.text())          // tekst literalny: * ? " ~ ( ) ... są escapowane
-        .orderBy("created", Direction.DESC).build();
-// project in ("ABC", "DEF") AND status = "Open" AND labels in ("a", "b") AND text ~ "x" ORDER BY created DESC
+String jql = scope.jql(Set.of("status", "assignee", "text"))   // pola warunków: podzbiór listy z kontraktu
+        .where("status", Operator.EQUALS, filter.status())        // null = warunek pominięty
+        .where("text", Operator.CONTAINS, filter.text())
+        .orderBy("updated", Direction.DESC).build();
+// (status = "Open" AND text ~ "x") AND project in ("ABC", "DEF") ORDER BY updated DESC
 ```
 
-- pola z białej listy autora narzędzia (`^[A-Za-z][A-Za-z0-9_.]{0,63}$` albo `cf[n]`), operatory z zamkniętego zbioru
-  (`EQUALS`, `NOT_EQUALS`, `IN`, `NOT_IN`, `CONTAINS`, `NOT_CONTAINS`, `GREATER(_OR_EQUAL)`, `LESS(_OR_EQUAL)`), tylko koniunkcja (`AND`);
-- wartość: 1 do 1000 znaków, bez znaków zakazanych przez higienę tekstu (CC-121; nowy wiersz i tab są escapowane), do 50 wartości w `IN`, do 30 filtrów;
-  naruszenie to `IllegalArgumentException` (platforma zgłasza `invalid_argument`);
+- **Listy pól i operatorów są normatywne** (kontrakt 4.0.0): warunki JQL `text`, `status`, `assignee`, `summary`; `ORDER BY` JQL `created`, `updated`, `priority`,
+  `key`; warunki CQL `text`, `title`, `label`; `ORDER BY` CQL `created`, `lastmodified`, `title`; operatory `EQUALS` (`=`), `CONTAINS` (`~`), `NOT_EQUALS` (`!=`).
+  Serwer może dopuścić mniej (`scope.jql(fields)` z podzbiorem; `scope.jql(fields, orderFields)` zawęża też `ORDER BY`), nigdy więcej: pole spoza listy to
+  `IllegalArgumentException` już przy tworzeniu buildera (stałe `StructuredQuery.JQL_CONDITION_FIELDS` itd.). Nowe pole wymaga zmiany kontraktu. Jedno `ORDER BY` na zapytanie;
+- wartość: 1 do 1000 znaków, bez znaków zakazanych przez higienę tekstu (CC-121) i bez znaków sterujących, do 30 warunków; naruszenie to
+  `IllegalArgumentException` (platforma zgłasza `invalid_argument`). Znaków Lucene (`* ? ~`) w wyszukiwaniu tekstowym starter nie escapuje (tak jak odniesienie): działają
+  w obrębie tego jednego warunku i nie sięgają poza zakres;
 - `scope.cql(Set.of("title", "label", ...))` dla Confluence (zawężenie do przestrzeni linku); `scope.jql(fields, true)` i
-  `scope.cql(fields, true)` (typ `Confluence::Space`) dodają zakresy z grup (konto serwisowe; rzucają, gdy grup brak);
-- `jqlProjectClause()`, `cqlSpaceClause()` zostają jako gotowe fragmenty (identyfikatory cytowane przez `QueryScope.quote`);
-- **OpenSearch:** `scope.opensearchIndexExpression()` (pary `p` i `p-*`, nigdy `p*`; dla linku i grup część wspólna) **rzuca wyjątek,
-  gdy nie ma czego pytać**, bo puste wyrażenie przeszukałoby wszystkie indeksy; sprawdź `scope.nothingToQuery()` i zwróć pusty wynik. Do
-  każdego żądania dodaj `QueryScope.OPENSEARCH_SEARCH_PARAMETERS` (`expand_wildcards=open`, `ignore_unavailable=true`,
-  `allow_no_indices=true`). Wzorzec `p-*` obejmuje też **aliasy** o takiej nazwie, a filtr wyniku nie poprawia agregatów, `hits.total` ani
-  `_count`: narzędzie agregujące woła `GET _resolve/index/<wyrażenie>` i przekazuje odpowiedź do `QueryScope.requireNoAliases(json)`, które odmawia
-  (`access_denied`), gdy lista zawiera alias albo data stream. DSL zapytania OpenSearch buduj tak samo
-  po stronie serwera, nie przyjmuj go od modelu;
+  `scope.cql(fields, true)` (typ `Confluence::Space`) dodają zakresy z grup (konto serwisowe; rzucają, gdy grup brak: pusty zakres to brak zapytania, nigdy zapytanie bez filtra);
+- `jqlProjectClause()`, `cqlSpaceClause()` zostają jako gotowe fragmenty (identyfikatory cytowane przez `QueryScope.quote`, który odrzuca znaki sterujące);
+- **Zakres wyklucza wszystko (CC-147):** `scope.nothingToQuery()` (OpenSearch: żaden indeks nie jest jednocześnie przyznany i w linku; pozostałe typy: brak grantów, dla zapytań
+  ograniczanych grantami) znaczy: wyszukiwanie i lista zwracają **pusty wynik bez wywołania systemu** (to nie błąd), a pobranie jednego zasobu po id woła
+  `scope.requireQueryable()`, które kończy się `not_found_or_denied`, tak samo jak dla zasobu, którego użytkownik nie widzi;
+- **OpenSearch (CC-160): nazwy, nie wzorce.** `scope.opensearchIndexExpression()` (pary `p` i `p-*`, nigdy `p*`) służy **wyłącznie** do `GET _resolve/index/<wyrażenie>`; wyszukiwanie,
+  `_count` i agregacje idą do **listy konkretnych nazw**, bo wzorzec `p-*` obejmuje też alias o takiej nazwie, który może wskazywać indeksy innych zespołów.
+  `scope.resolveIndexNames(odpowiedź)` bierze z odpowiedzi tylko wpisy `indices` (aliasy i strumienie danych nigdy, jakąkolwiek mają nazwę), zostawia nazwy równe prefiksowi
+  albo zaczynające się od `<prefiks>-` (w obrębie linku) i zwraca je posortowane; pusta lista znaczy: nie wykonuj zapytania. Indeks podany jako argument:
+  `scope.resolveIndexArgument(argument, odpowiedź)` rzuca `invalid_argument` dla wzorca, listy po przecinku, `_all` i nazwy z kropką na początku (przed jakimkolwiek wywołaniem systemu), a
+  `not_found_or_denied` dla aliasu, strumienia, indeksu poza zakresem i nazwy nieznanej systemowi. Do żądań dodaj `QueryScope.OPENSEARCH_SEARCH_PARAMETERS`
+  (`expand_wildcards=open`, `ignore_unavailable=true`, `allow_no_indices=true`). Między rozwiązaniem a zapytaniem jest krótkie okno (administrator mógłby zamienić indeks na alias o tej samej nazwie):
+  ryzyko znane i przyjęte w kontrakcie. `QueryScope.requireNoAliases` jest przestarzałe (zapytanie do nazw nie wymaga odmowy). Dzięki temu `aggregate_logs` może wrócić po wdrożeniu tego
+  w serwerze OpenSearch (reguła wyłączająca w paczce polityk znika dopiero wtedy). DSL zapytania OpenSearch buduj po stronie serwera, nie przyjmuj go od modelu;
 - gdzie system sam stosuje prawa użytkownika (Jira, Confluence, GitLab z jego tokenem), wystarczy zawężenie linku; gdzie nie
   (OpenSearch, konto serwisowe) zapytanie ogranicza się do `grantedIds()`, a puste `grantsNothing()` znaczy: nie wykonuj zapytania.
   Ograniczenie zapytania nie zastępuje filtrowania wyniku.
 
 ### Audyt
 
-Odmowa polityki to zdarzenie `policy_decision` (C8) z `decision: deny`, `reason` (`policy_forbid` albo `not_granted`), typem i
+Odmowa polityki to zdarzenie `policy_decision` (C8) z `decision: deny`, `reason` (`policy_forbid`: odmowa polityki, reguła `forbid` albo brak `permit`;
+`not_granted`: zasób nierozwiązany albo bez grantu, CC-141), typem i
 id zasobu, jeśli id jest bezpieczne w logu, `policyRevision` paczki serwera i `errorCode`; zwykłe wywołanie to `tool_call`.
 
 ## Manifest C6 i narzędzia DESTRUCTIVE
@@ -682,15 +720,16 @@ id zasobu, jeśli id jest bezpieczne w logu, `policyRevision` paczki serwera i `
 `GET /mcp-manifest` (JWT C2 w wariancie użytkownika albo serwisowym, bez `tool`) zwraca manifest serwera. Starter buduje go
 po starcie z **tego, co serwer naprawdę publikuje**: definicje to dokładnie wpisy `tools/list` (więc `definitionHash` jest
 hashem tego, co widzi klient i co gateway przypina), `risk`, `action` i `resourceRefs` pochodzą z adnotacji, reszta z
-`aiwcorpo.mcp.platform.manifest.*`. Przed udostępnieniem manifest przechodzi `server-manifest.schema.json` i reguły
+`aiwcorpo.mcp.platform.manifest.*`; w profilu `devstack` z `"environment": "dev"` (CC-138). Manifest do rejestracji w gateway'u to artefakt etapu
+budowy przeglądanego commitu (`manifest.output-file`, np. `target/mcp-manifest.json`), nigdy odpowiedź działającego serwera (CC-133, CC-140). Przed udostępnieniem manifest przechodzi `server-manifest.schema.json` i reguły
 `mcp-manifest` (zamknięty i ograniczony `inputSchema`, `title`, istniejące argumenty `resourceRefs`, hash), czyli kontrole
 gateway'a przy rejestracji; manifest, który by ich nie przeszedł, zatrzymuje serwer (w `dev` ostrzeżenie). Z `output-file`
 trafia też do pliku dla kroku rejestracji.
 
 Wymagania wobec narzędzia: `@ToolTitle` (CC-115, niepusty, do 100 znaków, bez znaków ukrytych), `@ToolRisk`, schemat bez
 `$ref`, typów łączonych i map (`SchemaLimitedToolCallbacks` generuje taki), argument nie nazywa się `confirmation_code`
-(gateway dodaje go do `tools/list` i zdejmuje przed wywołaniem). Wzorzec `OpenSearchIndexPrefix` z kontraktów ma
-alternację na wierzchu (`^a$|^b$`); starter publikuje go jako `^(?:a|b)$`, żeby przeszedł regułę zakotwiczenia.
+(gateway dodaje go do `tools/list` i zdejmuje przed wywołaniem). Wzorzec `OpenSearchIndexPrefix` z kontraktów 4.0.0 (CC-139) to jedna zakotwiczona
+postać (`^(?:a|b)$`), więc `@ArgumentLimits(contractPattern = "OpenSearchIndexPrefix")` działa bez obejścia; starter niczego nie przepisuje.
 
 **DESTRUCTIVE.** Serwer nie pyta o potwierdzenie (robi to gateway, kodem TOTP, C11); musi tylko prawdziwie powiedzieć, że
 narzędzie potwierdzenia wymaga. Jedyny mechanizm to `@ToolRisk(RiskLevel.DESTRUCTIVE)`, a starter pilnuje, żeby ta

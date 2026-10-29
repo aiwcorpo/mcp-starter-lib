@@ -69,9 +69,12 @@ public final class QueryScope {
         return grantedIds.isEmpty();
     }
 
-    /** Quotes an identifier for JQL or CQL: in double quotes, {@code \} and {@code "} escaped. */
+    /**
+     * Quotes an identifier for JQL or CQL like the reference rendering of the contracts (CC-160): in double quotes, {@code \} and
+     * {@code "} escaped, a control character refused ({@link IllegalArgumentException}).
+     */
     public static String quote(String id) {
-        return "\"" + id.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+        return StructuredQuery.quote(id);
     }
 
     private static String inList(String field, SortedSet<String> ids) {
@@ -107,7 +110,10 @@ public final class QueryScope {
     }
 
     /**
-     * The index patterns an OpenSearch query is limited to, as a list to join with commas: for each prefix {@code p} the
+     * The index patterns that name the scope, as a list to join with commas, <b>for {@code GET _resolve/index/<expression>} only</b>
+     * (CC-160): a search, {@code _count} or an aggregation goes to the concrete names of {@link #resolveIndexNames}, never to
+     * these patterns, because {@code p-*} also matches an alias that points at the indices of another team. Each prefix {@code p}
+     * gives the pair: for each prefix {@code p} the
      * pair {@code p} and {@code p-*}, never {@code p*} (that would reach {@code logs-team-ab} for {@code logs-team-a}).
      * With a link that narrows, only what both the grants and the link cover is left (the longer prefix of a pair when one
      * contains the other).
@@ -130,23 +136,116 @@ public final class QueryScope {
         return String.join(",", opensearchIndexPatterns());
     }
 
-    /** True when an OpenSearch query for this scope must not run (no index is both granted and inside the link). */
+    /**
+     * True when the scope excludes everything (CC-147): a search or a list must return an empty result without calling the system
+     * (that is not an error), and the fetch of one resource by id must end with {@code not_found_or_denied}
+     * ({@link #requireQueryable()}), the same answer as for a resource the user cannot see.
+     *
+     * <p>For OpenSearch, no index is both granted and inside the link. For the other grantable types it is {@link #grantsNothing()}:
+     * ask it where the query is limited by grants (a service account, {@code includeGrants}); a system that applies the user's own
+     * rights needs no grant to run the query.
+     */
     public boolean nothingToQuery() {
-        requireType("OpenSearch::Index");
-        return indexPatterns().isEmpty();
+        return "OpenSearch::Index".equals(resourceType) ? indexPatterns().isEmpty() : grantedIds.isEmpty();
     }
 
     /**
-     * Search parameters that keep a pattern from reaching beyond the indexes it names: only open indexes, no error for a
-     * pattern that matches nothing. Put them on every request that uses {@link #opensearchIndexExpression()}. A pattern
-     * {@code p-*} also matches an <em>alias</em> whose name starts with {@code p-}; the starter cannot see aliases, so a
-     * tool that aggregates ({@code aggs}, {@code _count}, {@code hits.total}), where filtering the result cannot correct
-     * the numbers, must refuse when {@code GET _resolve/index/<expression>} lists an alias.
+     * For the tools that fetch one resource by identifier: {@code not_found_or_denied} when {@link #nothingToQuery()}, without a call
+     * to the system (CC-147).
+     *
+     * @throws pl.aiwcorpo.mcp.platform.error.SanitizedToolException {@code not_found_or_denied}
+     */
+    public void requireQueryable() {
+        if (nothingToQuery()) {
+            throw new pl.aiwcorpo.mcp.platform.error.SanitizedToolException(new pl.aiwcorpo.mcp.platform.error.McpErrorMapper.SafeError(
+                    pl.aiwcorpo.mcp.platform.error.ToolErrorCode.NOT_FOUND_OR_DENIED.code(),
+                    pl.aiwcorpo.mcp.platform.error.ToolErrorCode.NOT_FOUND_OR_DENIED_MESSAGE));
+        }
+    }
+
+    /**
+     * The concrete index names an OpenSearch query may run on (CC-160): the entries of {@code indices} in the answer of
+     * {@code GET _resolve/index/}{@link #opensearchIndexExpression()} whose name is a granted prefix or starts with {@code <prefix>-}
+     * (and inside the link), sorted. <b>Aliases and data streams are never included, whatever their name:</b> an alias named
+     * {@code logs-team-a-all} can point at the indices of another team, and counts and aggregations over it would include them. The
+     * query then goes to this list of names and never to a pattern. An empty list means there is nothing to query: return an empty
+     * result without calling the system.
+     *
+     * <p>Between this resolution and the query there is a short window in which an administrator could replace an index with an
+     * alias of the same name; the contract accepts that risk (entity-builder.md, section 8).
+     *
+     * @param resolveIndexResponse the JSON answer of OpenSearch: {@code {"indices":[{"name":...}],"aliases":[...],"data_streams":[...]}}
+     * @throws IllegalArgumentException when it is not that JSON
+     */
+    public List<String> resolveIndexNames(String resolveIndexResponse) {
+        requireType("OpenSearch::Index");
+        Set<String> prefixes = new TreeSet<>(indexPrefixes());
+        SortedSet<String> names = new TreeSet<>();
+        for (tools.jackson.databind.JsonNode index : resolvedIndices(resolveIndexResponse)) {
+            String name = index.path("name").isString() ? index.path("name").asString() : null;
+            if (name != null && prefixes.stream().anyMatch(prefix -> name.equals(prefix) || name.startsWith(prefix + "-"))) {
+                names.add(name);
+            }
+        }
+        return List.copyOf(names);
+    }
+
+    /**
+     * An index named by the model as an argument (a resource id): one concrete name. A value that is a pattern, a list, {@code _all} or
+     * has a leading dot is {@code invalid_argument} before any call to the system. After the resolution ({@link #resolveIndexNames}) an
+     * alias, a data stream, an index outside the grant and a name the system does not know are all {@code not_found_or_denied}.
+     *
+     * @param resolveIndexResponse the answer of {@code GET _resolve/index/}{@link #opensearchIndexExpression()}
+     * @return the name to query
+     * @throws pl.aiwcorpo.mcp.platform.error.InvalidToolArgumentException for a value that is not an index name
+     * @throws pl.aiwcorpo.mcp.platform.error.SanitizedToolException {@code not_found_or_denied}
+     */
+    public String resolveIndexArgument(String argument, String resolveIndexResponse) {
+        requireType("OpenSearch::Index");
+        if (argument == null || !pl.aiwcorpo.mcp.cedar.entities.ResourceIds.isValid("OpenSearch::Index",
+                pl.aiwcorpo.mcp.cedar.entities.ResourceIds.Kind.RESOURCE, argument)) {
+            throw new pl.aiwcorpo.mcp.platform.error.InvalidToolArgumentException("The index name is not valid.");
+        }
+        if (!resolveIndexNames(resolveIndexResponse).contains(argument)) {
+            requireQueryable();
+            throw new pl.aiwcorpo.mcp.platform.error.SanitizedToolException(new pl.aiwcorpo.mcp.platform.error.McpErrorMapper.SafeError(
+                    pl.aiwcorpo.mcp.platform.error.ToolErrorCode.NOT_FOUND_OR_DENIED.code(),
+                    pl.aiwcorpo.mcp.platform.error.ToolErrorCode.NOT_FOUND_OR_DENIED_MESSAGE));
+        }
+        return argument;
+    }
+
+    private static tools.jackson.databind.JsonNode resolvedIndices(String resolveIndexResponse) {
+        tools.jackson.databind.JsonNode answer;
+        try {
+            answer = tools.jackson.databind.json.JsonMapper.builder().build().readTree(resolveIndexResponse);
+        } catch (RuntimeException ex) {
+            throw new IllegalArgumentException("the _resolve/index answer is not JSON");
+        }
+        if (!answer.isObject() || !answer.path("indices").isArray()) {
+            throw new IllegalArgumentException("the _resolve/index answer has no indices list");
+        }
+        return answer.path("indices");
+    }
+
+    /**
+     * Search parameters for the request to the list of names of {@link #resolveIndexNames}: only open indexes, no error for a name
+     * that disappeared since it was resolved.
      */
     public static final java.util.Map<String, String> OPENSEARCH_SEARCH_PARAMETERS = java.util.Map.of(
             "expand_wildcards", "open", "ignore_unavailable", "true", "allow_no_indices", "true");
 
     private List<String> indexPatterns() {
+        List<String> patterns = new ArrayList<>();
+        for (String prefix : indexPrefixes()) {
+            patterns.add(prefix);
+            patterns.add(prefix + "-*");
+        }
+        return List.copyOf(patterns);
+    }
+
+    /** The granted prefixes inside the link, without those another prefix already covers. */
+    private List<String> indexPrefixes() {
         requireType("OpenSearch::Index");
         SortedSet<String> prefixes = new TreeSet<>();
         if (linkIds.isEmpty()) {
@@ -158,12 +257,7 @@ public final class QueryScope {
                 }
             }
         }
-        List<String> patterns = new ArrayList<>();
-        for (String prefix : withoutCovered(prefixes)) {
-            patterns.add(prefix);
-            patterns.add(prefix + "-*");
-        }
-        return List.copyOf(patterns);
+        return withoutCovered(prefixes);
     }
 
     private static Optional<String> longerIfNested(String a, String b) {
@@ -204,13 +298,11 @@ public final class QueryScope {
         return Optional.of(linkIds.map(ids -> inList("space", ids) + " AND " + granted).orElse(granted));
     }
 
-    /** As {@link #cql(Set)}, with the granted spaces too (see {@link #cqlSpaceClause(boolean)}). */
-    public StructuredQuery.Builder cql(Set<String> fields, boolean includeGrants) {
-        return new StructuredQuery.Builder(fields, cqlSpaceClause(includeGrants));
-    }
-
     /**
-     * Refuses a query that aggregates over an <em>alias</em> or a data stream: a pattern {@code p-*} also matches an alias named
+     * @deprecated since 3.0.0-beta-6: query the concrete names of {@link #resolveIndexNames} instead (CC-160); counts and aggregations
+     *             over them are limited to the scope, so there is nothing to refuse
+     *
+     * <p>Refuses a query that aggregates over an <em>alias</em> or a data stream: a pattern {@code p-*} also matches an alias named
      * {@code p-...} that may point at indexes outside the scope, and filtering the hits cannot correct counts and aggregates.
      * Call it with the body of {@code GET _resolve/index/<expression>} ({@link #opensearchIndexExpression()}) before an
      * aggregating search, {@code _count} or a search that reports {@code hits.total}.
@@ -219,16 +311,10 @@ public final class QueryScope {
      * @throws pl.aiwcorpo.mcp.platform.error.SanitizedToolException {@code access_denied} when the answer lists an alias or a
      *         data stream; {@link IllegalArgumentException} when it is not that JSON
      */
+    @Deprecated
     public static void requireNoAliases(String resolveIndexResponse) {
-        tools.jackson.databind.JsonNode answer;
-        try {
-            answer = tools.jackson.databind.json.JsonMapper.builder().build().readTree(resolveIndexResponse);
-        } catch (RuntimeException ex) {
-            throw new IllegalArgumentException("the _resolve/index answer is not JSON");
-        }
-        if (!answer.isObject() || !answer.path("indices").isArray()) {
-            throw new IllegalArgumentException("the _resolve/index answer has no indices list");
-        }
+        resolvedIndices(resolveIndexResponse);
+        tools.jackson.databind.JsonNode answer = tools.jackson.databind.json.JsonMapper.builder().build().readTree(resolveIndexResponse);
         if (answer.path("aliases").size() > 0 || answer.path("data_streams").size() > 0) {
             throw new pl.aiwcorpo.mcp.platform.error.SanitizedToolException(new pl.aiwcorpo.mcp.platform.error.McpErrorMapper.SafeError(
                     "access_denied", "Counts and aggregations are not available over aliases or data streams."));
@@ -236,23 +322,73 @@ public final class QueryScope {
     }
 
     /**
-     * A JQL query built from structured filters, limited to the projects of the link (and, with {@code includeGrants},
+     * A JQL query built from structured conditions, limited to the projects of the link (and, with {@code includeGrants},
      * to the granted ones): see {@link StructuredQuery}. The query is never taken from the model as text.
      *
-     * @param fields the fields the tool lets the model filter and sort on
+     * @param fields the fields the tool lets the model put conditions on; a subset of {@link StructuredQuery#JQL_CONDITION_FIELDS}
+     *               (CC-160), anything else is an {@link IllegalArgumentException}
      */
     public StructuredQuery.Builder jql(Set<String> fields) {
-        return new StructuredQuery.Builder(fields, jqlProjectClause());
+        return jql(fields, StructuredQuery.JQL_ORDER_FIELDS);
+    }
+
+    /** As {@link #jql(Set)} with the fields {@code ORDER BY} may use, a subset of {@link StructuredQuery#JQL_ORDER_FIELDS}. */
+    public StructuredQuery.Builder jql(Set<String> fields, Set<String> orderFields) {
+        return new StructuredQuery.Builder(StructuredQuery.Language.JQL, fields, orderFields,
+                jqlProjectClause().stream().toList());
     }
 
     /** As {@link #jql(Set)}, with the granted projects too (see {@link #jqlProjectClause(boolean)}). */
     public StructuredQuery.Builder jql(Set<String> fields, boolean includeGrants) {
-        return new StructuredQuery.Builder(fields, jqlProjectClause(includeGrants));
+        return new StructuredQuery.Builder(StructuredQuery.Language.JQL, fields, StructuredQuery.JQL_ORDER_FIELDS,
+                projectClauses(includeGrants));
     }
 
-    /** A CQL query built from structured filters, limited to the spaces of the link: see {@link StructuredQuery}. */
+    /** A CQL query built from structured conditions, limited to the spaces of the link: see {@link StructuredQuery}. */
     public StructuredQuery.Builder cql(Set<String> fields) {
-        return new StructuredQuery.Builder(fields, cqlSpaceClause());
+        return cql(fields, StructuredQuery.CQL_ORDER_FIELDS);
+    }
+
+    /** As {@link #cql(Set)} with the fields {@code ORDER BY} may use, a subset of {@link StructuredQuery#CQL_ORDER_FIELDS}. */
+    public StructuredQuery.Builder cql(Set<String> fields, Set<String> orderFields) {
+        return new StructuredQuery.Builder(StructuredQuery.Language.CQL, fields, orderFields,
+                cqlSpaceClause().stream().toList());
+    }
+
+    /** As {@link #cql(Set)}, with the granted spaces too (see {@link #cqlSpaceClause(boolean)}). */
+    public StructuredQuery.Builder cql(Set<String> fields, boolean includeGrants) {
+        return new StructuredQuery.Builder(StructuredQuery.Language.CQL, fields, StructuredQuery.CQL_ORDER_FIELDS,
+                spaceClauses(includeGrants));
+    }
+
+    /** The clauses of {@link #jqlProjectClause(boolean)}, one per condition, so that the query reads {@code project in (...) AND project in (...)}. */
+    private List<String> projectClauses(boolean includeGrants) {
+        requireType("Jira::Project", "Jira::Issue");
+        List<String> clauses = new ArrayList<>();
+        linkIds.ifPresent(ids -> clauses.add(inList("project", ids)));
+        if (includeGrants) {
+            if (grantedIds.isEmpty()) {
+                throw new IllegalStateException("the caller is granted no project: do not run the query (grantsNothing())");
+            }
+            clauses.add(inList("project", grantedIds));
+        }
+        return clauses;
+    }
+
+    private List<String> spaceClauses(boolean includeGrants) {
+        requireType("Confluence::Space", "Confluence::Page");
+        List<String> clauses = new ArrayList<>();
+        linkIds.ifPresent(ids -> clauses.add(inList("space", ids)));
+        if (includeGrants) {
+            if (!"Confluence::Space".equals(resourceType)) {
+                throw new IllegalStateException("the grants of pages are page subtrees: ask for the Confluence::Space scope to limit by grants");
+            }
+            if (grantedIds.isEmpty()) {
+                throw new IllegalStateException("the caller is granted no space: do not run the query (grantsNothing())");
+            }
+            clauses.add(inList("space", grantedIds));
+        }
+        return clauses;
     }
 
     private void requireType(String... allowed) {

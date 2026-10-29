@@ -282,10 +282,10 @@ public class JiraServer {
         @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
         public String findIssues(IssueFilter filter) {
             QueryScope scope = policy.queryScope("Jira::Project");
-            return scope.jql(Set.of("status", "text", "created"))
+            return scope.jql(Set.of("status", "text"))
                     .where("status", StructuredQuery.Operator.EQUALS, filter.status())
                     .where("text", StructuredQuery.Operator.CONTAINS, filter.text())
-                    .orderBy("created", StructuredQuery.Direction.DESC).build();
+                    .orderBy("updated", StructuredQuery.Direction.DESC).build();
         }
 
         @Tool(name = "pick_issues", description = "Returns the keys of the given issues the caller may see.")

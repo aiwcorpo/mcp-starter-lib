@@ -3,149 +3,173 @@ package pl.aiwcorpo.mcp.platform.resource;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
 import pl.aiwcorpo.mcp.platform.text.TextHygiene;
 
 /**
- * A search query built by the server from structured filters, never taken as text from the model: fields from a list the
- * tool author gives, operators from a closed set, values that are always quoted and escaped here according to the grammar
- * of JQL (Jira) or CQL (Confluence), and the scope of the call ({@link QueryScope}) put in front by the platform. There is
- * no way to hand the builder a fragment of query text, so a value cannot close a quote or a parenthesis, call a function
- * ({@code currentUser()}), add {@code OR project = HR} or end the query early.
+ * A search query built by the server from structured conditions, never taken as text from the model. It renders what
+ * {@code scripts/lib/query-rendering.mjs} of mcp-contracts renders (CC-160, {@code test-vectors/query-rendering/}):
+ * <ul>
+ *   <li>the conditions of the user come first, in <b>one pair of parentheses</b>, joined by {@code AND}; the scope clause of the
+ *       call ({@link QueryScope}) follows after {@code AND}, so an {@code OR} inside a value cannot widen the scope;</li>
+ *   <li>every value is one string literal in double quotes with {@code \} and {@code "} escaped; a control character
+ *       (U+0000 to U+001F, U+007F) is refused, not escaped;</li>
+ *   <li>fields and operators come from lists the contract fixes. They are <b>normative</b>: a server may allow fewer fields,
+ *       never more, and a new field needs a change of the contract. The operators are {@code =}, {@code ~} and {@code !=};</li>
+ *   <li>{@code ORDER BY} takes one field of the list and {@code ASC} or {@code DESC}.</li>
+ * </ul>
  *
  * <pre>{@code
- * String jql = scope.jql(Set.of("status", "assignee", "labels", "created"))
+ * String jql = scope.jql(Set.of("text", "status"))
  *         .where("status", Operator.EQUALS, filter.status())
- *         .where("labels", Operator.IN, filter.labels())
- *         .orderBy("created", Direction.DESC)
+ *         .where("text", Operator.CONTAINS, filter.text())
+ *         .orderBy("updated", Direction.DESC)
  *         .build();
- * // project in ("ABC", "DEF") AND status = "Open" AND labels in ("a", "b") ORDER BY created DESC
+ * // (status = "Open" AND text ~ "login") AND project in ("ABC", "DEF") ORDER BY updated DESC
  * }</pre>
  *
- * <p>Only conjunction ({@code AND}) exists, so no precedence can be reinterpreted. A free text search is
- * {@link Operator#CONTAINS} on {@code text} (or {@code summary}, {@code title}, ...); the characters Lucene gives a meaning
- * to ({@code * ? " ~ ( ) [ ] { } + - ! ^ : / & | \}) are escaped, so the value cannot be a wildcard, a phrase or a proximity
- * expression. The words {@code AND}, {@code OR} and {@code NOT} inside a text value are still read by the search engine as
- * operators between terms of that one search; they stay inside the field and cannot widen the scope. There is no way to express
- * {@code IS EMPTY}, {@code membersOf(...)} or date functions: add them to the tool as dedicated, fixed filters if needed, not by
- * letting a value carry them. Values may not contain the characters the text hygiene of the contracts forbids (CC-121).
+ * <p>Only conjunction exists, so no precedence can be reinterpreted, and there is no way to hand the builder a fragment of
+ * query text: a value cannot close a quote or a parenthesis, call a function ({@code currentUser()}), add
+ * {@code OR project = HR} or end the query early. The characters that the search engine of Jira and Confluence gives a meaning
+ * to inside a text search ({@code * ? ~}) stay in the value as written (the reference rendering does not escape them); they act
+ * inside that one condition only and cannot reach outside the scope. Values may not contain the characters the text hygiene of
+ * the contracts forbids (CC-121).
  */
 public final class StructuredQuery {
 
-    /** What a filter compares with. */
+    /** What a condition compares with: the three operators of the contract. */
     public enum Operator {
-        EQUALS("=", false),
-        NOT_EQUALS("!=", false),
-        IN("in", true),
-        NOT_IN("not in", true),
-        CONTAINS("~", false),
-        NOT_CONTAINS("!~", false),
-        GREATER(">", false),
-        GREATER_OR_EQUAL(">=", false),
-        LESS("<", false),
-        LESS_OR_EQUAL("<=", false);
+        EQUALS("="),
+        CONTAINS("~"),
+        NOT_EQUALS("!=");
 
         private final String text;
-        private final boolean list;
 
-        Operator(String text, boolean list) {
+        Operator(String text) {
             this.text = text;
-            this.list = list;
         }
     }
 
     public enum Direction { ASC, DESC }
 
+    /** The query language: the fields that conditions and {@code ORDER BY} may use in it, from the contract. */
+    enum Language {
+
+        JQL(Set.of("text", "status", "assignee", "summary"), Set.of("created", "updated", "priority", "key")),
+        CQL(Set.of("text", "title", "label"), Set.of("created", "lastmodified", "title"));
+
+        private final Set<String> conditionFields;
+        private final Set<String> orderFields;
+
+        Language(Set<String> conditionFields, Set<String> orderFields) {
+            this.conditionFields = conditionFields;
+            this.orderFields = orderFields;
+        }
+    }
+
+    /** Fields a JQL condition may use (CC-160, normative). */
+    public static final Set<String> JQL_CONDITION_FIELDS = Language.JQL.conditionFields;
+    /** Fields a JQL {@code ORDER BY} may use (CC-160, normative). */
+    public static final Set<String> JQL_ORDER_FIELDS = Language.JQL.orderFields;
+    /** Fields a CQL condition may use (CC-160, normative). */
+    public static final Set<String> CQL_CONDITION_FIELDS = Language.CQL.conditionFields;
+    /** Fields a CQL {@code ORDER BY} may use (CC-160, normative). */
+    public static final Set<String> CQL_ORDER_FIELDS = Language.CQL.orderFields;
+
     static final int MAX_VALUE_LENGTH = 1000;
-    static final int MAX_VALUES = 50;
-    static final int MAX_FILTERS = 30;
+    static final int MAX_CONDITIONS = 30;
     static final int MAX_QUERY_LENGTH = 8000;
 
-    private static final Pattern FIELD = Pattern.compile("^(?:[A-Za-z][A-Za-z0-9_.]{0,63}|cf\\[[0-9]{1,9}\\])$");
-    private static final String LUCENE_SPECIAL = "+-&|!(){}[]^\"~*?:\\/";
+    private static final Pattern CONTROL = Pattern.compile("[\\u0000-\\u001f\\u007f]");
 
-    /** Builder over the fields the tool may filter on and the scope clause of the call. */
+    /** Builder over the fields the tool may use and the scope clauses of the call. */
     public static final class Builder {
 
-        private final Set<String> allowedFields;
-        private final Optional<String> scope;
-        private final List<String> filters = new ArrayList<>();
-        private final List<String> order = new ArrayList<>();
+        private final Language language;
+        private final Set<String> conditionFields;
+        private final Set<String> orderFields;
+        private final List<String> scope;
+        private final List<String> conditions = new ArrayList<>();
+        private String order;
 
-        Builder(Set<String> allowedFields, Optional<String> scope) {
-            Objects.requireNonNull(allowedFields, "allowedFields");
-            for (String field : allowedFields) {
-                if (!FIELD.matcher(field).matches()) {
-                    throw new IllegalArgumentException("'" + field + "' is not a field name that can be filtered on "
-                            + "(letters, digits, '_' and '.', or cf[n])");
+        Builder(Language language, Set<String> conditionFields, Set<String> orderFields, List<String> scope) {
+            this.language = Objects.requireNonNull(language, "language");
+            this.conditionFields = requireSubset(language.conditionFields, conditionFields, "condition");
+            this.orderFields = requireSubset(language.orderFields, orderFields, "ORDER BY");
+            this.scope = List.copyOf(scope);
+        }
+
+        private static Set<String> requireSubset(Set<String> normative, Set<String> chosen, String what) {
+            Objects.requireNonNull(chosen, "fields");
+            for (String field : chosen) {
+                if (!normative.contains(field)) {
+                    throw new IllegalArgumentException("'" + field + "' is not a " + what + " field the contract allows " + normative
+                            + " (CC-160): a server may allow fewer fields, never more");
                 }
             }
-            this.allowedFields = Set.copyOf(allowedFields);
-            this.scope = Objects.requireNonNull(scope, "scope");
+            return Set.copyOf(chosen);
         }
 
         /**
-         * Adds {@code field operator values}. A value that is {@code null} or an empty list adds nothing, so optional
-         * filters of a tool can be passed as they are.
+         * Adds {@code field operator "value"}. A {@code null} value adds nothing, so optional filters of a tool can be
+         * passed as they are.
          *
-         * @param values one value for the comparison operators, one to {@value StructuredQuery#MAX_VALUES} for
-         *               {@code IN} and {@code NOT_IN}
-         * @throws IllegalArgumentException for a field that is not allowed, a value with forbidden characters, too long or too
-         *         many values (the platform reports it as {@code invalid_argument})
+         * @throws IllegalArgumentException for a field that is not allowed, an empty or long value or one with characters that are
+         *         not allowed (the platform reports it as {@code invalid_argument})
          */
-        public Builder where(String field, Operator operator, String... values) {
-            return where(field, operator, values == null ? null : java.util.Arrays.asList(values));
-        }
-
-        public Builder where(String field, Operator operator, List<String> values) {
-            requireAllowed(field);
+        public Builder where(String field, Operator operator, String value) {
+            if (field == null || !conditionFields.contains(field)) {
+                throw new IllegalArgumentException("the field is not one this tool may filter on");
+            }
             Objects.requireNonNull(operator, "operator");
-            if (values == null || values.isEmpty() || (values.size() == 1 && values.getFirst() == null)) {
+            if (value == null) {
                 return this;
             }
-            if (!operator.list && values.size() != 1) {
-                throw new IllegalArgumentException(operator.text + " takes one value");
+            if (conditions.size() >= MAX_CONDITIONS) {
+                throw new IllegalArgumentException("more than " + MAX_CONDITIONS + " conditions");
             }
-            if (values.size() > MAX_VALUES) {
-                throw new IllegalArgumentException("more than " + MAX_VALUES + " values");
-            }
-            if (filters.size() >= MAX_FILTERS) {
-                throw new IllegalArgumentException("more than " + MAX_FILTERS + " filters");
-            }
-            boolean text = operator == Operator.CONTAINS || operator == Operator.NOT_CONTAINS;
-            List<String> quoted = new ArrayList<>();
-            for (String value : values) {
-                quoted.add(quote(value, text));
-            }
-            filters.add(operator.list ? field + " " + operator.text + " (" + String.join(", ", quoted) + ")"
-                    : field + " " + operator.text + " " + quoted.getFirst());
+            conditions.add(field + " " + operator.text + " " + quoteValue(value));
             return this;
         }
 
+        /**
+         * The one {@code ORDER BY} of the query.
+         *
+         * @throws IllegalArgumentException for a field that is not allowed or a second call
+         */
         public Builder orderBy(String field, Direction direction) {
-            requireAllowed(field);
-            order.add(field + " " + Objects.requireNonNull(direction, "direction").name());
+            if (field == null || !orderFields.contains(field)) {
+                throw new IllegalArgumentException("the field is not one this tool may sort on");
+            }
+            if (order != null) {
+                throw new IllegalArgumentException("a query has one ORDER BY");
+            }
+            order = field + " " + Objects.requireNonNull(direction, "direction").name();
             return this;
         }
 
-        /** The query: scope clause and filters joined by {@code AND}, then {@code ORDER BY}; empty when there is nothing to say. */
+        /**
+         * The query: the conditions in parentheses, then the scope clauses, joined by {@code AND}, then {@code ORDER BY}; empty when
+         * there is nothing to say.
+         */
         public String build() {
             List<String> clauses = new ArrayList<>();
-            scope.ifPresent(clauses::add);
-            clauses.addAll(filters);
-            String query = String.join(" AND ", clauses) + (order.isEmpty() ? "" : " ORDER BY " + String.join(", ", order));
+            if (!conditions.isEmpty()) {
+                clauses.add("(" + String.join(" AND ", conditions) + ")");
+            }
+            clauses.addAll(scope);
+            String query = String.join(" AND ", clauses) + (order == null ? "" : " ORDER BY " + order);
             if (query.length() > MAX_QUERY_LENGTH) {
                 throw new IllegalArgumentException("the query is longer than " + MAX_QUERY_LENGTH + " characters");
             }
             return query.strip();
         }
 
-        private void requireAllowed(String field) {
-            if (field == null || !allowedFields.contains(field)) {
-                throw new IllegalArgumentException("the field is not one this tool may filter on");
-            }
+        /** The language of this builder, for messages. */
+        @Override
+        public String toString() {
+            return "StructuredQuery.Builder[" + language + "]";
         }
     }
 
@@ -153,41 +177,26 @@ public final class StructuredQuery {
     }
 
     /**
-     * A JQL/CQL string literal for {@code value}: in double quotes, with the backslash, the double quote and the line
-     * breaks escaped; for a text search ({@code text}) the characters Lucene interprets are escaped first.
+     * A string literal for {@code value} as the reference rendering writes it: in double quotes, {@code \} and {@code "} preceded by
+     * {@code \}. For identifiers of the scope, which the platform takes from the policy.
      *
-     * @throws IllegalArgumentException for an empty or long value or one with characters the text hygiene forbids
+     * @throws IllegalArgumentException for a value with a control character
      */
-    static String quote(String value, boolean text) {
-        if (value == null || value.isEmpty() || value.length() > MAX_VALUE_LENGTH) {
+    static String quote(String value) {
+        if (value == null || CONTROL.matcher(value).find()) {
+            throw new IllegalArgumentException("a value must be a plain string without control characters");
+        }
+        return "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+    }
+
+    /** {@link #quote} for a value of the model: also 1 to {@value #MAX_VALUE_LENGTH} characters and the text hygiene of the contracts. */
+    private static String quoteValue(String value) {
+        if (value.isEmpty() || value.length() > MAX_VALUE_LENGTH) {
             throw new IllegalArgumentException("a value must have 1 to " + MAX_VALUE_LENGTH + " characters");
         }
         if (TextHygiene.firstProblem(value, false) != null) {
             throw new IllegalArgumentException("a value has characters that are not allowed in text");
         }
-        StringBuilder literal = new StringBuilder(value.length() + 8).append('"');
-        for (int i = 0; i < value.length(); i++) {
-            char c = value.charAt(i);
-            if (text && LUCENE_SPECIAL.indexOf(c) >= 0) {
-                literal.append("\\\\");
-                if (c == '\\') {
-                    literal.append("\\\\");
-                    continue;
-                }
-                if (c == '"') {
-                    literal.append("\\\"");
-                    continue;
-                }
-            }
-            switch (c) {
-                case '\\' -> literal.append("\\\\");
-                case '"' -> literal.append("\\\"");
-                case '\n' -> literal.append("\\n");
-                case '\r' -> literal.append("\\r");
-                case '\t' -> literal.append("\\t");
-                default -> literal.append(c);
-            }
-        }
-        return literal.append('"').toString();
+        return quote(value);
     }
 }

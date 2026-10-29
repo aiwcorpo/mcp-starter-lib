@@ -96,6 +96,30 @@ class ResourcePolicyTest {
     }
 
     @Test
+    void aCallerWithoutAGrantGetsNotFoundOrDeniedBeforeTheSystemIsAskedNotAnInternalError() {
+        jira.calls.clear();
+        // NOC-1 lies in a project with no category: for a caller with a grant that is an internal_error (aResourceWithoutItsClassification...), for one
+        // without it the answer must not tell that the issue exists (CC-146).
+        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-write", "mcp-jira-proj-ABC")))) {
+            McpSchema.CallToolResult result = call(client, "transfer_issue", Map.of("issueKey", "NOC-1", "targetProject", "ABC"));
+
+            assertThat(result.isError()).isTrue();
+            assertThat(text(result)).isEqualTo("{\"error\":\"not_found_or_denied\",\"message\":\"The resource does not exist or you do not have access to it.\"}");
+            assertThat(jira.calls).as("the grant is judged before the resolver asks Jira").isEmpty();
+        }
+    }
+
+    @Test
+    void everyNotFoundOrDeniedAnswerIsTheSameText() {
+        try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
+            String missing = text(call(client, "get_issue", Map.of("issueKey", "ABC-999")));
+            String restricted = text(call(client, "get_issue", Map.of("issueKey", "HR-5")));
+
+            assertThat(missing).isEqualTo(restricted).contains("The resource does not exist or you do not have access to it.");
+        }
+    }
+
+    @Test
     void everyValueOfAListIsEvaluatedAndOneDeniedValueEndsTheCall() {
         try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
             McpSchema.CallToolResult allowed = call(client, "count_issues", Map.of("issueKeys", List.of("ABC-1", "ABC-2", "DEF-7")));
@@ -271,14 +295,14 @@ class ResourcePolicyTest {
         try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read"))
                 .virtualServer("two", Map.of("jiraProjects", List.of("ABC", "DEF"))))) {
             assertThat(JSON.readTree(text(call(client, "find_issues", Map.of("filter", Map.of("status", "Open"))))).asString())
-                    .isEqualTo("project in (\"ABC\", \"DEF\") AND status = \"Open\" ORDER BY created DESC");
+                    .isEqualTo("(status = \"Open\") AND project in (\"ABC\", \"DEF\") ORDER BY updated DESC");
             String hostile = "x\\\" ) OR project = HR OR ( text ~ \"y";
             String built = JSON.readTree(text(call(client, "find_issues", Map.of("filter", Map.of("status", hostile))))).asString();
-            assertThat(built).startsWith("project in (\"ABC\", \"DEF\") AND status = \"x\\\\\\\" ) OR project = HR OR ( text ~ \\\"y\"");
+            assertThat(built).startsWith("(status = \"x\\\\\\\" ) OR project = HR OR ( text ~ \\\"y\") AND project in (\"ABC\", \"DEF\")");
         }
         try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
             assertThat(JSON.readTree(text(call(client, "find_issues", Map.of("filter", Map.of("text", "a*"))))).asString())
-                    .isEqualTo("text ~ \"a\\\\*\" ORDER BY created DESC");
+                    .isEqualTo("(text ~ \"a*\") ORDER BY updated DESC");
         }
     }
 

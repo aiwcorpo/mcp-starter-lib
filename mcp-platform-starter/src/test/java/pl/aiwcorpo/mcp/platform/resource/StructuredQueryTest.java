@@ -20,11 +20,11 @@ import pl.aiwcorpo.mcp.platform.resource.StructuredQuery.Operator;
  * (an escaped quote outside quotes that moves the parentheses in Jira's lexer), backslashes, quotes, parentheses,
  * ORDER BY, comments, functions and Unicode are all values here. A lexer that reads the query the way Jira's does
  * (a backslash escapes the next character everywhere, quotes open strings) checks that the structure is the same whatever
- * the value is: the scope clause, then exactly the filters that were added, joined by AND.
+ * the value is: the conditions in one pair of parentheses, then the scope clause, joined by AND (CC-160).
  */
 class StructuredQueryTest {
 
-    private static final Set<String> FIELDS = Set.of("status", "labels", "summary", "text", "created", "cf[10000]");
+    private static final Set<String> FIELDS = Set.of("status", "assignee", "summary", "text");
 
     private static QueryScope scope(Set<String> link) {
         return QueryScope.of(new QueryConstraint("Jira::Project", link == null ? Optional.empty() : Optional.of(new TreeSet<>(link)),
@@ -84,39 +84,47 @@ class StructuredQueryTest {
     }
 
     @Test
-    void buildsTheScopeThenTheFiltersJoinedByAndThenTheOrder() {
+    void buildsTheConditionsInParenthesesThenTheScopeThenTheOrder() {
         String jql = scope(Set.of("DEF", "ABC")).jql(FIELDS)
                 .where("status", Operator.EQUALS, "Open")
-                .where("labels", Operator.IN, List.of("a", "b c"))
-                .where("created", Operator.GREATER_OR_EQUAL, "2026-01-01")
-                .orderBy("created", Direction.DESC).build();
+                .where("assignee", Operator.NOT_EQUALS, "bob")
+                .where("text", Operator.CONTAINS, "login")
+                .orderBy("updated", Direction.DESC).build();
 
-        assertThat(jql).isEqualTo("project in (\"ABC\", \"DEF\") AND status = \"Open\" AND labels in (\"a\", \"b c\") "
-                + "AND created >= \"2026-01-01\" ORDER BY created DESC");
+        assertThat(jql).isEqualTo("(status = \"Open\" AND assignee != \"bob\" AND text ~ \"login\") AND project in (\"ABC\", \"DEF\") "
+                + "ORDER BY updated DESC");
     }
 
     @Test
-    void withoutALinkThereIsNoScopeClauseAndNothingAtAllWithoutFilters() {
-        assertThat(scope(null).jql(FIELDS).where("status", Operator.NOT_EQUALS, "Done").build()).isEqualTo("status != \"Done\"");
+    void withoutALinkThereIsNoScopeClauseAndNothingAtAllWithoutConditions() {
+        assertThat(scope(null).jql(FIELDS).where("status", Operator.NOT_EQUALS, "Done").build()).isEqualTo("(status != \"Done\")");
         assertThat(scope(null).jql(FIELDS).build()).isEmpty();
         assertThat(scope(Set.of("ABC")).jql(FIELDS).build()).isEqualTo("project in (\"ABC\")");
     }
 
     @Test
-    void absentOptionalFiltersAddNothing() {
-        String jql = scope(Set.of("ABC")).jql(FIELDS).where("status", Operator.EQUALS, (String) null)
-                .where("labels", Operator.IN, (List<String>) null).where("labels", Operator.IN, List.of()).build();
+    void anAbsentOptionalConditionAddsNothing() {
+        String jql = scope(Set.of("ABC")).jql(FIELDS).where("status", Operator.EQUALS, (String) null).build();
 
         assertThat(jql).isEqualTo("project in (\"ABC\")");
     }
 
     @Test
-    void cqlGetsTheSpaceClause() {
+    void cqlGetsTheSpaceClauseAfterTheConditions() {
         QueryScope spaces = QueryScope.of(new QueryConstraint("Confluence::Page", Optional.of(new TreeSet<>(Set.of("ENG"))),
                 "Confluence::Space", new TreeSet<>()));
 
-        assertThat(spaces.cql(Set.of("title", "label")).where("title", Operator.CONTAINS, "plan").build())
-                .isEqualTo("space in (\"ENG\") AND title ~ \"plan\"");
+        assertThat(spaces.cql(Set.of("title", "label")).where("title", Operator.CONTAINS, "plan").orderBy("lastmodified", Direction.ASC).build())
+                .isEqualTo("(title ~ \"plan\") AND space in (\"ENG\") ORDER BY lastmodified ASC");
+    }
+
+    @Test
+    void grantsAndLinkAreTwoClausesAfterTheConditions() {
+        QueryScope both = QueryScope.of(new QueryConstraint("Jira::Project", Optional.of(new TreeSet<>(Set.of("ABC", "DEF"))),
+                "Jira::Project", new TreeSet<>(Set.of("ABC"))));
+
+        assertThat(both.jql(FIELDS, true).where("status", Operator.EQUALS, "Open").build())
+                .isEqualTo("(status = \"Open\") AND project in (\"ABC\", \"DEF\") AND project in (\"ABC\")");
     }
 
     /** The review's payload and its relatives, as a value of every operator, in the link-narrowed scope. */
@@ -128,29 +136,27 @@ class StructuredQueryTest {
             ") OR project = HR OR (", "(", ")", "a) OR (project = HR",
             " ORDER BY created", "x ORDER BY created OR project = HR", "order by 1",
             "currentUser()", "now()", "membersOf(\"hr\")", "project = HR", "1 = 1", "-- comment", "/* c */ OR /* d */", "// x", "#",
-            "a\nb", "a\tb", "a\r\nb", "\u017c\u00f3\u0142\u0107", "\ud83d\ude00", "\u00e9\u0301", "\uff02 OR \uff09", "\u2018x\u2019", "\u201cx\u201d",
+            "\u017c\u00f3\u0142\u0107", "\ud83d\ude00", "\u00e9\u0301", "\uff02 OR \uff09", "\u2018x\u2019", "\u201cx\u201d",
             "*", "?", "~", "~2", "a*b", "-HR", "+HR", "AND", "OR", "NOT", "{", "}", "[", "]", "^2", ":", "/", "&&", "||", "!"})
     void aValueIsAlwaysOneStringLiteralWhateverItContains(String hostile) {
         for (Operator operator : Operator.values()) {
             String query = scope(Set.of("ABC")).jql(FIELDS).where("summary", operator, hostile).build();
             List<String> tokens = lex(query);
 
-            // project in ( "ABC" ) AND summary <op> [ ( ] "<literal>" [ ) ]
-            assertThat(tokens.subList(0, 6)).as(query).containsExactly("project", "in", "(", "\"ABC\"", ")", "AND");
-            assertThat(tokens.get(6)).as(query).isEqualTo("summary");
-            List<String> rest = tokens.subList(7, tokens.size());
-            long literals = rest.stream().filter(t -> t.startsWith("\"")).count();
-            assertThat(literals).as(query).isEqualTo(1);
-            assertThat(rest.stream().filter(t -> !t.startsWith("\"")).toList()).as(query)
-                    .isIn(List.of(operatorTokens(operator, false)), List.of(operatorTokens(operator, true)));
-            assertThat(query).as("no raw newline in a literal").doesNotContain("\n").doesNotContain("\r");
+            // ( summary <op> "<literal>" ) AND project in ( "ABC" )
+            assertThat(tokens.get(0)).as(query).isEqualTo("(");
+            assertThat(tokens.get(1)).as(query).isEqualTo("summary");
+            assertThat(tokens.get(2)).as(query).isEqualTo(operator == Operator.EQUALS ? "=" : operator == Operator.CONTAINS ? "~" : "!=");
+            assertThat(tokens.get(3)).as(query).startsWith("\"");
+            assertThat(tokens.subList(4, tokens.size())).as(query).containsExactly(")", "AND", "project", "in", "(", "\"ABC\"", ")");
+            assertThat(tokens.stream().filter(t -> t.startsWith("\"")).count()).as(query).isEqualTo(2);
         }
     }
 
-    /** The same attacks as values of a CQL query: one string literal, the space clause and the field in front of it. */
+    /** The same attacks as values of a CQL query: one string literal, the conditions in parentheses and the space clause after them. */
     @ParameterizedTest
-    @ValueSource(strings = {"x\\\" ) OR space = SECRET OR ( title ~ \"y", "\\", "\"", "\" OR space = SECRET OR \"", ") OR (", "\n",
-            "order by title", "currentUser()", "-- c", "/* c */", "\u00e9\u0301", "*", "a\tb"})
+    @ValueSource(strings = {"x\\\" ) OR space = SECRET OR ( title ~ \"y", "\\", "\"", "\" OR space = SECRET OR \"", ") OR (",
+            "order by title", "currentUser()", "-- c", "/* c */", "\u00e9\u0301", "*"})
     void aCqlValueIsAlwaysOneStringLiteralToo(String hostile) {
         QueryScope spaces = QueryScope.of(new QueryConstraint("Confluence::Space", Optional.of(new TreeSet<>(Set.of("ENG"))),
                 "Confluence::Space", new TreeSet<>(Set.of("ENG"))));
@@ -158,62 +164,62 @@ class StructuredQueryTest {
             String query = spaces.cql(Set.of("title")).where("title", operator, hostile).build();
             List<String> tokens = lex(query);
 
-            assertThat(tokens.subList(0, 6)).as(query).containsExactly("space", "in", "(", "\"ENG\"", ")", "AND");
-            assertThat(tokens.get(6)).as(query).isEqualTo("title");
-            assertThat(tokens.stream().filter(t -> t.startsWith("\"")).count()).as(query).isEqualTo(2);
+            assertThat(tokens.get(0)).as(query).isEqualTo("(");
+            assertThat(tokens.get(1)).as(query).isEqualTo("title");
+            assertThat(tokens.subList(4, tokens.size())).as(query).containsExactly(")", "AND", "space", "in", "(", "\"ENG\"", ")");
             assertThat(query).doesNotContain("\n").doesNotContain("\r").doesNotContain("\t");
         }
     }
 
-    private static String[] operatorTokens(Operator operator, boolean list) {
-        String text = switch (operator) {
-            case EQUALS -> "=";
-            case NOT_EQUALS -> "!=";
-            case IN -> "in";
-            case NOT_IN -> "not in";
-            case CONTAINS -> "~";
-            case NOT_CONTAINS -> "!~";
-            case GREATER -> ">";
-            case GREATER_OR_EQUAL -> ">=";
-            case LESS -> "<";
-            case LESS_OR_EQUAL -> "<=";
-        };
-        List<String> tokens = new ArrayList<>(List.of(text.split(" ")));
-        if (operator == Operator.IN || operator == Operator.NOT_IN) {
-            tokens.add("(");
-            tokens.add(")");
+    @Test
+    void aValueIsQuotedLikeTheReferenceRendering() {
+        assertThat(StructuredQuery.quote("a\"b")).isEqualTo("\"a\\\"b\"");
+        assertThat(StructuredQuery.quote("a\\b")).isEqualTo("\"a\\\\b\"");
+        assertThat(StructuredQuery.quote("\u017c")).isEqualTo("\"\u017c\"");
+        assertThat(StructuredQuery.quote("currentUser()")).isEqualTo("\"currentUser()\"");
+        assertThat(StructuredQuery.quote("a*b?c ~ (x)")).as("Lucene characters are not escaped, as in the reference").isEqualTo("\"a*b?c ~ (x)\"");
+    }
+
+    @Test
+    void aControlCharacterIsRefusedNotEscaped() {
+        for (String value : new String[] {"a\nb", "a\tb", "a\rb", "a\u0000b", "a\u007fb", "a\u001fb"}) {
+            assertThatThrownBy(() -> StructuredQuery.quote(value)).as(String.valueOf(value.hashCode())).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> scope(null).jql(FIELDS).where("summary", Operator.CONTAINS, value)).isInstanceOf(IllegalArgumentException.class);
         }
-        return tokens.toArray(String[]::new);
     }
 
     @Test
-    void theEscapesAreTheOnesOfTheGrammar() {
-        assertThat(StructuredQuery.quote("a\"b", false)).isEqualTo("\"a\\\"b\"");
-        assertThat(StructuredQuery.quote("a\\b", false)).isEqualTo("\"a\\\\b\"");
-        assertThat(StructuredQuery.quote("a\nb\tc\rd", false)).isEqualTo("\"a\\nb\\tc\\rd\"");
-        assertThat(StructuredQuery.quote("\u017c", false)).isEqualTo("\"\u017c\"");
-        assertThat(StructuredQuery.quote("currentUser()", false)).isEqualTo("\"currentUser()\"");
+    void fieldsAndOperatorsAreTheNormativeListsOfTheContractAndAServerMayAllowFewer() {
+        assertThat(StructuredQuery.JQL_CONDITION_FIELDS).containsExactlyInAnyOrder("text", "status", "assignee", "summary");
+        assertThat(StructuredQuery.JQL_ORDER_FIELDS).containsExactlyInAnyOrder("created", "updated", "priority", "key");
+        assertThat(StructuredQuery.CQL_CONDITION_FIELDS).containsExactlyInAnyOrder("text", "title", "label");
+        assertThat(StructuredQuery.CQL_ORDER_FIELDS).containsExactlyInAnyOrder("created", "lastmodified", "title");
+        assertThat(Operator.values()).extracting(Operator::name).containsExactlyInAnyOrder("EQUALS", "CONTAINS", "NOT_EQUALS");
     }
 
     @Test
-    void aTextSearchEscapesWhatLuceneInterpretsSoTheValueIsLiteral() {
-        assertThat(StructuredQuery.quote("a*b?c", true)).isEqualTo("\"a\\\\*b\\\\?c\"");
-        assertThat(StructuredQuery.quote("x~2 AND (y)", true)).isEqualTo("\"x\\\\~2 AND \\\\(y\\\\)\"");
-        assertThat(StructuredQuery.quote("say \"hi\"", true)).isEqualTo("\"say \\\\\\\"hi\\\\\\\"\"");
-        assertThat(StructuredQuery.quote("a\\b", true)).isEqualTo("\"a\\\\\\\\b\"");
+    void aFieldBeyondTheContractIsRefusedWhenTheBuilderIsCreated() {
+        QueryScope scope = scope(Set.of("ABC"));
+
+        assertThatThrownBy(() -> scope.jql(Set.of("status", "labels"))).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("labels");
+        assertThatThrownBy(() -> scope.jql(Set.of("cf[10000]"))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> scope.jql(Set.of("status) OR (project"))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> scope.jql(FIELDS, Set.of("summary"))).isInstanceOf(IllegalArgumentException.class);
+        assertThat(scope.jql(Set.of("status"), Set.of("created")).orderBy("created", Direction.ASC).build()).endsWith("ORDER BY created ASC");
     }
 
     @Test
-    void aFieldOutsideTheListOrAnOperatorWithTheWrongNumberOfValuesIsRefused() {
+    void aConditionOrOrderOutsideTheToolsFieldsOrASecondOrderIsRefused() {
         QueryScope scope = scope(Set.of("ABC"));
 
         assertThatThrownBy(() -> scope.jql(FIELDS).where("project", Operator.EQUALS, "HR")).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> scope.jql(FIELDS).where("status or 1", Operator.EQUALS, "x")).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> scope.jql(FIELDS).orderBy("project", Direction.ASC)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> scope.jql(FIELDS).where("status", Operator.EQUALS, "a", "b")).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> scope.jql(Set.of("status) OR (project"))).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> scope.jql(Set.of("a b"))).isInstanceOf(IllegalArgumentException.class);
-        assertThat(scope.jql(FIELDS).where("cf[10000]", Operator.EQUALS, "x").build()).endsWith("cf[10000] = \"x\"");
+        assertThatThrownBy(() -> scope.jql(FIELDS).orderBy("summary ASC, project", Direction.ASC)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> scope.jql(Set.of("status"), Set.of("created")).orderBy("updated", Direction.ASC))
+                .isInstanceOf(IllegalArgumentException.class);
+        StructuredQuery.Builder ordered = scope.jql(FIELDS).orderBy("created", Direction.ASC);
+        assertThatThrownBy(() -> ordered.orderBy("updated", Direction.DESC)).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -224,8 +230,6 @@ class StructuredQueryTest {
             assertThatThrownBy(() -> scope.jql(FIELDS).where("summary", Operator.CONTAINS, value)).as(value.length() + ":" + value.hashCode())
                     .isInstanceOf(IllegalArgumentException.class);
         }
-        assertThatThrownBy(() -> scope.jql(FIELDS).where("labels", Operator.IN, java.util.Collections.nCopies(51, "a")))
-                .isInstanceOf(IllegalArgumentException.class);
         StructuredQuery.Builder many = scope.jql(FIELDS);
         for (int i = 0; i < 30; i++) {
             many.where("status", Operator.EQUALS, "a");

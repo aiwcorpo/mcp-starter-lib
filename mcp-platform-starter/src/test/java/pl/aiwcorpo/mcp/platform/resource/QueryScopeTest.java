@@ -49,6 +49,42 @@ class QueryScopeTest {
     }
 
     @Test
+    void aScopeThatExcludesEverythingIsAnEmptyResultForASearchAndNotFoundOrDeniedForAFetchById() {
+        QueryScope noIndex = scope("OpenSearch::Index", "OpenSearch::Index", null, Set.of());
+        QueryScope noProject = scope("Jira::Project", "Jira::Project", null, Set.of());
+        QueryScope someProject = scope("Jira::Project", "Jira::Project", null, Set.of("ABC"));
+
+        assertThat(noIndex.nothingToQuery()).isTrue();
+        assertThat(noProject.nothingToQuery()).isTrue();
+        assertThat(someProject.nothingToQuery()).isFalse();
+        assertThat(noIndex.resolveIndexNames("{\"indices\":[{\"name\":\"logs-team-a-1\"}]}")).isEmpty();
+        assertThatThrownBy(noIndex::requireQueryable).isInstanceOf(pl.aiwcorpo.mcp.platform.error.SanitizedToolException.class)
+                .extracting(error -> ((pl.aiwcorpo.mcp.platform.error.SanitizedToolException) error).toSafeError())
+                .isEqualTo(new pl.aiwcorpo.mcp.platform.error.McpErrorMapper.SafeError("not_found_or_denied",
+                        "The resource does not exist or you do not have access to it."));
+        assertThatThrownBy(() -> noIndex.resolveIndexArgument("logs-team-a-1", "{\"indices\":[{\"name\":\"logs-team-a-1\"}]}"))
+                .as("nothing to query: the same answer as for an index the user cannot see")
+                .isInstanceOf(pl.aiwcorpo.mcp.platform.error.SanitizedToolException.class);
+        someProject.requireQueryable();
+    }
+
+    @Test
+    void indexNamesComeOnlyFromTheIndicesOfTheAnswerAndOnlyInsideTheScope() {
+        QueryScope scope = scope("OpenSearch::Index", "OpenSearch::Index", null, Set.of("logs-team-a"));
+        String answer = "{\"indices\":[{\"name\":\"logs-team-a\"},{\"name\":\"logs-team-a-2\"},{\"name\":\"logs-team-ab\"},"
+                + "{\"name\":\".ds-logs-team-a-000001\"},{\"name\":\"logs-team-b-1\"}],"
+                + "\"aliases\":[{\"name\":\"logs-team-a-all\",\"indices\":[\"logs-team-b-1\"]}],"
+                + "\"data_streams\":[{\"name\":\"logs-team-a-stream\",\"backing_indices\":[\".ds-logs-team-a-000001\"]}]}";
+
+        assertThat(scope.resolveIndexNames(answer)).containsExactly("logs-team-a", "logs-team-a-2");
+        assertThat(scope.resolveIndexArgument("logs-team-a-2", answer)).isEqualTo("logs-team-a-2");
+        assertThatThrownBy(() -> scope.resolveIndexNames("{\"aliases\":[]}")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> scope.resolveIndexNames("not json")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> scope("Jira::Project", "Jira::Project", null, Set.of("ABC")).resolveIndexNames(answer))
+                .isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
     void openSearchPrefixesBecomeAPairAndNeverAWildcardOnTheName() {
         assertThat(scope("OpenSearch::Index", "OpenSearch::Index", null, Set.of("logs-team-a", "metrics"))
                 .opensearchIndexPatterns()).containsExactly("logs-team-a", "logs-team-a-*", "metrics", "metrics-*");
