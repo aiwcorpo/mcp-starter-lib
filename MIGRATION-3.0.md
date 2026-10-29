@@ -308,6 +308,116 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
+## Z beta-5 na beta-6
+
+Przejście na kontrakty **4.0.0** (pakiet M4; CHANGELOG kontraktów, "4.0.0"). Biblioteki, paczki polityk i serwery przechodzą razem: nowe bajty `mcp.cedarschema`
+(CC-136) sprawiają, że paczka zbudowana na schemacie 3.1.x jest odrzucana jako `schema_mismatch`, więc serwer na beta-6 potrzebuje paczki z `mcp-policies` zbudowanej
+na 4.0.0 (ws-09), a serwer na beta-5 nie przyjmie paczki 4.0.0. Gateway 4.0.0 i broker 4.0.0 rozmawiają z serwerem beta-6; beta-5 z gatewayem 4.0.0 nie przejdzie rejestracji
+(zob. "Manifest" niżej).
+
+### 1. Wersja
+
+Serwer z szablonu: `<mcp-platform.version>3.0.0-beta-6</mcp-platform.version>` w `pom.xml` (właściwość, którą czyta `mcp-platform-bom` przez `${mcp-platform.version}`;
+`new-server.sh` bierze wersję z tej właściwości szablonu). Serwer bez właściwości: `<version>3.0.0-beta-6</version>` w imporcie `mcp-platform-bom`
+(`pl.aiwcorpo.mcp:mcp-platform-bom`, `<type>pom</type>`, `<scope>import</scope>`). BOM ustawia `mcp-contracts` na 4.0.0 (też `mcp-cedar-entities`, `mcp-policy-bundle`,
+`mcp-manifest`); nie wpisuj ich ręcznie. Wartości wersji w README serwera (starter `3.0.0-beta-6`, kontrakty `4.0.0`) popraw ręcznie.
+
+### 2. Konfiguracja: `credential-type` (CC-136), obowiązkowe
+
+Każde żądanie Cedar ma teraz `context.credentialType` z konfiguracji serwera, zawsze. Jeśli `manifest.accepted-credential-types` wymienia **dokładnie jeden** typ, starter bierze go
+stamtąd i nic nie trzeba zmieniać. Serwer, który przyjmuje kilka typów (przykład z README: `[user-oauth, user-secret]`), musi nazwać ten, którego używa konfiguracja
+jego systemu w gateway'u (to samo ustawienie, którego gateway używa przy sprawdzeniu `credential_type_mismatch`):
+
+```yaml
+aiwcorpo.mcp.platform:
+  credential-type: user-secret          # user-oauth | user-secret | token-exchange | service-account
+  manifest:
+    accepted-credential-types: [user-oauth, user-secret]
+```
+
+Bez ustalonego typu serwer nie wstaje (komunikat strażnika konfiguracji), a typ spoza `accepted-credential-types` też zatrzymuje start (gateway odrzuciłby manifest:
+`credential_type_mismatch`). Serwer OpenSearch rejestruje `acceptedTypes` z `token-exchange` **przed** gatewayem 4.0.0 (manifest z samym `user-secret` jest odrzucany);
+serwer Service Desku z kontem serwisowym ustawia `credential-type: service-account`, bo od tego zależą reguły `credential-type.cedar`. `TestGateway` w `mcp-platform-test` ustawia
+`credential-type=user-secret`; test serwera z innym typem nadpisuje właściwość w `serverProperties()`.
+
+Kto buduje `ResourcePolicy` sam (testy): konstruktor ma nowy parametr `credentialType` po `system` i rzuca `IllegalStateException` dla `null`.
+
+### 3. Klucze `dev-` i tryb dev (CC-137)
+
+`kid` JWT i identyfikator klucza paczki zaczynające się od `dev-` (klucze, które stos deweloperski generuje lokalnie) są odrzucane poza trybem dev z powodem `test_key_not_allowed`:
+tryb dev to profil `devstack` (obie zgody) **i** `allow-test-keys=true`. Samo `allow-test-keys` (testy jednostkowe, profil `dev`) nadal przyjmuje klucze `test-*` i opublikowane
+klucze testowe, a `dev-` odrzuca. Stos z kluczami `dev-` ustawia więc `SPRING_PROFILES_ACTIVE=devstack` razem z `AIWCORPO_MCP_PLATFORM_INTERNAL_JWT_ALLOW_TEST_KEYS=true` i
+`AIWCORPO_MCP_PLATFORM_POLICY_ALLOW_TEST_KEYS=true` (oprócz obu zgód z beta-4). `PolicyEngine.create(policy, ssl, meters, devstackProfile)` ma przeciążenie z flagą profilu
+(bez flagi: `false`); `InternalJwtVerifier.Settings` ma szósty składnik `devstackProfile` (pięcioargumentowy konstruktor zostaje, z `false`).
+
+### 4. Manifest: `environment` i rejestracja (CC-138, CC-133, CC-140)
+
+- Serwer z profilem `devstack` publikuje manifest z `"environment": "dev"`. Gateway w trybie produkcyjnym odrzuca go: `422 manifest_rejected`, powód `environment_mismatch`.
+  W pozostałych profilach pola nie ma (znaczy produkcję); nie wchodzi do `definitionHash`.
+- Rejestrujesz w gateway'u **artefakt etapu budowy** przeglądanego commitu (`aiwcorpo.mcp.platform.manifest.output-file`, np. `target/mcp-manifest.json`), nigdy odpowiedź działającego serwera:
+  poza `devstack` gateway nie pobiera manifestu od serwera. Zatwierdzane przy wdrożeniu są tylko narzędzia `READ_ONLY`; nowe i zmienione `UPDATE` i `DESTRUCTIVE` czekają na `approve` administratora,
+  a obniżenie `risk` jest zawsze `422` (`risk_lowered`).
+- `ArgumentLimits(contractPattern = "OpenSearchIndexPrefix")` działa bez obejścia: wzorzec w kontraktach to jedna zakotwiczona postać, starter niczego nie przepisuje
+  (`SchemaLimitedToolCallbacks.oneAnchoredPattern` usunięte, było pakietowe).
+
+### 5. Zasoby: odmowa, kolejność, błąd silnika (CC-146, CC-141)
+
+- `not_found_or_denied` ma jeden `message`: `The resource does not exist or you do not have access to it.` Starter ustawia go niezależnie od tekstu z `ToolErrorMapping` serwera, więc
+  testy, które sprawdzały własny tekst (`"The issue does not exist or is not visible."`), porównują ze stałą `ToolErrorCode.NOT_FOUND_OR_DENIED_MESSAGE`. Zmień też mapowania serwera, które
+  zwracały tekst własny, na tę stałą (nie jest już potrzebne podawać tekstu).
+- Kolejność: najpierw grant. Użytkownik bez grantu na zasób dostaje `not_found_or_denied` **przed** wywołaniem resolvera i budową encji z danych systemu; `internal_error` z powodu
+  brakującej klasyfikacji nie zdradza już istnienia zasobu osobie bez dostępu (opis w README, "Jedna odmowa dla zasobów i kolejność ocen"). Test serwera, który oczekiwał `internal_error` dla zasobu
+  bez klasyfikacji, musi wywołać go użytkownikiem z grantem. Kolejka Service Desku poza zakresem linku w argumencie to `not_found_or_denied`, nie `access_denied` (zmień test i mapowanie w adapterze).
+- Brak paczki polityk po restarcie (albo błąd silnika polityk przy ocenie narzędzia) to `upstream_unavailable` z tekstem `Policies are not available. Try again later.`, a w audycie `policy_decision`
+  z powodem `policy_unavailable` albo `policy_error` (wcześniej błąd silnika kończył się `access_denied`).
+
+### 6. Zapytania: `StructuredQuery` z list normatywnych, nazwy indeksów (CC-160, CC-147)
+
+To jedyna zmiana łamiąca API Javy w tym wydaniu. Kontrakt 4.0.0 zamknął listy pól i operatorów; starter przyjmuje tylko podzbiór:
+
+| Było (beta-5) | Jest (beta-6) |
+| --- | --- |
+| `scope.jql(Set.of("status", "labels", "created", "cf[10000]"))` | pola warunków tylko z `text`, `status`, `assignee`, `summary` (JQL) albo `text`, `title`, `label` (CQL); inne pole: `IllegalArgumentException` przy `scope.jql(...)` |
+| `.orderBy("created", ...)` z tego samego zbioru pól | `ORDER BY` z `created`, `updated`, `priority`, `key` (JQL) albo `created`, `lastmodified`, `title` (CQL); zawężenie: `scope.jql(fields, orderFields)`; jedno `ORDER BY` |
+| `Operator.IN`, `NOT_IN`, `NOT_CONTAINS`, `GREATER`, `GREATER_OR_EQUAL`, `LESS`, `LESS_OR_EQUAL`, `where(field, op, String...)`/`List` | tylko `EQUALS`, `CONTAINS`, `NOT_EQUALS`, jedna wartość: `where(field, op, String)` |
+| `project in (...) AND status = "x"` (zakres, potem filtry) | `(status = "x") AND project in (...)`: warunki w jednym nawiasie, potem zakres |
+| `CONTAINS` escapuje `* ? ~ ( ) ...` | wartość tylko cytowana; znak sterujący (też tab i nowy wiersz) odrzucony, nie escapowany |
+| lista wartości (`labels in (...)`) | brak w kontrakcie: filtr po liście zastąp kilkoma wywołaniami albo stałym, nazwanym filtrem po stronie serwera, jeśli kontrakt to dopuści (nowe pole wymaga jego zmiany) |
+
+`QueryScope.quote` odrzuca znaki sterujące (`IllegalArgumentException`). Testy serwera, które porównywały dokładny tekst zapytania, zmieniają kolejność (warunki, zakres, `ORDER BY`).
+
+**Zakres wyklucza wszystko (CC-147).** `scope.nothingToQuery()` działa dla każdego typu przyznawalnego (OpenSearch: żaden indeks nie jest jednocześnie przyznany i w linku; pozostałe: brak grantów, dla zapytań ograniczanych grantami).
+Wyszukiwanie i lista zwracają wtedy **pusty wynik bez wywołania systemu**; pobranie po id woła `scope.requireQueryable()` i kończy się `not_found_or_denied`.
+
+**OpenSearch: nazwy, nie wzorce (CC-160).** Serwer OpenSearch nie wysyła do klucza wzorca `p-*`:
+
+```java
+QueryScope scope = policy.queryScope("OpenSearch::Index");
+if (scope.nothingToQuery()) {
+    return emptyResult();
+}
+String resolved = openSearch.get("/_resolve/index/" + scope.opensearchIndexExpression());   // wzorzec tylko tutaj
+List<String> names = scope.resolveIndexNames(resolved);                                      // tylko "indices", bez aliasów i strumieni, w zakresie
+if (names.isEmpty()) {
+    return emptyResult();
+}
+// wyszukiwanie, _count i agregacje: String.join(",", names) w ścieżce + QueryScope.OPENSEARCH_SEARCH_PARAMETERS
+// indeks z argumentu: String name = scope.resolveIndexArgument(argument, resolved);          // invalid_argument | not_found_or_denied
+```
+
+`QueryScope.requireNoAliases` jest przestarzałe: zapytanie do listy nazw nie obejmuje aliasów, więc `aggregate_logs` może wrócić (reguła wyłączająca w `mcp-policies` znika dopiero po wdrożeniu tego w serwerze OpenSearch). Między rozwiązaniem a zapytaniem jest krótkie okno,
+w którym administrator mógłby zamienić indeks na alias o tej samej nazwie (ryzyko znane, opisane w kontrakcie).
+
+### 7. Audyt i metryki (CC-143, CC-152)
+
+Licznik nadmiaru zdarzeń `authentication` nazywa się `mcp_audit_authentication_suppressed_total` i ma tagi `component` (dla starter: `server`) oraz `reason`; poprzednia nazwa
+`mcp_server_audit_authentication_suppressed_total` znika (zmień alerty i panele). Żądanie odrzucone `400` albo `413` przed weryfikacją tokenu nie jest zdarzeniem `authentication`.
+
+### 8. Testy
+
+`TestGateway.start(...)` publikuje paczki z wektorów 4.0.0 (nowy schemat). `PolicyRepository.publishGenerated(revision, serverId, extraPolicies)` pozwala dodać do wygenerowanej paczki własną regułę
+(np. zależną od `context.credentialType`). Paczki zbudowane na schemacie 3.1.x w teście serwera dają `schema_mismatch`: przebuduj je na 4.0.0.
+
 ## Z beta-4 na beta-5
 
 Dla serwerów tylko podbicie wersji: `<version>3.0.0-beta-5</version>` w imporcie BOM (kontrakty 3.1.0). Zmiany dotyczą profilu `devstack` i kolejności startu:
