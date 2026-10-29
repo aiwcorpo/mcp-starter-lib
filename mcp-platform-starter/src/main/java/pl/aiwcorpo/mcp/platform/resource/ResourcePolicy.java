@@ -71,17 +71,20 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
     private final String system;
     private final int maxFilteredElements;
     private final String credentialType;
+    private final List<String> acceptedCredentialTypes;
 
     /**
-     * @param credentialType the {@code context.credentialType} of every request (CC-136), from the server's configuration; never {@code null}
+     * @param credentialTypes the types the server accepts ({@code manifest.accepted-credential-types}); the first is the default one, the
+     *                        {@code context.credentialType} of every request (CC-136, CC-166, CC-168); never empty
      */
     public ResourcePolicy(PolicyEngine engine, ResourceResolvers resolvers, ToolRiskRegistry registry, AuditLogger audit,
-                          String serverId, String system, String credentialType, int maxFilteredElements) {
-        if (credentialType == null) {
+                          String serverId, String system, List<String> credentialTypes, int maxFilteredElements) {
+        if (credentialTypes == null || credentialTypes.isEmpty()) {
             throw new IllegalStateException("a server has no policy without the credential type of its system (CC-136): "
-                    + "set aiwcorpo.mcp.platform.credential-type");
+                    + "set aiwcorpo.mcp.platform.manifest.accepted-credential-types");
         }
-        this.credentialType = credentialType;
+        this.acceptedCredentialTypes = List.copyOf(credentialTypes);
+        this.credentialType = credentialTypes.getFirst();
         this.maxFilteredElements = maxFilteredElements;
         this.engine = engine;
         this.resolvers = resolvers;
@@ -258,16 +261,15 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
     }
 
     /**
-     * The credential type of the request ({@code X-MCP-Credential-Type}) must be the one the server's configuration names: the policy
-     * is evaluated with the configured type, so a different one would switch off a rule written for the real credential (a service
+     * CC-166: a request that carries a credential must name one of the types this server accepts, checked before the policy, the grant probe and
+     * the resolvers. Otherwise the policy, which is evaluated with the default type, could be switched off for the real credential (a service
      * account). Refused as {@code internal_error} (a misconfiguration, not the caller's doing) and audited as {@code credential_type_mismatch}.
-     * The code and reason follow the contracts 4.1.0 once they are released.
      */
     private void refuseOnCredentialTypeMismatch(CallerContext caller, String tool) {
-        java.util.Optional<pl.aiwcorpo.mcp.platform.security.BackendCredential.Type> actual =
-                pl.aiwcorpo.mcp.platform.security.CredentialContext.type();
-        if (actual.isPresent() && !actual.get().wireName().equals(credentialType)) {
-            LOG.error("event=credential_type_mismatch tool=\"{}\" configured={} actual={}", tool, credentialType, actual.get().wireName());
+        String header = pl.aiwcorpo.mcp.platform.security.CredentialContext.typeHeader().orElse(null);
+        if (!pl.aiwcorpo.mcp.platform.security.CredentialTypeCheck.admits(
+                pl.aiwcorpo.mcp.platform.security.CredentialContext.credentialSent(), header, acceptedCredentialTypes)) {
+            LOG.error("event=credential_type_mismatch tool=\"{}\" accepted={} header_present={}", tool, acceptedCredentialTypes, header != null);
             audit.policyRefused(caller, tool, registry.riskOf(tool).orElse(null), "credential_type_mismatch", "internal_error");
             throw new SanitizedToolException(new McpErrorMapper.SafeError(ToolErrorCode.INTERNAL_ERROR.code(),
                     "The tool could not complete the request."));

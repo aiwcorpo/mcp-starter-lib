@@ -92,13 +92,44 @@ class GatewayTransportTest {
                     .httpRequestCustomizer(GATEWAY.asGateway(user -> { }, "Bearer " + PAT, type)).build();
             try (McpSyncClient client = McpClient.sync(transport).requestTimeout(Duration.ofSeconds(20)).build()) {
                 client.initialize();
-                if (type == BackendCredential.Type.USER_SECRET) {
+                if (type == BackendCredential.Type.USER_SECRET || type == BackendCredential.Type.USER_OAUTH) {
                     assertThat(text(call(client, "probe_credential"))).isEqualTo("\"" + type.wireName() + " Bearer " + PAT + "\"");
                 } else {
-                    // The server is configured for user-secret (TestGateway); another type is a mismatch and the call is refused.
+                    // TestGateway accepts user-secret and user-oauth; another type is outside the server's set (CC-166).
                     assertThat(text(call(client, "probe_credential"))).contains("\"error\":\"internal_error\"").doesNotContain(PAT);
                 }
             }
+        }
+    }
+
+    @Test
+    @DisplayName("a credential without a usable type header is refused as internal_error and audited as credential_type_mismatch (CC-166)")
+    void aCredentialWithoutAUsableTypeIsRefused() throws Exception {
+        ch.qos.logback.classic.Logger audit =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("pl.aiwcorpo.mcp.audit");
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> lines =
+                new ch.qos.logback.core.read.ListAppender<>();
+        lines.start();
+        audit.addAppender(lines);
+        try {
+            RawMcp raw = new RawMcp(port);
+            String session = raw.openSession(GATEWAY);
+            for (String type : new String[] {null, "api-key", "User-OAuth", "service-account"}) {
+                Map<String, String> headers = new java.util.HashMap<>(GATEWAY.user().tool("probe_credential").mint().headers());
+                headers.put("X-MCP-Credential", "Bearer " + PAT);
+                if (type != null) {
+                    headers.put("X-MCP-Credential-Type", type);
+                }
+                HttpResponse<String> response = raw.post(RawMcp.toolCall("probe_credential"), headers, session);
+
+                assertThat(response.statusCode()).as(String.valueOf(type)).isEqualTo(200);
+                assertThat(response.body()).as(String.valueOf(type)).contains("internal_error").doesNotContain(PAT);
+            }
+            assertThat(CapturedLogs.snapshot(lines).stream().filter(line -> line.getFormattedMessage()
+                    .contains("\"reason\":\"credential_type_mismatch\"")).count()).isEqualTo(4);
+            assertThat(CapturedLogs.snapshot(lines)).noneSatisfy(line -> assertThat(line.getFormattedMessage()).contains(PAT));
+        } finally {
+            audit.detachAppender(lines);
         }
     }
 

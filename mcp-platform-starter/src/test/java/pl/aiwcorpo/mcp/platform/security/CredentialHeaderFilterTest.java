@@ -69,12 +69,10 @@ class CredentialHeaderFilterTest {
     @Test
     void malformedOrAmbiguousCredentialsAreRefusedWithoutEchoingThem() throws Exception {
         String[][] cases = {
-                {"Bearer " + SECRET, null},
                 {null, "user-secret"},
                 {"bearer " + SECRET, "user-secret"},
                 {"Bearer", "user-secret"},
                 {"Bearer " + SECRET + "\u0001", "user-secret"},
-                {"Bearer " + SECRET, "user-password"},
         };
         for (String[] c : cases) {
             MockHttpServletRequest request = request();
@@ -89,6 +87,32 @@ class CredentialHeaderFilterTest {
             assertThat(seen).as(c[0] + " / " + c[1]).isNull();
             assertThat(response.getStatus()).isEqualTo(400);
             assertThat(response.getContentAsString()).doesNotContain(SECRET);
+        }
+    }
+
+    @Test
+    void aCredentialWithAMissingOrUnknownTypeIsNotUsableAndIsKnownToHaveBeenSent() throws Exception {
+        for (String type : new String[] {null, "user-password", "User-OAuth"}) {
+            MockHttpServletRequest request = request();
+            request.addHeader("X-MCP-Credential", "Bearer " + SECRET);
+            if (type != null) {
+                request.addHeader("X-MCP-Credential-Type", type);
+            }
+            AtomicReference<String[]> state = new AtomicReference<>();
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            new CredentialHeaderFilter("jira", null).doFilter(request, response, new MockFilterChain(new HttpServlet() {
+                @Override
+                protected void service(HttpServletRequest req, HttpServletResponse res) {
+                    state.set(new String[] {String.valueOf(CredentialContext.credentialSent()), CredentialContext.typeHeader().orElse(null),
+                            String.valueOf(CredentialContext.current().isPresent()), String.valueOf(CredentialContext.secrets())});
+                }
+            }));
+
+            assertThat(response.getStatus()).as(String.valueOf(type)).isEqualTo(200);
+            assertThat(state.get()[0]).isEqualTo("true");
+            assertThat(state.get()[1]).isEqualTo(type);
+            assertThat(state.get()[2]).as("no credential a tool could use").isEqualTo("false");
+            assertThat(state.get()[3]).as("but the value is still redacted").contains(SECRET);
         }
     }
 

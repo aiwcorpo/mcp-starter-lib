@@ -66,8 +66,9 @@ public class CredentialHeaderFilter extends OncePerRequestFilter implements Orde
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
         Optional<BackendCredential> credential;
+        String[] untyped = new String[2];
         try {
-            credential = credentialOf(request);
+            credential = credentialOf(request, untyped);
         } catch (IllegalArgumentException malformed) {
             LOG.warn("event=credential_header_rejected reason=\"{}\"", malformed.getMessage());
             response.setStatus(HttpServletResponse.SC_BAD_REQUEST);
@@ -76,7 +77,11 @@ public class CredentialHeaderFilter extends OncePerRequestFilter implements Orde
             response.getWriter().write("{\"error\":\"invalid_argument\",\"message\":\"Malformed credential headers.\"}");
             return;
         }
-        CredentialContext.bind(system, credential.orElse(null));
+        if (untyped[1] != null) {
+            CredentialContext.bindUntyped(system, untyped[0], untyped[1]);
+        } else {
+            CredentialContext.bind(system, credential.orElse(null));
+        }
         try {
             chain.doFilter(new CredentialHidingRequest(request, devPatPrefix), response);
         } finally {
@@ -85,7 +90,7 @@ public class CredentialHeaderFilter extends OncePerRequestFilter implements Orde
     }
 
     /** @throws IllegalArgumentException with a reason that never contains a header value */
-    private Optional<BackendCredential> credentialOf(HttpServletRequest request) {
+    private Optional<BackendCredential> credentialOf(HttpServletRequest request, String[] untyped) {
         List<String> values = Collections.list(request.getHeaders(CREDENTIAL_HEADER));
         List<String> types = Collections.list(request.getHeaders(CREDENTIAL_TYPE_HEADER));
         if (values.size() > 1 || types.size() > 1) {
@@ -93,9 +98,8 @@ public class CredentialHeaderFilter extends OncePerRequestFilter implements Orde
         }
         Optional<BackendCredential> fromGateway = Optional.empty();
         if (!values.isEmpty() || !types.isEmpty()) {
-            if (values.isEmpty() || types.isEmpty()) {
-                throw new IllegalArgumentException(CREDENTIAL_HEADER + " and " + CREDENTIAL_TYPE_HEADER
-                        + " must be sent together");
+            if (values.isEmpty()) {
+                throw new IllegalArgumentException(CREDENTIAL_TYPE_HEADER + " without " + CREDENTIAL_HEADER);
             }
             Matcher matcher = CREDENTIAL.matcher(values.getFirst());
             if (!matcher.matches()) {
@@ -103,9 +107,16 @@ public class CredentialHeaderFilter extends OncePerRequestFilter implements Orde
             }
             BackendCredential.Scheme scheme = BackendCredential.Scheme.fromWireName(matcher.group(1))
                     .orElseThrow(() -> new IllegalArgumentException("unknown credential scheme"));
-            BackendCredential.Type type = BackendCredential.Type.fromWireName(types.getFirst())
-                    .orElseThrow(() -> new IllegalArgumentException("unknown credential type"));
-            fromGateway = Optional.of(new BackendCredential(scheme, matcher.group(2), type));
+            Optional<BackendCredential.Type> type = types.isEmpty() ? Optional.empty()
+                    : BackendCredential.Type.fromWireName(types.getFirst());
+            if (type.isEmpty()) {
+                // A missing or unknown type is not a malformed request: the call is refused by the type check as
+                // credential_type_mismatch (CC-166).
+                untyped[0] = types.isEmpty() ? null : types.getFirst();
+                untyped[1] = matcher.group(2);
+                return Optional.empty();
+            }
+            fromGateway = Optional.of(new BackendCredential(scheme, matcher.group(2), type.get()));
         }
         if (devPatPrefix == null) {
             return fromGateway;

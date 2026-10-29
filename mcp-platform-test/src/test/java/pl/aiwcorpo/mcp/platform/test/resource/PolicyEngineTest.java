@@ -238,7 +238,7 @@ class PolicyEngineTest {
             pl.aiwcorpo.mcp.platform.resource.ResourcePolicy policy = new pl.aiwcorpo.mcp.platform.resource.ResourcePolicy(second,
                     new pl.aiwcorpo.mcp.platform.resource.ResourceResolvers(java.util.List.of()), registry,
                     new pl.aiwcorpo.mcp.platform.observability.AuditLogger("test.policy.unavailable", "mcp-jira"), "mcp-jira", "jira",
-                    "user-secret", 200);
+                    java.util.List.of("user-secret"), 200);
             pl.aiwcorpo.mcp.platform.auth.CallerContext claims = new pl.aiwcorpo.mcp.platform.auth.CallerContext(
                     "6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "jkowalski", java.util.List.of("mcp-jira-read"), "claude-code", null, null,
                     "read_thing", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", "00000000000000-0000000", null);

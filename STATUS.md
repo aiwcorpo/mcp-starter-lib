@@ -1,7 +1,7 @@
 # STATUS - mcp-starter-lib (ws-02)
 
 Linia `pl.aiwcorpo.mcp:mcp-platform*` 3.x (niezależna od wersji kontraktów). Kontrakty:
-`pl.aiwcorpo.mcp:mcp-contracts:4.0.0` od beta-6 (3.1.0 w beta-1 ... beta-5, 2.2.5 w alpha-12 ... alpha-14, 2.1.1 od alpha-7, 2.0.2 do alpha-6).
+`pl.aiwcorpo.mcp:mcp-contracts:4.1.0` od beta-7 (4.0.0 w beta-6; 3.1.0 w beta-1 ... beta-5, 2.2.5 w alpha-12 ... alpha-14, 2.1.1 od alpha-7, 2.0.2 do alpha-6).
 
 ## M4: przejście na kontrakty 4.0.0 i wydanie 3.0.0-beta-6
 
@@ -18,21 +18,24 @@ Wektory 4.0.0 uruchamiane przez starter: `jwt/` (60, w tym trzy z kluczami `dev-
 Wektory, których starter nie wykonuje, bo należą do innych komponentów: `gateway-authentication*`, `catalog-actions`, `activity-*`, `confirmation-binding`, `login-redirects`, `return-paths`, `totp`, `servicedesk-service-account` (adapter serwera: ws-04),
 `entity-builder/` i `policy-decisions/` (biblioteka `mcp-cedar-entities`: testy w kontraktach; starter sprawdza wejście `credentialType` w `CredentialTypeTest`).
 
-## Po recenzji beta-6 (praca na 3.0.0-beta-7-SNAPSHOT; beta-7 nie wydane, czekamy na kontrakty 4.1.0)
+## Po recenzji beta-6 i kontrakty 4.1.0 (3.0.0-beta-7)
 
-BOM na kontraktach 4.0.1 (wektory bez zmian dla startera; 736 + 163 testów (razem 899)). Decyzje koordynatora z 2026-10-29:
+BOM na kontraktach 4.1.0 (CC-165 ... CC-168). Decyzje koordynatora z 2026-10-29:
 
 | Punkt | Co zrobione |
 | --- | --- |
-| M1 | rozjazd `X-MCP-Credential-Type` i `credential-type`: wywołanie kończy się `internal_error` przed oceną Cedar, audyt `policy_decision` z `credential_type_mismatch`; test `ResourcePolicyTest`. Do przejścia na kod i powód z 4.1.0 |
-| M2 | `Confluence::Page`, `ServiceDesk::Ticket`: brak zakresu kontenera w paczce -> `not_found_or_denied` przed resolverem; zasób spoza zakresów wywołującego, którego nie da się ocenić -> też `not_found_or_denied`; `ScopeGrantTest` (resolver nie jest pytany, ten sam kod dla istniejącego i brakującego). Resolver, który rzuca dla zasobu z częściowym grantem, nadal zwraca błąd resolvera (nie da się ustalić zakresu bez zasobu) |
-| M3 | `QueryScope.opensearchSearchTarget(odpowiedź)` zwraca `Optional`, puste = nie pytaj; przykład w MIGRATION na nim; test |
-| L1 | Lucene bez escapowania zostaje jak w odniesieniu; README tłumaczy, dlaczego zakres się nie poszerza |
-| L2 | opisane w README (założenie monotoniczności polityki w klasyfikacji, fałszywe odmowy sondy) |
-| L3 | odmowa sondy: powód audytu `policy_forbid`; brak zakresu Page/Ticket: `not_granted` |
-| L4 | `resolveIndexNames` pomija nazwy niezgodne z `OpenSearchIndexName`; test z `%2c` i `=` |
-| L5 | `OPENSEARCH_RESOLVE_PARAMETERS`, `EMPTY_RESOLVE_RESPONSE` dla 404; zachowanie `_resolve/index` na żywym klastrze niepotwierdzone (ws-01) |
+| M1, CC-166 | sprawdzenie typu poświadczenia tylko dla żądań z `X-MCP-Credential`: nagłówek `X-MCP-Credential-Type` musi należeć do `accepted-credential-types` (brak, nieznany, wielkość liter, spoza zbioru, serwer bez typu = odmowa) przed Cedar, sondą i resolverami; `internal_error` + `policy_decision` `credential_type_mismatch`. `CredentialTypeCheck`, 9 wektorów strony serwera z `credential-type-header/` (4 wektory gateway'a nie dotyczą startera), test przez transport w `GatewayTransportTest`. Filtr nagłówków nie daje już 400 dla braku i nieznanego typu |
+| CC-168 | typ domyślny = pierwszy z `accepted-credential-types` (właściwość `credential-type` z beta-6 usunięta); mieszany zbiór (`service-account` z typami użytkownika) i pusty zbiór zatrzymują start |
+| M2 | `Confluence::Page`, `ServiceDesk::Ticket`: brak zakresu kontenera w paczce -> `not_found_or_denied` przed resolverem; zasób poza zakresami wywołującego, którego nie da się ocenić -> też `not_found_or_denied`; `ScopeGrantTest`. Resolver rzucający dla zasobu z częściowym grantem nadal zwraca błąd resolvera |
+| M3 | `QueryScope.opensearchSearchTarget(odpowiedź)`: `Optional`, puste = nie pytaj |
+| L1 | Lucene bez escapowania jak w referencji; README tłumaczy, dlaczego zakres się nie poszerza |
+| L2 | opisane w README (monotoniczność polityki w klasyfikacji, fałszywe odmowy sondy) |
+| L3 | odmowa sondy: `policy_forbid`; brak zakresu Page/Ticket: `not_granted` |
+| L4 | `resolveIndexNames` pomija nazwy niezgodne z `OpenSearchIndexName` |
+| L5 | `OPENSEARCH_RESOLVE_PARAMETERS`, `EMPTY_RESOLVE_RESPONSE`; zachowanie `_resolve/index` na żywym klastrze niepotwierdzone (ws-01) |
 | L6 | README i MIGRATION: nie cache'ować odpowiedzi `_resolve/index` |
+
+Wektory 4.1.0: `credential-type-header/` (13; strona serwera 9 uruchamiana), `audit-events/` (113, w tym `server-credential-type-mismatch`), `manifests/` (reguła `credential-types-not-mixed` wykonuje `ManifestRules` z jara); `activity-calls/` (CC-165) nie dotyczy startera.
 
 ## Odstępstwa i decyzje M4
 
@@ -45,9 +48,11 @@ BOM na kontraktach 4.0.1 (wektory bez zmian dla startera; 736 + 163 testów (raz
 
 ## Propozycje CC (nie zmieniam kontraktów)
 
-- C3/CC-136: czy starter ma odrzucać wywołanie, gdy `X-MCP-Credential-Type` różni się od `credential-type` serwera? Dziś typ w audycie (`tool_call.credentialType`) jest z nagłówka, a w Cedar z konfiguracji; rozjazd jest niewidoczny dla polityki. Propozycja: powód odmowy `credential_type_mismatch` także na serwerze albo wskazanie w kontrakcie, że gateway gwarantuje równość.
+- (zamknięte w 4.1.0, CC-166) C3/CC-136: czy starter ma odrzucać wywołanie, gdy `X-MCP-Credential-Type` różni się od `credential-type` serwera? Dziś typ w audycie (`tool_call.credentialType`) jest z nagłówka, a w Cedar z konfiguracji; rozjazd jest niewidoczny dla polityki. Propozycja: powód odmowy `credential_type_mismatch` także na serwerze albo wskazanie w kontrakcie, że gateway gwarantuje równość.
 - entity-builder.md 9b: zdefiniować "grant na typ" (obecnie: zgoda polityki na zasób o minimalnej klasyfikacji), żeby serwery i wektory mówiły to samo; dodać wektor, w którym zasób bez klasyfikacji i bez grantu daje `not_found_or_denied`.
 - C8: powód `policy_error` na serwerze obejmuje tylko błąd oceny `Action::"call"` na narzędziu; błąd oceny pojedynczego elementu wyniku usuwa element (bez zdarzenia). Do potwierdzenia, czy to wystarcza.
+
+3.0.0-beta-7: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-7`, tag `v3.0.0-beta-7` (po wydaniu `3.0.0-beta-8-SNAPSHOT`). Kontrakty 4.1.0, razem 915 testów (starter 751, mcp-platform-test 164). Instrukcja: `MIGRATION-3.0.md`, "Z beta-6 na beta-7". Zakres: tabela "Po recenzji beta-6 i kontrakty 4.1.0" wyżej.
 
 3.0.0-beta-6: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-6`, tag `v3.0.0-beta-6` (po wydaniu `3.0.0-beta-7-SNAPSHOT`). Kontrakty 4.0.0 (M4), razem 893 testy (starter 735, mcp-platform-test 158). Instrukcja: `MIGRATION-3.0.md`, "Z beta-5 na beta-6" (dla serwerów: `credential-type`, klucze `dev-`, `StructuredQuery` z list normatywnych, nazwy indeksów OpenSearch, stały tekst `not_found_or_denied`, licznik `mcp_audit_authentication_suppressed_total`). Zakres M4: tabela kamieni wyżej. Z wcześniejszej pracy na `3.0.0-beta-6-SNAPSHOT` (po recenzji beta-5, 0 HIGH, 1 MEDIUM, 7 LOW): test kontekstu produkcyjnego okablowania zgody (devstack, obie zgody jako właściwości bez zmiennej procesu -> odmowa przed pierwszym żądaniem), `internalJwtVerifier` tworzy strażnika przed rozwiązaniem `GatewayKeys`/`JtiReplayStore`, wariant lazy z asercją przyczyny, MIGRATION: test devstack w kontekście Springa i wersja w szablonie (`mcp-platform.version`).
 

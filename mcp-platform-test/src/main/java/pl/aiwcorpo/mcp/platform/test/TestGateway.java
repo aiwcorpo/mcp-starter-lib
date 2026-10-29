@@ -164,7 +164,6 @@ public final class TestGateway implements AutoCloseable {
         properties.put("aiwcorpo.mcp.platform.manifest.version", "1.0.0");
         properties.put("aiwcorpo.mcp.platform.manifest.internal-url", "https://" + serverId + ".internal:8443/mcp");
         properties.put("aiwcorpo.mcp.platform.manifest.accepted-credential-types", "user-secret,user-oauth");
-        properties.put("aiwcorpo.mcp.platform.credential-type", "user-secret");
         return properties;
     }
 

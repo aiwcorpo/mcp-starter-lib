@@ -20,7 +20,14 @@ import java.util.Optional;
  */
 public final class CredentialContext {
 
-    private record Binding(String system, BackendCredential credential) {
+    /**
+     * @param credential     the credential, absent when none was sent or when its type header was missing or unknown
+     * @param credentialSent whether the request carried {@code X-MCP-Credential} (or a dev-pat token)
+     * @param typeHeader     the raw {@code X-MCP-Credential-Type}, {@code null} when absent
+     * @param unusableValue  the value of a credential that was sent without a usable type, kept only so that it is redacted
+     */
+    private record Binding(String system, BackendCredential credential, boolean credentialSent, String typeHeader,
+                           String unusableValue) {
     }
 
     private static final ThreadLocal<Binding> CURRENT = new ThreadLocal<>();
@@ -52,6 +59,18 @@ public final class CredentialContext {
         return binding == null ? Optional.empty() : Optional.ofNullable(binding.credential());
     }
 
+    /** True when the request carried a credential, whether or not its type header was usable (CC-166). */
+    public static boolean credentialSent() {
+        Binding binding = CURRENT.get();
+        return binding != null && binding.credentialSent();
+    }
+
+    /** The raw {@code X-MCP-Credential-Type} of this request, empty when there was none; for the check against the server's types. */
+    public static Optional<String> typeHeader() {
+        Binding binding = CURRENT.get();
+        return binding == null ? Optional.empty() : Optional.ofNullable(binding.typeHeader());
+    }
+
     /** {@code X-MCP-Credential-Type} of this request, for the audit; never the value. */
     public static Optional<BackendCredential.Type> type() {
         return current().map(BackendCredential::type);
@@ -64,7 +83,8 @@ public final class CredentialContext {
     static List<String> secrets() {
         Optional<BackendCredential> credential = current();
         if (credential.isEmpty()) {
-            return List.of();
+            Binding binding = CURRENT.get();
+            return binding == null || binding.unusableValue() == null ? List.of() : List.of(binding.unusableValue());
         }
         List<String> secrets = new ArrayList<>();
         String value = credential.get().value();
@@ -85,7 +105,13 @@ public final class CredentialContext {
     }
 
     static void bind(String system, BackendCredential credential) {
-        CURRENT.set(new Binding(system, credential));
+        CURRENT.set(new Binding(system, credential, credential != null,
+                credential == null ? null : credential.type().wireName(), null));
+    }
+
+    /** A credential was sent but its type header is missing or unknown: no usable credential, the call is refused by the type check. */
+    static void bindUntyped(String system, String typeHeader, String value) {
+        CURRENT.set(new Binding(system, null, true, typeHeader, value));
     }
 
     static void clear() {

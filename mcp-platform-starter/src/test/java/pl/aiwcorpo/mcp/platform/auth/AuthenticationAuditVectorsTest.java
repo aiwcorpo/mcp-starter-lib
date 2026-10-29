@@ -36,7 +36,7 @@ import tools.jackson.databind.json.JsonMapper;
 class AuthenticationAuditVectorsTest {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
-    private static final int EXPECTED_VECTORS = 109;
+    private static final int EXPECTED_VECTORS = 113;
 
     /** The reasons CC-120 gives errorCode upstream_unavailable, written out so the test does not use the starter's own predicate. */
     private static final Set<String> UPSTREAM_UNAVAILABLE = Set.of("jwks_unavailable", "replay_store_unavailable");

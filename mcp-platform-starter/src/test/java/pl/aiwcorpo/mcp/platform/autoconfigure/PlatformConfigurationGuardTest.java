@@ -97,22 +97,23 @@ class PlatformConfigurationGuardTest {
     }
 
     @Test
-    void theCredentialTypeComesFromTheConfigurationAndIsNeverAbsent() {
-        McpPlatformProperties one = valid();
-        assertThatCode(() -> check(one, production())).doesNotThrowAnyException();
-        assertThat(one.effectiveCredentialType()).as("the only accepted type is the type").isEqualTo("user-secret");
+    void theAcceptedTypesAreOneSetNeverEmptyAndNeverMixingTheServiceAccountWithUsers() {
+        McpPlatformProperties users = valid();
+        users.getManifest().setAcceptedCredentialTypes(java.util.List.of("user-oauth", "user-secret"));
+        assertThatCode(() -> check(users, production())).doesNotThrowAnyException();
 
-        McpPlatformProperties several = valid();
-        several.getManifest().setAcceptedCredentialTypes(java.util.List.of("user-oauth", "user-secret"));
-        assertThatThrownBy(() -> check(several, production())).hasMessageContaining("credential-type must be set");
-        several.setCredentialType("user-oauth");
-        assertThatCode(() -> check(several, production())).doesNotThrowAnyException();
-        assertThat(several.effectiveCredentialType()).isEqualTo("user-oauth");
+        McpPlatformProperties account = valid();
+        account.getManifest().setAcceptedCredentialTypes(java.util.List.of("service-account"));
+        assertThatCode(() -> check(account, production())).doesNotThrowAnyException();
 
-        several.setCredentialType("service-account");
-        assertThatThrownBy(() -> check(several, production())).hasMessageContaining("credential_type_mismatch");
-        several.setCredentialType("password");
-        assertThatThrownBy(() -> check(several, production())).hasMessageContaining("'password' is not one of");
+        McpPlatformProperties mixed = valid();
+        mixed.getManifest().setAcceptedCredentialTypes(java.util.List.of("user-secret", "service-account"));
+        assertThatThrownBy(() -> check(mixed, production())).hasMessageContaining("mixes service-account");
+
+        McpPlatformProperties none = valid();
+        none.getManifest().setCredentialRequired(false);
+        none.getManifest().setAcceptedCredentialTypes(java.util.List.of());
+        assertThatThrownBy(() -> check(none, production())).hasMessageContaining("also without credential-required");
     }
 
     private static MockEnvironment devstack(boolean property) {

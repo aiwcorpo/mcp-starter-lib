@@ -204,7 +204,7 @@ public class PlatformConfigurationGuard implements InitializingBean {
         }
         policyProblems(properties.getPolicy(), dev, testKeysAllowed, problems);
         manifestProblems(properties.getManifest(), problems);
-        credentialTypeProblems(properties, problems);
+        credentialTypeProblems(properties.getManifest(), problems);
 
         if (!dev) {
             if (properties.getMtls().isRequired()
@@ -312,24 +312,19 @@ public class PlatformConfigurationGuard implements InitializingBean {
     }
 
     /**
-     * {@code context.credentialType} comes from the server's own configuration and is never absent (CC-136): without it a rule
-     * that depends on the credential, such as the service account of Service Desk, would not apply to this server.
+     * The types the server accepts are one set (CC-166, CC-168): the first is the default type of {@code context.credentialType}, so the set is
+     * never empty, and {@code service-account} is not mixed with the types of a user, because a mixed set would hide the service account from
+     * the rules of {@code credential-type.cedar}.
      */
-    private static void credentialTypeProblems(McpPlatformProperties properties, List<String> problems) {
-        String configured = properties.getCredentialType();
-        if (configured != null && !configured.isBlank()) {
-            if (!CREDENTIAL_TYPES.contains(configured)) {
-                problems.add("aiwcorpo.mcp.platform.credential-type: '" + configured + "' is not one of " + CREDENTIAL_TYPES);
-            } else if (!properties.getManifest().getAcceptedCredentialTypes().isEmpty()
-                    && !properties.getManifest().getAcceptedCredentialTypes().contains(configured)) {
-                problems.add("aiwcorpo.mcp.platform.credential-type '" + configured + "' is not among "
-                        + "manifest.accepted-credential-types " + properties.getManifest().getAcceptedCredentialTypes()
-                        + ": the gateway would reject the manifest (credential_type_mismatch)");
-            }
-        } else if (properties.effectiveCredentialType() == null) {
-            problems.add("aiwcorpo.mcp.platform.credential-type must be set to one of " + CREDENTIAL_TYPES + " (the type the "
-                    + "gateway's configuration of the system uses): it is the credentialType of every policy request and is "
-                    + "taken from here when manifest.accepted-credential-types does not name exactly one type");
+    private static void credentialTypeProblems(McpPlatformProperties.Manifest manifest, List<String> problems) {
+        List<String> accepted = manifest.getAcceptedCredentialTypes();
+        if (accepted.isEmpty() && !manifest.isCredentialRequired()) {
+            problems.add("aiwcorpo.mcp.platform.manifest.accepted-credential-types must list at least one of " + CREDENTIAL_TYPES
+                    + " also without credential-required: the first one is the credentialType of every policy request");
+        }
+        if (accepted.contains("service-account") && accepted.stream().anyMatch(type -> !"service-account".equals(type))) {
+            problems.add("aiwcorpo.mcp.platform.manifest.accepted-credential-types mixes service-account with the credential types of a user "
+                    + accepted + " (CC-168): use service-account alone or only user types");
         }
     }
 

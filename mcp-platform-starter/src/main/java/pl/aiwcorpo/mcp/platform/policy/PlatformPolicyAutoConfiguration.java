@@ -57,7 +57,7 @@ public class PlatformPolicyAutoConfiguration {
     @Bean
     ResourcePolicy resourcePolicy(PolicyEngine engine, ResourceResolvers resolvers, ToolRiskRegistry registry,
                                   AuditLogger audit, McpPlatformProperties props) {
-        return new ResourcePolicy(engine, resolvers, registry, audit, props.getServerId(), props.system(), props.effectiveCredentialType(),
+        return new ResourcePolicy(engine, resolvers, registry, audit, props.getServerId(), props.system(), props.getManifest().getAcceptedCredentialTypes(),
                 props.getTools().getMaxFilteredElements());
     }
 }

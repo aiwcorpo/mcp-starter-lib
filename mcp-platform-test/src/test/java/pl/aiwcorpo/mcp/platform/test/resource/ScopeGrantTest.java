@@ -86,7 +86,7 @@ class ScopeGrantTest {
             }
         };
         return new ResourcePolicy(engine, new ResourceResolvers(List.of(resolver)), registry,
-                new AuditLogger("test.scope.grant", "mcp-servicedesk"), "mcp-servicedesk", "servicedesk", "service-account", 200);
+                new AuditLogger("test.scope.grant", "mcp-servicedesk"), "mcp-servicedesk", "servicedesk", java.util.List.of("service-account"), 200);
     }
 
     private String call(List<String> groups, String ticketId) {

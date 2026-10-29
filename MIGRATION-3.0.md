@@ -308,19 +308,45 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
-## Z beta-6 na beta-7 (w pracy, nie wydane)
+## Z beta-6 na beta-7
 
-Poprawki po recenzji beta-6 (0 HIGH, 3 MEDIUM, 6 LOW); kontrakty 4.0.1 (BOM), po wydaniu 4.1.0 przejście na nie (kod i powód rozjazdu typu wg 4.1.0). Zmiany zachowania:
+Poprawki po recenzji beta-6 (0 HIGH, 3 MEDIUM, 6 LOW) i kontrakty **4.1.0** (BOM; wektory 4.0.1 i 4.1.0 bez zmian dla startera poza `credential-type-header/` i dwoma zdarzeniami audytu).
+Właściwość `credential-type` z beta-6 **znika**: typem domyślnym jest pierwszy z `manifest.accepted-credential-types` (CC-166, CC-168).
 
-- **Rozjazd typu poświadczenia.** `X-MCP-Credential-Type` różny od `credential-type` serwera kończy wywołanie `internal_error` przed oceną polityki (audyt: `credential_type_mismatch`).
-  Serwer z kilkoma `accepted-credential-types` musi więc ustawić `credential-type` na typ, którego naprawdę używa gateway dla jego systemu; zmiana typu systemu w gateway'u wymaga zmiany
-  konfiguracji serwera. Test serwera, który wywołuje `TestGateway.asGateway(user, credential, type)` z typem innym niż `credential-type`, dostaje teraz `internal_error`:
-  ustaw `aiwcorpo.mcp.platform.credential-type` na ten typ w `serverProperties()`.
-- **`Confluence::Page` i `ServiceDesk::Ticket`:** wywołujący bez zakresu w paczce (przestrzeń/strona, kolejka) dostaje `not_found_or_denied` przed resolverem. Paczka serwera Service Desku
-  musi nadawać zakresy kolejek (`mcp-servicedesk-queue-*`); samo `mcp-servicedesk-read` nie wystarcza.
-- **OpenSearch:** zamiast `String.join(",", names)` używaj `scope.opensearchSearchTarget(odpowiedź)` (puste `Optional` = nie pytaj); `resolveIndexNames` pomija nazwy niezgodne z `OpenSearchIndexName`.
-  Do `_resolve/index` dodaj `QueryScope.OPENSEARCH_RESOLVE_PARAMETERS`, a 404 traktuj jak `QueryScope.EMPTY_RESOLVE_RESPONSE`. Nie cache'uj odpowiedzi `_resolve/index` między wywołaniami.
-- Odmowa sondy ma w audycie powód `policy_forbid` (było `not_granted`).
+### 1. Wersja
+
+`<mcp-platform.version>3.0.0-beta-7</mcp-platform.version>` w szablonie albo `<version>3.0.0-beta-7</version>` w imporcie `mcp-platform-bom`; BOM ustawia `mcp-contracts` na 4.1.0. Kontrakty 4.1.0
+zmieniają też gateway (podłoga ryzyka, `acceptRiskLowering`) i BFF: gateway i BFF wchodzą razem; serwer beta-7 działa ze starym i nowym gatewayem, bo stary gateway już wysyła nagłówek typu.
+
+### 2. Typ poświadczenia: zbiór, nagłówek, odmowa (CC-166, CC-168)
+
+- Usuń `aiwcorpo.mcp.platform.credential-type` z konfiguracji (nieznana właściwość nie zatrzymuje startu, ale nic nie robi). `context.credentialType` w Cedar to **pierwszy** z `accepted-credential-types`:
+  wpisz na pierwszym miejscu typ domyślny systemu (GitLab: `[user-oauth, user-secret]`; Service Desk z kontem serwisowym: `[service-account]`).
+- Zbiór nie miesza `service-account` z typami użytkownika: serwer z `[user-secret, service-account]` nie wstaje (gateway też odrzuci manifest: `422 credential_type_mismatch`).
+  `accepted-credential-types` nie może być puste, także przy `credential-required: false`.
+- Żądanie z `X-MCP-Credential` musi mieć `X-MCP-Credential-Type` ze zbioru serwera. Brak nagłówka, nieznana wartość (porównanie dokładne: `User-OAuth` to błąd), wartość spoza zbioru: odmowa
+  `internal_error` przed Cedar, sondą i resolverami, audyt `policy_decision` z `credential_type_mismatch`. Wcześniej brak albo nieznany typ dawał `400 invalid_argument` z filtra nagłówków; teraz
+  to `internal_error` z narzędzia (HTTP 200 z błędem C10). Żądania bez poświadczenia nie są sprawdzane.
+- Testy serwera: `TestGateway` akceptuje `user-secret` i `user-oauth` (domyślny `user-secret`); `asGateway(user, credential, type)` z `token-exchange` albo `service-account` daje teraz `internal_error`.
+  Serwer, który testuje inny typ, nadpisuje `aiwcorpo.mcp.platform.manifest.accepted-credential-types` w `serverProperties()`.
+- `ResourcePolicy(..., system, List<String> credentialTypes, maxFiltered)` (zamiast jednego `String`); pierwszy element to typ domyślny, pusta lista rzuca wyjątek.
+- Nowa publiczna klasa `CredentialTypeCheck.admits(credentialSent, typeHeader, accepted)` i `CredentialContext.credentialSent()` / `typeHeader()`.
+
+### 3. Zasoby: `Confluence::Page` i `ServiceDesk::Ticket` (po recenzji, M2)
+
+Wywołujący bez żadnego zakresu w paczce na kontener (przestrzeń/strona, kolejka) dostaje `not_found_or_denied` przed resolverem; zasób, który system zwrócił poza zakresami wywołującego i którego nie da się
+ocenić (zły identyfikator, brak klasyfikacji), też `not_found_or_denied` zamiast `internal_error`. Paczka serwera Service Desku musi nadawać zakresy kolejek (`mcp-servicedesk-queue-*`); samo
+`mcp-servicedesk-read` nie wystarcza. Odmowa sondy (Jira, GitLab, Confluence Space, OpenSearch, kolejka) ma w audycie powód `policy_forbid` (było `not_granted`).
+
+### 4. OpenSearch (po recenzji, M3, L4 do L6)
+
+Zamiast `String.join(",", names)` używaj `scope.opensearchSearchTarget(odpowiedź)`: `Optional<String>`, puste znaczy "nie pytaj" (pusty cel przeszukałby wszystkie indeksy). `resolveIndexNames` pomija nazwy
+niezgodne z `OpenSearchIndexName`. Do `GET _resolve/index/...` dodaj `QueryScope.OPENSEARCH_RESOLVE_PARAMETERS`, a odpowiedź 404 `index_not_found_exception` traktuj jak `QueryScope.EMPTY_RESOLVE_RESPONSE`
+(zachowanie na żywym klastrze niepotwierdzone). Nie cache'uj odpowiedzi `_resolve/index` między wywołaniami narzędzia: okno między rozwiązaniem a zapytaniem trwałoby tyle co cache.
+
+### 5. Zapytania tekstowe
+
+Bez zmian API. README opisuje, dlaczego brak escapowania znaków Lucene w `CONTAINS` (zgodnie z referencją kontraktu) nie poszerza zakresu.
 
 ## Z beta-5 na beta-6
 
@@ -336,7 +362,7 @@ Serwer z szablonu: `<mcp-platform.version>3.0.0-beta-6</mcp-platform.version>` w
 (`pl.aiwcorpo.mcp:mcp-platform-bom`, `<type>pom</type>`, `<scope>import</scope>`). BOM ustawia `mcp-contracts` na 4.0.0 (też `mcp-cedar-entities`, `mcp-policy-bundle`,
 `mcp-manifest`); nie wpisuj ich ręcznie. Wartości wersji w README serwera (starter `3.0.0-beta-6`, kontrakty `4.0.0`) popraw ręcznie.
 
-### 2. Konfiguracja: `credential-type` (CC-136), obowiązkowe
+### 2. Konfiguracja: `credential-type` (CC-136), obowiązkowe (w beta-7 zastąpione: typ domyślny to pierwszy z `accepted-credential-types`, zob. "Z beta-6 na beta-7")
 
 Każde żądanie Cedar ma teraz `context.credentialType` z konfiguracji serwera, zawsze. Jeśli `manifest.accepted-credential-types` wymienia **dokładnie jeden** typ, starter bierze go
 stamtąd i nic nie trzeba zmieniać. Serwer, który przyjmuje kilka typów (przykład z README: `[user-oauth, user-secret]`), musi nazwać ten, którego używa konfiguracja

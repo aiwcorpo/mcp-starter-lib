@@ -56,11 +56,11 @@ class CredentialTypeTest {
         gateway.close();
     }
 
-    private static ResourcePolicy policyWith(String credentialType) {
+    private static ResourcePolicy policyWith(java.util.List<String> credentialTypes) {
         ToolRiskRegistry registry = new ToolRiskRegistry(ToolRiskRegistry.Unclassified.FAIL);
         registry.register(new ReadThingTool());
         return new ResourcePolicy(engine, new ResourceResolvers(List.of()), registry, new AuditLogger("test.credential.type", "mcp-jira"),
-                "mcp-jira", "jira", credentialType, 200);
+                "mcp-jira", "jira", credentialTypes, 200);
     }
 
     private static ResourceContext open() {
@@ -72,22 +72,22 @@ class CredentialTypeTest {
     @Test
     void aRuleOnTheCredentialTypeAppliesToTheTypeOfTheServersConfiguration() {
         try (ResourceContext context = open()) {
-            assertThatThrownBy(policyWith("user-secret")::authorizeCall).isInstanceOf(SanitizedToolException.class)
+            assertThatThrownBy(policyWith(java.util.List.of("user-secret"))::authorizeCall).isInstanceOf(SanitizedToolException.class)
                     .extracting(error -> ((SanitizedToolException) error).getCode()).isEqualTo("access_denied");
-            policyWith("service-account").authorizeCall();
-            policyWith("user-oauth").authorizeCall();
+            policyWith(java.util.List.of("service-account")).authorizeCall();
+            policyWith(java.util.List.of("user-oauth")).authorizeCall();
         }
     }
 
     @Test
     void aServerWithoutTheTypeHasNoPolicy() {
-        assertThatThrownBy(() -> policyWith(null)).isInstanceOf(IllegalStateException.class).hasMessageContaining("credential-type");
+        assertThatThrownBy(() -> policyWith(java.util.List.of())).isInstanceOf(IllegalStateException.class).hasMessageContaining("credential-type");
     }
 
     @Test
     void aTypeOfNoneOfTheFourIsAnInternalErrorNotAnUnconditionedCheck() {
         try (ResourceContext context = open()) {
-            assertThatThrownBy(policyWith("password")::authorizeCall).isInstanceOf(SanitizedToolException.class)
+            assertThatThrownBy(policyWith(java.util.List.of("password"))::authorizeCall).isInstanceOf(SanitizedToolException.class)
                     .extracting(error -> ((SanitizedToolException) error).getCode()).isEqualTo("internal_error");
         }
     }

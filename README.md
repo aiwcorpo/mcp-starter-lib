@@ -5,7 +5,7 @@ gateway'em: nie loguje użytkowników, nie decyduje o uprawnieniach do narzędzi
 robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadczenie do systemu docelowego,
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
-Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 4.0.1.
+Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 4.1.0.
 Wersja: **3.0.0-beta-6** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
@@ -116,8 +116,6 @@ zatrzymuje start (`CredentialTransportGuard`).
 aiwcorpo.mcp.platform:
   server-id: mcp-jira                                     # wymagane
   auth-mode: gateway                                      # gateway | dev-pat (tylko profil dev)
-  credential-type: user-secret                            # typ poświadczenia systemu (context.credentialType w Cedar, CC-136); opcjonalne przy jednym
-                                                          # typie w manifest.accepted-credential-types, wtedy brany stamtąd
   internal-jwt:
     issuer: https://mcp-gateway.internal                  # domyślnie
     jwks-uri: https://mcp-gateway.internal:8443/.well-known/jwks.json   # wymagane
@@ -159,7 +157,7 @@ aiwcorpo.mcp.platform:
     version: 1.4.0                                        # wymagane, SemVer serwera
     internal-url: https://mcp-jira.internal:8443/mcp      # wymagane, https; informacyjny (gateway ma własną konfigurację)
     credential-required: true
-    accepted-credential-types: [user-oauth, user-secret]  # wymagane przy credential-required
+    accepted-credential-types: [user-oauth, user-secret]  # wymagane; pierwszy to typ domyślny (context.credentialType w Cedar); albo samo service-account
     output-file: target/mcp-manifest.json                 # opcjonalnie: zapis manifestu przy starcie (rejestracja w gateway'u)
   tools.unclassified: fail                                # fail | destructive
   tools.max-filtered-elements: 200                        # najdłuższa lista w wyniku sprawdzana politycznie (dłuższa = internal_error)
@@ -183,9 +181,8 @@ Serwer nie wstaje, gdy:
 - `unauthenticated-paths` zawiera coś spoza `/actuator/health`, `/actuator/health/liveness`,
   `/actuator/health/readiness`; protokół MCP jest inny niż `STREAMABLE`;
 - brakuje `policy.main.url`, `key-id` albo klucza publicznego (`public-key` albo `public-key-file`), `manifest.version`
-  (SemVer), `manifest.internal-url` (https) albo `manifest.accepted-credential-types` przy `credential-required`; nie da się ustalić
-  typu poświadczenia (`credential-type` brak, a manifest nie wymienia dokładnie jednego typu) albo `credential-type` nie jest na liście
-  przyjmowanych typów (gateway odrzuciłby manifest: `credential_type_mismatch`); poza
+  (SemVer), `manifest.internal-url` (https) albo `manifest.accepted-credential-types` przy `credential-required`; `accepted-credential-types`
+  jest puste (też bez `credential-required`) albo miesza `service-account` z typami użytkownika (CC-168); poza
   `dev` brakuje `policy.state-dir`, adres paczki nie jest https albo `policy.allow-test-keys=true`;
 - nie da się załadować pierwszej paczki polityk w `startup-timeout` (brak repozytorium, zły podpis, klucz `test-*` bez
   `allow-test-keys`, rewizja niższa od zapisanej w `state-dir`): serwer bez podpisanej polityki nie wstaje;
@@ -555,16 +552,17 @@ załadowanej jest odrzucana, także po restarcie (`state-dir`, CC-066).
 
 ### Typ poświadczenia w żądaniu Cedar (CC-136)
 
-Każde żądanie Cedar serwera (`Action::"call"` na narzędziu, odczyt i zapis na zasobie) ma `context.credentialType` z **konfiguracji serwera**
-(`aiwcorpo.mcp.platform.credential-type`, a przy jednym typie w `manifest.accepted-credential-types` stamtąd): kontrakt nie dodaje nagłówka, a
-reguły takie jak "konto serwisowe czyta kolejkę Service Desku tylko w przyznanym zakresie" muszą się stosować także wtedy, gdy atrybutu by brakowało.
-Serwer bez ustalonego typu nie wstaje, a `ResourcePolicy` utworzona bez niego rzuca wyjątek; `EntityBuilder.withCredentialType` z wartością spoza
-czterech typów (`user-oauth`, `user-secret`, `token-exchange`, `service-account`) kończy wywołanie `internal_error`.
+Każde żądanie Cedar serwera (`Action::"call"` na narzędziu, odczyt i zapis na zasobie) ma `context.credentialType`: **typ domyślny** serwera, czyli pierwszy z
+`manifest.accepted-credential-types` (CC-166, CC-168). Reguły takie jak "konto serwisowe czyta kolejkę Service Desku tylko w przyznanym zakresie" muszą się stosować także wtedy,
+gdy atrybutu by brakowało, więc zbiór typów jest albo samym `service-account`, albo samymi typami użytkownika: mieszany zbiór ukryłby konto serwisowe przed regułami, dlatego
+serwer z takim zbiorem nie wstaje. `ResourcePolicy` utworzona bez typów rzuca wyjątek; `EntityBuilder.withCredentialType` z wartością spoza czterech typów (`user-oauth`,
+`user-secret`, `token-exchange`, `service-account`) kończy wywołanie `internal_error`.
 
-**Rozjazd typu.** Gateway podaje typ użytego poświadczenia w `X-MCP-Credential-Type`; Cedar dostaje typ z konfiguracji. Gdy się różnią (administrator przełączył system na konto
-serwisowe, a serwer ma `credential-type: user-secret`), reguła napisana dla konta serwisowego nie zadziałałaby, więc starter **odmawia wywołania przed oceną polityki**:
-`internal_error` na zewnątrz (błąd konfiguracji, nie winy wywołującego), `ERROR event=credential_type_mismatch` w logu i zdarzenie `policy_decision` z powodem `credential_type_mismatch`.
-Kod i powód wg kontraktów 4.1.0 (zmiana po ich wydaniu).
+**Sprawdzenie nagłówka (CC-166).** Żądanie z `X-MCP-Credential` musi nazwać w `X-MCP-Credential-Type` typ ze zbioru `accepted-credential-types` serwera. Brak nagłówka, nieznana wartość
+(porównanie dokładne: `User-OAuth` jest nieznane), wartość spoza zbioru albo serwer bez skonfigurowanego typu to odmowa: `internal_error` na zewnątrz (błąd konfiguracji, nie winy wywołującego),
+`ERROR event=credential_type_mismatch` w logu i `policy_decision` z powodem `credential_type_mismatch` w audycie, **przed** Cedar, sondą grantu i resolverami. Żądanie bez `X-MCP-Credential`
+nie jest sprawdzane. Serwer, który przyjmuje `[user-oauth, user-secret]` (GitLab), przepuszcza oba typy; wektory `credential-type-header/` (strona serwera) przechodzą w `CredentialTypeHeaderVectorsTest`.
+Poświadczenie wysłane bez użytecznego typu nie trafia do `CredentialContext.require` (narzędzie go nie dostaje), a jego wartość jest nadal usuwana z logów i błędów.
 
 ### Jedna odmowa dla zasobów i kolejność ocen (CC-146)
 
