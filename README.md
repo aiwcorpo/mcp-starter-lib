@@ -576,10 +576,15 @@ resolvera, które zdradziłyby istnienie zasobu. W audycie odmowa sondy ma powó
 **Ograniczenie sondy:** zakłada, że polityka jest monotoniczna w klasyfikacji, czyli klasyfikacja tylko zawęża (reguły `forbid`, jak w przykładach kontraktów). Reguła, która przyznaje
 dostęp dopiero przy wybranej klasyfikacji (`permit ... when resource.category == "public"`), odrzuciłaby sondę z `category: ""` mimo grantu; i odwrotnie, sonda z kontenera z identyfikatora
 odmówi zgłoszenia przeniesionego do projektu, na który użytkownik ma grant, a na stary projekt klucza nie ma. W obu przypadkach odmowa jest bezpieczna (fail-closed), ale nieprecyzyjna.
-**`Confluence::Page` i `ServiceDesk::Ticket`** (kontener nie wynika z identyfikatora) nie mają sondy. Tu "grant" to zakres w paczce (grupa `mcp-confluence-space-*`, `mcp-servicedesk-queue-*`
-w `static.json`): wywołujący bez żadnego zakresu na przestrzeń/stronę albo kolejkę dostaje `not_found_or_denied` przed resolverem, a zasób, który system zwrócił poza zakresami wywołującego i
-którego nie da się ocenić (brak klasyfikacji, zły identyfikator), też `not_found_or_denied` zamiast `internal_error`. Polityka, która przyznaje odczyt tych typów bez zakresów
-(`servicedesk-read` z przykładów kontraktów), nie wystarcza więc wywołującemu bez zakresu kolejki; paczka serwera Service Desku musi nadawać zakresy kolejek. Kolejka Service Desku poza zakresem linku w argumencie to `not_found_or_denied`, nie `access_denied`.
+**`Confluence::Page` i `ServiceDesk::Ticket`** (kontener nie wynika z identyfikatora) nie mają sondy z identyfikatora. Grant to, wg entity-builder.md 9b.2, zakres w paczce **albo** polityka,
+która przyznaje dostęp. Wywołujący z jakimkolwiek zakresem kontenera (grupa `mcp-confluence-space-*`, `mcp-servicedesk-queue-*`) idzie dalej do resolvera i pełnej oceny. Wywołujący **bez zakresu** jest
+oceniany przez politykę na stronie albo zgłoszeniu w kontenerze, którego żaden zakres nie obejmuje (sentinel): odmowa (konto serwisowe z `credential-type.cedar` czyta tylko przyznane kolejki) to
+`not_found_or_denied` przed resolverem, a zgoda (odczyt z `read.cedar` według praw użytkownika w systemie, wektor `srv-servicedesk-user-secret-not-restricted-by-grants`) przepuszcza do pełnej oceny.
+Zasób, który system zwrócił poza zakresami wywołującego i którego nie da się ocenić (brak klasyfikacji, zły identyfikator, brak kontenera), daje `not_found_or_denied` zamiast `internal_error`.
+Przy koncie serwisowym błąd resolvera dla strony albo zgłoszenia też wygląda jak brak zasobu (z wyjątkiem braku poświadczenia); przy poświadczeniu użytkownika zostaje `upstream_unavailable`, bo
+system sam ogranicza to, co użytkownik widzi. Zasób z argumentu poza zakresem linku (reguły `vs-narrow-*` z `virtual-server.cedar`, także `vs-narrow-call-*` na poziomie narzędzia) to `not_found_or_denied` z tym samym tekstem co brak
+zasobu (CC-146c), nie `access_denied`; powód w audycie zostaje `link_scope`. Rozpoznanie opiera się na identyfikatorach reguł rozstrzygających (prefiks `vs-narrow-`): paczka polityk musi je zachować. Wektory `servicedesk-service-account/`
+przechodzą na `authorizeCall` (`ServiceDeskVectorsTest`).
 
 ### `@ResourceRef` i `ResourceResolver`
 
@@ -703,6 +708,12 @@ String jql = scope.jql(Set.of("status", "assignee", "text"))   // pola warunków
   (`*` i `?` jako wildcard, `foo-bar` jako wykluczenie, `x~` jako fuzzy); gdy kontrakt tego zażąda, escapowanie dojdzie z nową wersją odniesienia;
 - `scope.cql(Set.of("title", "label", ...))` dla Confluence (zawężenie do przestrzeni linku); `scope.jql(fields, true)` i
   `scope.cql(fields, true)` (typ `Confluence::Space`) dodają zakresy z grup (konto serwisowe; rzucają, gdy grup brak: pusty zakres to brak zapytania, nigdy zapytanie bez filtra);
+- **Zawężenie do projektu albo przestrzeni z argumentu:** `project` i `space` nie są polami warunku (listy normatywne), a serwer nie powinien pobierać 100 wyników, żeby oddać 25.
+  `scope.narrowedTo(ids)` (Jira: klucze projektów, Confluence: klucze przestrzeni; ids z argumentu będącego `@ResourceRef` typu kontenera, który polityka oceniła przed narzędziem) zwraca zakres
+  będący **przecięciem argumentu z linkiem** (bez linku: argumentem), renderowany w części zakresu zapytania po warunkach (`(text ~ "x") AND project in ("DEF")`), nie jako warunek. Zawężenie
+  tylko zmniejsza zakres: id spoza linku odpada, puste przecięcie to `nothingToQuery()` (pusty wynik albo `requireQueryable()` przy pobraniu po id), a przy zapytaniu ograniczanym grantami
+  (`jql(fields, true)`) argument bez wspólnych elementów z grantami to wyjątek, jak pusty grant. Identyfikator spoza wzorca kontraktu to `IllegalArgumentException`, nigdy tekst zapytania. Mieści się w
+  kontrakcie `query-rendering`: to lista zakresu renderowana jak `scope` odniesienia (grupa warunków w nawiasie, potem `AND project in (...)`), nie nowe pole ani operator.
 - `jqlProjectClause()`, `cqlSpaceClause()` zostają jako gotowe fragmenty (identyfikatory cytowane przez `QueryScope.quote`, który odrzuca znaki sterujące);
 - **Zakres wyklucza wszystko (CC-147):** `scope.nothingToQuery()` (OpenSearch: żaden indeks nie jest jednocześnie przyznany i w linku; pozostałe typy: brak grantów, dla zapytań
   ograniczanych grantami) znaczy: wyszukiwanie i lista zwracają **pusty wynik bez wywołania systemu** (to nie błąd), a pobranie jednego zasobu po id woła
@@ -717,8 +728,8 @@ String jql = scope.jql(Set.of("status", "assignee", "text"))   // pola warunków
   ryzyko znane i przyjęte w kontrakcie; **nie cache'uj odpowiedzi `_resolve/index` między wywołaniami narzędzia**, bo wtedy okno trwa tyle co TTL. Cel wyszukiwania, `_count` i agregacji
   daje `scope.opensearchSearchTarget(odpowiedź)`: puste `Optional` znaczy "nie wykonuj zapytania" (żądanie z pustym celem przeszukuje wszystkie indeksy, więc nie sklejaj nazw sam).
   Nazwy niezgodne ze wzorcem `OpenSearchIndexName` (np. z `%` albo `=`) są pomijane, więc nazwy są bezpieczne w ścieżce bez kodowania. Do `_resolve/index` dodaj
-  `QueryScope.OPENSEARCH_RESOLVE_PARAMETERS` (`expand_wildcards=open`); odpowiedź 404 `index_not_found_exception` (nie ma indeksu o nazwie samego prefiksu) traktuj jak `QueryScope.EMPTY_RESOLVE_RESPONSE`
-  (zachowanie `_resolve/index` dla nieistniejącej nazwy nie jest potwierdzone na żywym klastrze: ws-01). `QueryScope.requireNoAliases` jest przestarzałe (zapytanie do nazw nie wymaga odmowy). Dzięki temu `aggregate_logs` może wrócić po wdrożeniu tego
+  `QueryScope.OPENSEARCH_RESOLVE_PARAMETERS` (`expand_wildcards=open`, `ignore_unavailable=true`, `allow_no_indices=true`): bez `ignore_unavailable` brak indeksu o nazwie samego prefiksu (układ z
+  samymi `p-2026.10`) kończy całe żądanie 404 `index_not_found_exception`. Odpowiedź 404 mimo to traktuj jak `QueryScope.EMPTY_RESOLVE_RESPONSE` (zabezpieczenie; zachowanie na żywym klastrze do potwierdzenia: ws-01). `QueryScope.requireNoAliases` jest przestarzałe (zapytanie do nazw nie wymaga odmowy). Dzięki temu `aggregate_logs` może wrócić po wdrożeniu tego
   w serwerze OpenSearch (reguła wyłączająca w paczce polityk znika dopiero wtedy). DSL zapytania OpenSearch buduj po stronie serwera, nie przyjmuj go od modelu;
 - gdzie system sam stosuje prawa użytkownika (Jira, Confluence, GitLab z jego tokenem), wystarczy zawężenie linku; gdzie nie
   (OpenSearch, konto serwisowe) zapytanie ogranicza się do `grantedIds()`, a puste `grantsNothing()` znaczy: nie wykonuj zapytania.

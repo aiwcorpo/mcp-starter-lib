@@ -33,12 +33,59 @@ public final class QueryScope {
     private final Optional<SortedSet<String>> linkIds;
     private final String linkType;
     private final SortedSet<String> grantedIds;
+    private final boolean narrowedByArgument;
 
     private QueryScope(QueryConstraint constraint) {
         this.resourceType = constraint.resourceType();
         this.linkIds = constraint.virtualServer();
         this.linkType = constraint.virtualServerType();
         this.grantedIds = constraint.granted();
+        this.narrowedByArgument = false;
+    }
+
+    private QueryScope(QueryScope base, SortedSet<String> narrowedIds) {
+        this.resourceType = base.resourceType;
+        this.linkIds = Optional.of(narrowedIds);
+        this.linkType = base.linkType;
+        this.grantedIds = base.grantedIds;
+        this.narrowedByArgument = true;
+    }
+
+    /**
+     * The scope narrowed to the project or space ids named in an argument of the tool, for a search the model limits to a project or a space (they are not
+     * fields of a condition, CC-160). The ids go into the <b>scope part</b> of the query ({@code project in (...)}, {@code space in (...)}), after the
+     * conditions in parentheses, never into them, and the narrowing can only shrink the scope: with a link the result is the intersection of the
+     * argument and the link, without one the argument itself; an empty intersection is {@link #nothingToQuery()} (an empty result, or
+     * {@link #requireQueryable()} for a fetch by id). The grants stay a clause of their own ({@code jql(fields, true)}), and with them an argument outside the
+     * grants is refused as for an empty grant.
+     *
+     * <p>Pass only ids of an argument that is a {@link ResourceRef} of the container type ({@code Jira::Project}, {@code Confluence::Space}): the
+     * policy has judged each of them before the tool runs ({@code ResourcePolicy#authorizeCall}), and this narrows the query to them; it
+     * does not replace that check.
+     *
+     * @param ids the container ids of the argument (project keys, space keys), checked against the patterns of the contracts
+     * @throws IllegalArgumentException for an id that is not a valid identifier of the container type
+     * @throws IllegalStateException    for a scope of another type than Jira or Confluence
+     */
+    public QueryScope narrowedTo(java.util.Collection<String> ids) {
+        requireType("Jira::Project", "Jira::Issue", "Confluence::Space", "Confluence::Page");
+        Objects.requireNonNull(ids, "ids");
+        SortedSet<String> argument = new TreeSet<>();
+        for (String id : ids) {
+            if (id == null || !ResourceIds.isValid(linkType, ResourceIds.Kind.RESOURCE, id)) {
+                throw new IllegalArgumentException("not a valid " + linkType + " identifier");
+            }
+            argument.add(id);
+        }
+        if (linkIds.isPresent()) {
+            argument.retainAll(linkIds.get());
+        }
+        return new QueryScope(this, argument);
+    }
+
+    /** True for a scope made by {@link #narrowedTo}; {@link #linkIds()} are then the argument (and the link) and not the link alone. */
+    public boolean narrowedByArgument() {
+        return narrowedByArgument;
     }
 
     public static QueryScope of(QueryConstraint constraint) {
@@ -79,6 +126,9 @@ public final class QueryScope {
     }
 
     private static String inList(String field, SortedSet<String> ids) {
+        if (ids.isEmpty()) {
+            throw new IllegalStateException("the scope excludes everything (nothingToQuery()): do not run the query");
+        }
         return field + " in (" + String.join(", ", ids.stream().map(QueryScope::quote).toList()) + ")";
     }
 
@@ -100,6 +150,7 @@ public final class QueryScope {
         if (grantedIds.isEmpty()) {
             throw new IllegalStateException("the caller is granted no project: do not run the query (grantsNothing())");
         }
+        requireOverlapWithGrants();
         String granted = inList("project", grantedIds);
         return Optional.of(linkIds.map(ids -> inList("project", ids) + " AND " + granted).orElse(granted));
     }
@@ -147,6 +198,9 @@ public final class QueryScope {
      * rights needs no grant to run the query.
      */
     public boolean nothingToQuery() {
+        if (linkIds.isPresent() && linkIds.get().isEmpty()) {
+            return true;
+        }
         return "OpenSearch::Index".equals(resourceType) ? indexPatterns().isEmpty() : grantedIds.isEmpty();
     }
 
@@ -247,16 +301,20 @@ public final class QueryScope {
     }
 
     /**
-     * Parameters of {@code GET _resolve/index/<expression>}: only open indices. The answer must not be cached between calls of a tool: the
+     * Parameters of {@code GET _resolve/index/<expression>}: only open indices, and {@code ignore_unavailable=true} so that the concrete name
+     * {@code p} of the pair {@code p,p-*} need not exist (the usual layout is {@code p-2026.10} only): without it OpenSearch answers 404
+     * {@code index_not_found_exception} for the whole request, also when {@code p-2026.10} exists, and a search would return nothing without saying why.
+     * The answer must not be cached between calls of a tool: the
      * window between the resolution and the query in which an index could be replaced by an alias (entity-builder.md, section 8) then lasts
      * as long as the cache does.
      */
-    public static final java.util.Map<String, String> OPENSEARCH_RESOLVE_PARAMETERS = java.util.Map.of("expand_wildcards", "open");
+    public static final java.util.Map<String, String> OPENSEARCH_RESOLVE_PARAMETERS = java.util.Map.of("expand_wildcards", "open",
+            "ignore_unavailable", "true", "allow_no_indices", "true");
 
     /**
-     * What to give {@link #resolveIndexNames} when {@code GET _resolve/index/} answers 404 {@code index_not_found_exception}: the pair
-     * {@code p,p-*} has a concrete name {@code p} that need not exist (the usual layout is {@code p-2026.10} only). Not confirmed on a live
-     * cluster (ws-01); no other status is an empty answer.
+     * What to give {@link #resolveIndexNames} when {@code GET _resolve/index/} still answers 404 {@code index_not_found_exception} with the
+     * parameters above (nothing of the scope exists at all): an empty answer, so nothing is queried. No other status is an empty answer. The
+     * behaviour of the endpoint is taken from the source of OpenSearch and is to be confirmed on the devstack cluster (ws-01).
      */
     public static final String EMPTY_RESOLVE_RESPONSE = "{\"indices\":[],\"aliases\":[],\"data_streams\":[]}";
 
@@ -326,6 +384,7 @@ public final class QueryScope {
         if (grantedIds.isEmpty()) {
             throw new IllegalStateException("the caller is granted no space: do not run the query (grantsNothing())");
         }
+        requireOverlapWithGrants();
         String granted = inList("space", grantedIds);
         return Optional.of(linkIds.map(ids -> inList("space", ids) + " AND " + granted).orElse(granted));
     }
@@ -402,6 +461,7 @@ public final class QueryScope {
             if (grantedIds.isEmpty()) {
                 throw new IllegalStateException("the caller is granted no project: do not run the query (grantsNothing())");
             }
+            requireOverlapWithGrants();
             clauses.add(inList("project", grantedIds));
         }
         return clauses;
@@ -418,9 +478,17 @@ public final class QueryScope {
             if (grantedIds.isEmpty()) {
                 throw new IllegalStateException("the caller is granted no space: do not run the query (grantsNothing())");
             }
+            requireOverlapWithGrants();
             clauses.add(inList("space", grantedIds));
         }
         return clauses;
+    }
+
+    /** A scope narrowed by an argument that the grants do not touch is empty for a query limited by grants. */
+    private void requireOverlapWithGrants() {
+        if (narrowedByArgument && linkIds.isPresent() && java.util.Collections.disjoint(linkIds.get(), grantedIds)) {
+            throw new IllegalStateException("the argument names nothing the caller is granted: do not run the query (nothingToQuery())");
+        }
     }
 
     private void requireType(String... allowed) {

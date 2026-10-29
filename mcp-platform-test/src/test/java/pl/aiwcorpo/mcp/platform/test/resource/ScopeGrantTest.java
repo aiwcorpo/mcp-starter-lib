@@ -44,6 +44,7 @@ class ScopeGrantTest {
     private static PolicyEngine engine;
     private final List<String> asked = new ArrayList<>();
     private Map<String, ResolvedResource> tickets = Map.of();
+    private boolean failing;
 
     @BeforeAll
     static void start() throws Exception {
@@ -77,6 +78,9 @@ class ScopeGrantTest {
             @Override
             public Optional<ResolvedResource> fetch(String id) {
                 asked.add(id);
+                if (failing) {
+                    throw new IllegalStateException("the system is down");
+                }
                 return Optional.ofNullable(tickets.get(id));
             }
 
@@ -136,6 +140,22 @@ class ScopeGrantTest {
 
         assertThat(call(groups, "T-3")).isEqualTo(DENIED);
         assertThat(call(groups, "T-4")).contains("internal_error");
+    }
+
+    @Test
+    void aFailureOfTheSystemOnATicketOutsideTheGrantsLooksLikeAMissingTicket() {
+        tickets = Map.of("T-1", ticket("T-1", "7"));
+        failing = true;
+
+        assertThat(call(List.of("mcp-servicedesk-read", "mcp-servicedesk-queue-42"), "T-1")).isEqualTo(DENIED);
+        assertThat(asked).as("the resolver was asked: the queue of a ticket is not in its id").containsExactly("T-1");
+    }
+
+    @Test
+    void aTicketTheSystemReturnsWithoutItsQueueIsNotAnInternalErrorForACallerWithoutThatQueue() {
+        tickets = Map.of("T-5", ResolvedResource.of("ServiceDesk::Ticket", "T 5", Map.of("id", "T 5")));
+
+        assertThat(call(List.of("mcp-servicedesk-read", "mcp-servicedesk-queue-42"), "T-5")).isEqualTo(DENIED);
     }
 
     @Test

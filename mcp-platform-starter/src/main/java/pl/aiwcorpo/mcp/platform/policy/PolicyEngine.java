@@ -297,6 +297,52 @@ public final class PolicyEngine implements AutoCloseable {
         return ResultFilter.cedarAuthorizer(new BasicAuthorizationEngine(), snapshot.policies(), snapshot.schema());
     }
 
+    /** Id prefix of the forbid rules that narrow a call to the virtual server link ({@code vs-narrow-call-*} and {@code vs-narrow-*}, cedar/examples/virtual-server.cedar). */
+    public static final String LINK_NARROWING_PREFIX = "vs-narrow-";
+
+    /**
+     * An authorizer for one call that remembers whether its last denial came only from the narrowing of the virtual server link: every
+     * determining policy is a {@value #LINK_NARROWING_PREFIX} rule. The server then answers as for a resource that does not exist
+     * ({@code not_found_or_denied}) and audits {@code link_scope} (CC-146c). Not thread safe: one per call.
+     */
+    public static final class RecordingAuthorizer implements ResultFilter.Authorizer {
+
+        private final com.cedarpolicy.BasicAuthorizationEngine cedar = new BasicAuthorizationEngine();
+        private final Snapshot snapshot;
+        private boolean lastDeniedByLink;
+
+        RecordingAuthorizer(Snapshot snapshot) {
+            this.snapshot = snapshot;
+        }
+
+        @Override
+        public boolean isAllowed(pl.aiwcorpo.mcp.cedar.entities.CedarRequest request) throws Exception {
+            lastDeniedByLink = false;
+            com.cedarpolicy.model.AuthorizationResponse response = cedar.isAuthorized(request.toAuthorizationRequest(snapshot.schema()),
+                    snapshot.policies(), request.cedarEntities());
+            if (response.success.isEmpty()) {
+                return false;
+            }
+            com.cedarpolicy.model.AuthorizationSuccessResponse success = response.success.get();
+            if (success.isAllowed() && success.getErrors().isEmpty()) {
+                return true;
+            }
+            lastDeniedByLink = !success.isAllowed() && !success.getReason().isEmpty()
+                    && success.getReason().stream().allMatch(id -> id.startsWith(LINK_NARROWING_PREFIX));
+            return false;
+        }
+
+        /** True when the last request was denied and every determining policy narrows to the link. */
+        public boolean lastDeniedByLinkNarrowing() {
+            return lastDeniedByLink;
+        }
+    }
+
+    /** As {@link #authorizer}, remembering why the last request was denied. */
+    public RecordingAuthorizer recordingAuthorizer(Snapshot snapshot) {
+        return new RecordingAuthorizer(snapshot);
+    }
+
     /**
      * Asks for a pull of the main bundle when the caller's token names a newer revision than the loaded one (at most every
      * two seconds), and returns at once: the pull runs on a thread of the engine, so the call that carries the hint is decided

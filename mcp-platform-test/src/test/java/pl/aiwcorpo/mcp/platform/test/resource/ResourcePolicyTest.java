@@ -132,7 +132,7 @@ class ResourcePolicyTest {
             auditLog.detachAppender(lines);
         }
         assertThat(lines.list).anySatisfy(line -> assertThat(line.getFormattedMessage())
-                .contains("\"event\":\"policy_decision\"", "\"reason\":\"credential_type_mismatch\""));
+                .contains("\"event\":\"policy_decision\"", "\"reason\":\"credential_type_mismatch\"", "\"argsLength\":"));
         assertThat(jira.calls).as("refused before the resolver").doesNotContain("ABC-1");
     }
 
@@ -313,7 +313,7 @@ class ResourcePolicyTest {
                 .virtualServer("abc-only", Map.of("jiraProjects", List.of("ABC"))))) {
             assertThat(text(call(client, "get_issue", Map.of("issueKey", "ABC-1")))).contains("ABC-1");
             assertThat(text(call(client, "get_issue", Map.of("issueKey", "DEF-7")))).contains("not_found_or_denied");
-            assertThat(text(call(client, "search_issues", Map.of("projectKeys", List.of("DEF"))))).contains("access_denied");
+            assertThat(text(call(client, "search_issues", Map.of("projectKeys", List.of("DEF"))))).contains("not_found_or_denied");
         }
     }
 

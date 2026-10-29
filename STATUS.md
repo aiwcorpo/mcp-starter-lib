@@ -37,20 +37,20 @@ BOM na kontraktach 4.1.0 (CC-165 ... CC-168). Decyzje koordynatora z 2026-10-29:
 
 Wektory 4.1.0: `credential-type-header/` (13; strona serwera 9 uruchamiana), `audit-events/` (113, w tym `server-credential-type-mismatch`), `manifests/` (reguła `credential-types-not-mixed` wykonuje `ManifestRules` z jara); `activity-calls/` (CC-165) nie dotyczy startera.
 
-## Odstępstwa i decyzje M4
+## Odstępstwa i decyzje (stan na beta-8)
 
-- `credential-type` w konfiguracji serwera: wymagane, gdy `manifest.accepted-credential-types` nie wymienia dokładnie jednego typu. Wartość spoza listy przyjmowanych typów zatrzymuje start (gateway odrzuciłby manifest: `credential_type_mismatch`).
-  Starter nie porównuje jej z nagłówkiem `X-MCP-Credential-Type` żądania (kontrakt nie dodaje nagłówka do reguły; patrz "Propozycje CC").
-- Kolejność "grant przed budową encji" jest zrealizowana przez ocenę **sondy** (zasób z samego identyfikatora z najmniej restrykcyjną klasyfikacją) przed resolverem. Sonda istnieje dla `Jira::Project`, `Jira::Issue`, `Confluence::Space`, `GitLab::Group`,
-  `GitLab::Project`, `OpenSearch::Index`, `ServiceDesk::Queue`; typy bez kontenera w identyfikatorze (`Confluence::Page`, `ServiceDesk::Ticket`) są oceniane po rozwiązaniu jak dotąd (kontrakt nie definiuje "grantu na typ" inaczej niż przez politykę).
-- `StructuredQuery`: operatory `IN`, `NOT_IN`, `NOT_CONTAINS`, `GREATER*`, `LESS*` usunięte (spoza listy normatywnej); znaki Lucene w `CONTAINS` nie są escapowane (odniesienie tego nie robi, a wektory wymagają dokładnej postaci); znak sterujący w wartości jest odrzucany, nie escapowany.
-- `QueryScope.requireNoAliases` oznaczone jako przestarzałe (zapytanie do listy nazw nie wymaga odmowy).
+- Typ poświadczenia: zbiór `manifest.accepted-credential-types` (pierwszy = typ domyślny dla Cedar, bez mieszania `service-account` z typami użytkownika); nagłówek `X-MCP-Credential-Type` sprawdzany przed Cedar (CC-166). Właściwość `credential-type` z beta-6 usunięta, jej ustawienie zatrzymuje start z komunikatem migracji.
+- Kolejność "grant przed budową encji" (CC-146): sonda z identyfikatora dla `Jira::Project/Issue`, `Confluence::Space`, `GitLab::Group/Project`, `OpenSearch::Index`, `ServiceDesk::Queue`. Dla `Confluence::Page` i `ServiceDesk::Ticket`: zakres w paczce albo zgoda polityki na zasób w kontenerze bez zakresu (9b.2); zasób poza zakresami, którego nie da się ocenić, to `not_found_or_denied`.
+  Błąd resolvera dla Page/Ticket wygląda jak brak zasobu tylko przy koncie serwisowym; przy poświadczeniu użytkownika zostaje `upstream_unavailable` (decyzja odbiega od zalecenia recenzji, żeby awaria systemu nie udawała braku zasobu dla wszystkich).
+- `StructuredQuery`: operatory `IN`, `NOT_IN`, `NOT_CONTAINS`, `GREATER*`, `LESS*` usunięte (spoza listy normatywnej); znaki Lucene w `CONTAINS` nie są escapowane (jak w referencji kontraktu); znak sterujący w wartości jest odrzucany.
+- `QueryScope.requireNoAliases` przestarzałe. `_resolve/index` z `ignore_unavailable=true`; zachowanie na żywym klastrze niepotwierdzone (ws-01).
 
 ## Propozycje CC (nie zmieniam kontraktów)
 
-- (zamknięte w 4.1.0, CC-166) C3/CC-136: czy starter ma odrzucać wywołanie, gdy `X-MCP-Credential-Type` różni się od `credential-type` serwera? Dziś typ w audycie (`tool_call.credentialType`) jest z nagłówka, a w Cedar z konfiguracji; rozjazd jest niewidoczny dla polityki. Propozycja: powód odmowy `credential_type_mismatch` także na serwerze albo wskazanie w kontrakcie, że gateway gwarantuje równość.
-- entity-builder.md 9b: zdefiniować "grant na typ" (obecnie: zgoda polityki na zasób o minimalnej klasyfikacji), żeby serwery i wektory mówiły to samo; dodać wektor, w którym zasób bez klasyfikacji i bez grantu daje `not_found_or_denied`.
-- C8: powód `policy_error` na serwerze obejmuje tylko błąd oceny `Action::"call"` na narzędziu; błąd oceny pojedynczego elementu wyniku usuwa element (bez zdarzenia). Do potwierdzenia, czy to wystarcza.
+- entity-builder.md 9b.2: sonda z identyfikatora zakłada, że polityka jest monotoniczna w klasyfikacji (tylko `forbid`); warto zapisać to jako regułę dla `mcp-policies`.
+- C8: `policy_error` na serwerze obejmuje tylko błąd oceny `Action::"call"` na narzędziu; błąd oceny pojedynczego elementu wyniku usuwa element bez zdarzenia.
+
+3.0.0-beta-8: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-8`, tag `v3.0.0-beta-8` (po wydaniu `3.0.0-beta-9-SNAPSHOT`). Poprawki po recenzji beta-7 (1 HIGH, 1 MEDIUM, 5 LOW): H1 definicja grantu Page/Ticket wg 9b.2 (zakres albo polityka) i wektory `servicedesk-service-account/` (6) na `authorizeCall`; M1 `_resolve/index` z `ignore_unavailable=true`; L1 STATUS; L2 błąd resolvera i brak rodzica; L3 usunięta właściwość zatrzymuje start; L4 MIGRATION; L5 `argsLength` w `policy_decision`. Dołożone na prośbę koordynatora: odmowa zawężenia linku dla zasobu z argumentu to `not_found_or_denied` z powodem audytu `link_scope` (CC-146c; `LinkScopeTest` na paczce z `vs-narrow-call-servicedesk-queue`; wymaga identyfikatorów `vs-narrow-*` w paczce) oraz `QueryScope.narrowedTo(ids)` (zakres z argumentu w części zakresu zapytania, przecięcie z linkiem, w ramach kontraktu `query-rendering`). Razem 931 testów (starter 756, mcp-platform-test 175). Dla serwerów tylko podbicie wersji, poza uwagami w `MIGRATION-3.0.md`, "Z beta-7 na beta-8".
 
 3.0.0-beta-7: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-7`, tag `v3.0.0-beta-7` (po wydaniu `3.0.0-beta-8-SNAPSHOT`). Kontrakty 4.1.0, razem 915 testów (starter 751, mcp-platform-test 164). Instrukcja: `MIGRATION-3.0.md`, "Z beta-6 na beta-7". Zakres: tabela "Po recenzji beta-6 i kontrakty 4.1.0" wyżej.
 

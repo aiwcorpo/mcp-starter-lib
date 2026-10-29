@@ -134,7 +134,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         Snapshot snapshot = snapshot();
         Caller user = user(caller);
         ToolDescriptor descriptor = descriptor(tool);
-        pl.aiwcorpo.mcp.cedar.entities.ResultFilter.Authorizer authorizer = engine.authorizer(snapshot);
+        PolicyEngine.RecordingAuthorizer authorizer = engine.recordingAuthorizer(snapshot);
 
         boolean toolAllowed;
         try {
@@ -147,6 +147,10 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
             throw unavailable("policy_error");
         }
         if (!toolAllowed) {
+            if (authorizer.lastDeniedByLinkNarrowing() && !descriptor.resourceRefs().isEmpty()) {
+                // The link narrows a resource named in an argument (vs-narrow-call-*): the same answer as for a resource that does not exist (CC-146c).
+                deny(caller, tool, null, null, null, "link_scope", snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
+            }
             deny(caller, tool, null, null, null, "policy_forbid", snapshot, ToolErrorCode.ACCESS_DENIED,
                     "You are not allowed to use this tool.");
         }
@@ -168,6 +172,11 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
             throw new InvalidToolArgumentException("A resource identifier in the arguments is not valid.");
         }
         if ("not_resolved".equals(reason) && failure.get() != null) {
+            if (hidesResolverFailure(result.deniedType().orElse(""), failure.get())) {
+                // For a service account the system sees everything: a failure on an existing page or ticket must not differ from a missing one.
+                deny(caller, tool, result.deniedType().orElse(null), result.deniedId().orElse(null), null, "not_granted", snapshot,
+                        ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
+            }
             throw failure.get();
         }
         LOG.info("event=resource_refused tool=\"{}\" reason={} type={}", tool, reason, result.deniedType().orElse("-"));
@@ -186,7 +195,8 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
                     "The tool could not complete the request."));
         }
         deny(caller, tool, result.deniedType().orElse(null), result.deniedId().orElse(null), null,
-                "denied".equals(reason) ? "policy_forbid" : "not_granted", snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
+                "denied".equals(reason) ? (authorizer.lastDeniedByLinkNarrowing() ? "link_scope" : "policy_forbid") : "not_granted",
+                snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
     }
 
     /**
@@ -198,7 +208,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
                                     pl.aiwcorpo.mcp.cedar.entities.ResultFilter.Authorizer authorizer, Map<String, Object> arguments) {
         for (pl.aiwcorpo.mcp.cedar.entities.ResourceRef ref : descriptor.resourceRefs()) {
             for (String value : GrantProbe.values(arguments.get(ref.argument()))) {
-                refuseWithoutScopeGrant(caller, tool, ref.type(), value, user, snapshot);
+                refuseWithoutScopeGrant(caller, tool, descriptor, ref.type(), value, user, snapshot, authorizer, arguments);
                 Optional<ResolvedResource> probe = GrantProbe.of(ref.type(), value);
                 if (probe.isEmpty()) {
                     continue;
@@ -210,19 +220,25 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
                     continue;
                 }
                 if (!granted) {
-                    // The policy itself refused the probe (a forbid rule, a missing permit, the narrowing of the link): C8 policy_forbid.
-                    deny(caller, tool, ref.type(), value, null, "policy_forbid", snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
+                    // The policy itself refused the probe (a forbid rule, a missing permit, the narrowing of the link): C8 policy_forbid or link_scope.
+                    deny(caller, tool, ref.type(), value, null, authorizer instanceof PolicyEngine.RecordingAuthorizer recording
+                            && recording.lastDeniedByLinkNarrowing() ? "link_scope" : "policy_forbid", snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
                 }
             }
         }
     }
 
     /**
-     * CC-146 for the types whose container the identifier does not name ({@code Confluence::Page}, {@code ServiceDesk::Ticket}):
-     * a caller with no scope grant on the container type gets {@code not_found_or_denied} before the resolver is asked. Here a grant is a
-     * scope of the bundle ({@code mcp-confluence-space-*}, {@code mcp-servicedesk-queue-*}), not any permit of a policy.
+     * CC-146 (entity-builder.md 9b.2) for the types whose container the identifier does not name ({@code Confluence::Page},
+     * {@code ServiceDesk::Ticket}): a grant is a scope of the bundle <em>or</em> a policy that grants access. A caller with no scope on the
+     * container type is judged by the policy on a page or ticket in a container no scope covers ({@link GrantProbe#withoutScopes}): denied, he gets
+     * {@code not_found_or_denied} before the resolver is asked (the service account of {@code credential-type.cedar} reads only inside
+     * granted queues); allowed, he goes on, because the system applies the user's own rights (vector
+     * {@code srv-servicedesk-user-secret-not-restricted-by-grants}).
      */
-    private void refuseWithoutScopeGrant(CallerContext caller, String tool, String type, String value, Caller user, Snapshot snapshot) {
+    private void refuseWithoutScopeGrant(CallerContext caller, String tool, ToolDescriptor descriptor, String type, String value, Caller user,
+                                         Snapshot snapshot, pl.aiwcorpo.mcp.cedar.entities.ResultFilter.Authorizer authorizer,
+                                         Map<String, Object> arguments) {
         List<String> containers = switch (type) {
             case "Confluence::Page" -> List.of("Confluence::Space", "Confluence::Page");
             case "ServiceDesk::Ticket" -> List.of("ServiceDesk::Queue");
@@ -232,10 +248,33 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
             return;
         }
         EntityBuilder builder = builder(snapshot);
-        boolean any = containers.stream().anyMatch(container -> !builder.queryConstraint(user, container).granted().isEmpty());
-        if (!any) {
-            deny(caller, tool, type, value, null, "not_granted", snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
+        if (containers.stream().anyMatch(container -> !builder.queryConstraint(user, container).granted().isEmpty())) {
+            return;
         }
+        Optional<ResolvedResource> probe = GrantProbe.withoutScopes(type, value);
+        if (probe.isEmpty()) {
+            return;
+        }
+        boolean allowed;
+        try {
+            allowed = authorizer.isAllowed(builder.forResource(user, descriptor, arguments, probe.get()));
+        } catch (Exception ex) {
+            allowed = false;
+        }
+        if (!allowed) {
+            deny(caller, tool, type, value, null, "policy_forbid", snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
+        }
+    }
+
+    /**
+     * L2 of the review of beta-7: with the service account (the default type of the server), a page or a ticket whose resolver failed answers like
+     * a missing one, except for a missing credential (the caller's own state). With a user credential the system limits what the user sees, so
+     * the failure stays visible as {@code upstream_unavailable}.
+     */
+    private boolean hidesResolverFailure(String type, RuntimeException failure) {
+        return "service-account".equals(credentialType) && ("Confluence::Page".equals(type) || "ServiceDesk::Ticket".equals(type))
+                && !(failure.getCause() instanceof pl.aiwcorpo.mcp.platform.security.CredentialRequiredException)
+                && !(failure instanceof pl.aiwcorpo.mcp.platform.security.CredentialRequiredException);
     }
 
     /** True when the resolved page or ticket lies in no container the caller's groups grant; other types are judged by the probe. */
@@ -243,7 +282,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         try {
             if ("ServiceDesk::Ticket".equals(resource.type())) {
                 return resource.parent().map(queue -> !builder.queryConstraint(user, "ServiceDesk::Queue").granted().contains(queue.id()))
-                        .orElse(false);
+                        .orElse(true);
             }
             if ("Confluence::Page".equals(resource.type())) {
                 boolean inSpace = resource.parent().map(space -> builder.queryConstraint(user, "Confluence::Space").granted()
@@ -252,7 +291,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
                 Object ancestors = resource.attributes().get("ancestorIds");
                 boolean inPages = pages.contains(resource.id()) || (ancestors instanceof java.util.Collection<?> ids
                         && ids.stream().anyMatch(id -> pages.contains(String.valueOf(id))));
-                return resource.parent().isPresent() && !inSpace && !inPages;
+                return !inSpace && !inPages;
             }
         } catch (RuntimeException ex) {
             return false;
@@ -270,7 +309,8 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         if (!pl.aiwcorpo.mcp.platform.security.CredentialTypeCheck.admits(
                 pl.aiwcorpo.mcp.platform.security.CredentialContext.credentialSent(), header, acceptedCredentialTypes)) {
             LOG.error("event=credential_type_mismatch tool=\"{}\" accepted={} header_present={}", tool, acceptedCredentialTypes, header != null);
-            audit.policyRefused(caller, tool, registry.riskOf(tool).orElse(null), "credential_type_mismatch", "internal_error");
+            audit.policyRefused(caller, tool, registry.riskOf(tool).orElse(null), "credential_type_mismatch", "internal_error",
+                    argsLength());
             throw new SanitizedToolException(new McpErrorMapper.SafeError(ToolErrorCode.INTERNAL_ERROR.code(),
                     "The tool could not complete the request."));
         }
@@ -584,9 +624,15 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
      * {@code upstream_unavailable} when nothing can be decided (CC-141): no bundle is loaded ({@code policy_unavailable}) or the
      * policy engine failed on this request ({@code policy_error}). The refusal is audited as a decision with that reason.
      */
+    /** Length in bytes of the arguments as the platform read them, for the audit events that have no raw input at hand. */
+    private static long argsLength() {
+        return ResourceContext.current().map(context -> (long) JSON.writeValueAsString(context.arguments())
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8).length).orElse(0L);
+    }
+
     private SanitizedToolException unavailable(String reason) {
         ResourceContext.current().ifPresent(context -> audit.policyUnavailable(context.caller(), context.tool(),
-                registry.riskOf(context.tool()).orElse(null), reason));
+                registry.riskOf(context.tool()).orElse(null), reason, argsLength()));
         return new SanitizedToolException(new McpErrorMapper.SafeError(ToolErrorCode.UPSTREAM_UNAVAILABLE.code(),
                 "Policies are not available. Try again later."));
     }

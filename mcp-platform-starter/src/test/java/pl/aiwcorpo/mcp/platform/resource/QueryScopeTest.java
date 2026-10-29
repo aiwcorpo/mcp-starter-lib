@@ -3,6 +3,7 @@ package pl.aiwcorpo.mcp.platform.resource;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
@@ -96,6 +97,59 @@ class QueryScopeTest {
         assertThat(scope("OpenSearch::Index", "OpenSearch::Index", null, Set.of()).opensearchSearchTarget(hostile)).isEmpty();
         assertThat(scope.opensearchSearchTarget("{\"indices\":[{\"name\":\"logs-team-a-2\"},{\"name\":\"logs-team-a\"}]}"))
                 .contains("logs-team-a,logs-team-a-2");
+    }
+
+    @Test
+    void theResolveRequestIgnoresAMissingConcreteNameAndAScopeWithOnlyDatedIndicesStillHasATarget() {
+        assertThat(QueryScope.OPENSEARCH_RESOLVE_PARAMETERS).containsEntry("ignore_unavailable", "true")
+                .containsEntry("expand_wildcards", "open").containsEntry("allow_no_indices", "true");
+        QueryScope scope = scope("OpenSearch::Index", "OpenSearch::Index", null, Set.of("logs-team-a"));
+        // the answer for logs-team-a,logs-team-a-* when there is no index named logs-team-a, only the dated ones
+        String answer = "{\"indices\":[{\"name\":\"logs-team-a-2026.10\"},{\"name\":\"logs-team-a-2026.11\"}],\"aliases\":[],\"data_streams\":[]}";
+
+        assertThat(scope.opensearchSearchTarget(answer)).contains("logs-team-a-2026.10,logs-team-a-2026.11");
+    }
+
+    @Test
+    void anArgumentNarrowsTheScopeAfterTheConditionsAndNeverWidensIt() {
+        QueryScope open = scope("Jira::Project", "Jira::Project", null, Set.of("ABC", "DEF"));
+        QueryScope link = scope("Jira::Project", "Jira::Project", Set.of("ABC", "DEF"), Set.of("ABC", "DEF"));
+        Set<String> fields = Set.of("text", "status");
+
+        assertThat(open.narrowedTo(List.of("DEF")).jql(fields).where("text", StructuredQuery.Operator.CONTAINS, "x").build())
+                .isEqualTo("(text ~ \"x\") AND project in (\"DEF\")");
+        assertThat(link.narrowedTo(List.of("ABC", "ZZZ")).jql(fields).build()).as("ZZZ is outside the link and drops out")
+                .isEqualTo("project in (\"ABC\")");
+        assertThat(link.narrowedTo(List.of("ABC", "DEF")).jql(fields, true).build())
+                .isEqualTo("project in (\"ABC\", \"DEF\") AND project in (\"ABC\", \"DEF\")");
+        assertThat(link.narrowedTo(List.of("ABC")).narrowedByArgument()).isTrue();
+        assertThat(link.narrowedByArgument()).isFalse();
+    }
+
+    @Test
+    void anArgumentOutsideTheLinkOrTheGrantsLeavesNothingToQuery() {
+        QueryScope link = scope("Jira::Project", "Jira::Project", Set.of("ABC"), Set.of("ABC", "HR"));
+        QueryScope outside = link.narrowedTo(List.of("HR"));
+
+        assertThat(outside.nothingToQuery()).isTrue();
+        assertThat(link.narrowedTo(List.of()).nothingToQuery()).isTrue();
+        assertThatThrownBy(() -> outside.jql(Set.of("text")).build()).isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(outside::requireQueryable).isInstanceOf(pl.aiwcorpo.mcp.platform.error.SanitizedToolException.class);
+
+        QueryScope notGranted = scope("Jira::Project", "Jira::Project", null, Set.of("ABC")).narrowedTo(List.of("HR"));
+        assertThat(notGranted.jql(Set.of("text")).build()).as("the user's own rights apply to the system's side").isEqualTo("project in (\"HR\")");
+        assertThatThrownBy(() -> notGranted.jql(Set.of("text"), true)).as("but a query limited by grants is empty").isInstanceOf(IllegalStateException.class);
+    }
+
+    @Test
+    void anArgumentIsAValidContainerIdentifierAndNotQueryText() {
+        QueryScope scope = scope("Confluence::Page", "Confluence::Space", null, Set.of());
+
+        assertThatThrownBy(() -> scope.narrowedTo(List.of("ENG\" OR space = \"HR"))).isInstanceOf(IllegalArgumentException.class);
+        assertThat(scope.narrowedTo(List.of("ENG")).cql(Set.of("title")).where("title", StructuredQuery.Operator.EQUALS, "x").build())
+                .isEqualTo("(title = \"x\") AND space in (\"ENG\")");
+        assertThatThrownBy(() -> scope("OpenSearch::Index", "OpenSearch::Index", null, Set.of("a")).narrowedTo(List.of("a")))
+                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test

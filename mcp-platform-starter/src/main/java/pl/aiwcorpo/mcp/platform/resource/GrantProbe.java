@@ -55,6 +55,24 @@ final class GrantProbe {
         };
     }
 
+    /**
+     * The probe for a caller who holds no scope on the container type, for the types whose container the identifier does not name: the
+     * page or the ticket in a container that no scope of the caller covers (a sentinel id, which cannot be granted because the caller has
+     * no scope of that type at all). A policy that denies it grants nothing without scopes (the service account of
+     * {@code credential-type.cedar}); one that allows it (the reading of {@code read.cedar}, which follows the user's own rights in the
+     * system) leaves the decision to the full check after resolution.
+     */
+    static Optional<ResolvedResource> withoutScopes(String type, String id) {
+        return switch (type) {
+            case "ServiceDesk::Ticket" -> valid(type, id).map(ticket -> new ResolvedResource(type, id, Map.of("id", id),
+                    Optional.of(ResolvedResource.of("ServiceDesk::Queue", "0", Map.of("id", "0")))));
+            case "Confluence::Page" -> valid(type, id).map(page -> new ResolvedResource(type, id,
+                    Map.of("id", id, "ancestorIds", List.of()), Optional.of(ResolvedResource.of("Confluence::Space", "NOGRANT",
+                            Map.of("key", "NOGRANT", "labels", List.of())))));
+            default -> Optional.empty();
+        };
+    }
+
     private static Optional<ResolvedResource> jiraProject(String key) {
         return valid("Jira::Project", key)
                 .map(project -> ResolvedResource.of("Jira::Project", key, Map.of("key", key, "category", "")));

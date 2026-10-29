@@ -116,6 +116,14 @@ class PlatformConfigurationGuardTest {
         assertThatThrownBy(() -> check(none, production())).hasMessageContaining("also without credential-required");
     }
 
+    @Test
+    void theRemovedCredentialTypePropertyStopsTheStartWithTheMigration() {
+        MockEnvironment env = production().withProperty("aiwcorpo.mcp.platform.credential-type", "user-secret");
+
+        assertThatThrownBy(() -> check(valid(), env)).hasMessageContaining("credential-type was removed in 3.0.0-beta-7")
+                .hasMessageContaining("accepted-credential-types");
+    }
+
     private static MockEnvironment devstack(boolean property) {
         MockEnvironment env = production();
         env.setActiveProfiles("devstack");

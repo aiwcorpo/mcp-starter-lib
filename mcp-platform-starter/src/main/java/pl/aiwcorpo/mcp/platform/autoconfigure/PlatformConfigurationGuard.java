@@ -205,6 +205,10 @@ public class PlatformConfigurationGuard implements InitializingBean {
         policyProblems(properties.getPolicy(), dev, testKeysAllowed, problems);
         manifestProblems(properties.getManifest(), problems);
         credentialTypeProblems(properties.getManifest(), problems);
+        if (environment.containsProperty("aiwcorpo.mcp.platform.credential-type")) {
+            problems.add("aiwcorpo.mcp.platform.credential-type was removed in 3.0.0-beta-7 (CC-166, CC-168): delete it and put the default type of "
+                    + "the system first in aiwcorpo.mcp.platform.manifest.accepted-credential-types (see MIGRATION-3.0.md, 'Z beta-6 na beta-7')");
+        }
 
         if (!dev) {
             if (properties.getMtls().isRequired()

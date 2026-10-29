@@ -308,6 +308,27 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
+## Z beta-7 na beta-8
+
+Dla serwerów praktycznie tylko podbicie wersji: `<mcp-platform.version>3.0.0-beta-8</mcp-platform.version>` (szablon) albo `<version>3.0.0-beta-8</version>` w imporcie `mcp-platform-bom`; kontrakty bez zmian (4.1.0).
+Zmiany zachowania:
+
+- **`Confluence::Page` i `ServiceDesk::Ticket` bez zakresu kontenera:** beta-7 odmawiała każdemu wywołującemu bez grupy `mcp-confluence-space-*` / `mcp-servicedesk-queue-*`, także z tokenem użytkownika, któremu `read.cedar`
+  daje odczyt według praw w systemie (to było za szerokie). Teraz wywołującego bez zakresu ocenia polityka (kontrakt, 9b.2): konto serwisowe (`credential-type.cedar`) nadal dostaje `not_found_or_denied` przed resolverem,
+  użytkownik z `user-oauth`/`user-secret` przechodzi do resolvera i pełnej oceny. Wymóg grup przestrzeni dla Confluence z beta-7 nie obowiązuje; paczka Service Desku z kontem serwisowym nadal musi nadawać zakresy kolejek.
+  Wektory `servicedesk-service-account/` (6) przechodzą na `ResourcePolicy.authorizeCall` (`ServiceDeskVectorsTest`); adapter nie musi ich odtwarzać.
+- **Konto serwisowe i Page/Ticket:** błąd resolvera (poza brakiem poświadczenia) oraz zasób zwrócony bez kontenera wyglądają jak brak zasobu (`not_found_or_denied`).
+- **`QueryScope.OPENSEARCH_RESOLVE_PARAMETERS`** ma teraz `ignore_unavailable=true` i `allow_no_indices=true` obok `expand_wildcards=open`: dodaj całą mapę do `GET _resolve/index/...` (zmiana stałej, bez zmiany API).
+  Bez tego brak indeksu o nazwie samego prefiksu (tylko `p-2026.10`) dawał 404 na całe żądanie.
+- **Usunięta właściwość `aiwcorpo.mcp.platform.credential-type` zatrzymuje start** (wcześniej była po cichu ignorowana) z komunikatem, co zrobić (usunąć, pierwszy typ domyślny w `accepted-credential-types`).
+- **Zasób poza linkiem:** wywołanie z argumentem (`@ResourceRef`) spoza zakresu wirtualnego serwera kończyło się na poziomie narzędzia `access_denied` (reguła `vs-narrow-call-*`); od beta-8 jest
+  `not_found_or_denied` z tekstem jak dla braku zasobu (CC-146c), a audyt ma `link_scope`. Test serwera, który oczekiwał `access_denied` dla kolejki, projektu albo przestrzeni spoza linku, zmień. Wymaga to,
+  by reguły zawężenia w paczce miały identyfikatory `vs-narrow-*` (jak w przykładzie kontraktów).
+- **Nowe: `QueryScope.narrowedTo(ids)`.** Wyszukiwanie ograniczone przez model do projektu albo przestrzeni nie musi już filtrować wyniku po stronie serwera: `scope.narrowedTo(List.of(projectKey))` daje zakres
+  (przecięcie z linkiem), a `jql(fields)` / `cql(fields)` renderuje go po warunkach (`(text ~ "x") AND project in ("DEF")`). Puste przecięcie: `nothingToQuery()` (zwróć pusty wynik bez wywołania systemu).
+  Przekazuj ids argumentu będącego `@ResourceRef` typu `Jira::Project` / `Confluence::Space`. Nie zmienia to nic u serwerów, które z niego nie korzystają.
+- **Audyt:** `policy_decision` z `credential_type_mismatch`, `policy_unavailable` i `policy_error` ma pole `argsLength` (jak w wektorze `server-credential-type-mismatch`). `AuditLogger.policyRefused` i `policyUnavailable` mają dodatkowy parametr `long argsLength`.
+
 ## Z beta-6 na beta-7
 
 Poprawki po recenzji beta-6 (0 HIGH, 3 MEDIUM, 6 LOW) i kontrakty **4.1.0** (BOM; wektory 4.0.1 i 4.1.0 bez zmian dla startera poza `credential-type-header/` i dwoma zdarzeniami audytu).
@@ -329,14 +350,14 @@ zmieniają też gateway (podłoga ryzyka, `acceptRiskLowering`) i BFF: gateway i
   to `internal_error` z narzędzia (HTTP 200 z błędem C10). Żądania bez poświadczenia nie są sprawdzane.
 - Testy serwera: `TestGateway` akceptuje `user-secret` i `user-oauth` (domyślny `user-secret`); `asGateway(user, credential, type)` z `token-exchange` albo `service-account` daje teraz `internal_error`.
   Serwer, który testuje inny typ, nadpisuje `aiwcorpo.mcp.platform.manifest.accepted-credential-types` w `serverProperties()`.
+- Usunięte publiczne `McpPlatformProperties.getCredentialType()`, `setCredentialType(String)` i `effectiveCredentialType()` (beta-6): kod serwera, który ich używał, przestanie się kompilować; typ domyślny to `getManifest().getAcceptedCredentialTypes().getFirst()`.
 - `ResourcePolicy(..., system, List<String> credentialTypes, maxFiltered)` (zamiast jednego `String`); pierwszy element to typ domyślny, pusta lista rzuca wyjątek.
 - Nowa publiczna klasa `CredentialTypeCheck.admits(credentialSent, typeHeader, accepted)` i `CredentialContext.credentialSent()` / `typeHeader()`.
 
 ### 3. Zasoby: `Confluence::Page` i `ServiceDesk::Ticket` (po recenzji, M2)
 
 Wywołujący bez żadnego zakresu w paczce na kontener (przestrzeń/strona, kolejka) dostaje `not_found_or_denied` przed resolverem; zasób, który system zwrócił poza zakresami wywołującego i którego nie da się
-ocenić (zły identyfikator, brak klasyfikacji), też `not_found_or_denied` zamiast `internal_error`. Paczka serwera Service Desku musi nadawać zakresy kolejek (`mcp-servicedesk-queue-*`); samo
-`mcp-servicedesk-read` nie wystarcza. Odmowa sondy (Jira, GitLab, Confluence Space, OpenSearch, kolejka) ma w audycie powód `policy_forbid` (było `not_granted`).
+ocenić (zły identyfikator, brak klasyfikacji), też `not_found_or_denied` zamiast `internal_error`. Dotyczyło to także Confluence (zakresy przestrzeni); od beta-8 tylko wywołujący, któremu polityka nie daje odczytu bez zakresów (konto serwisowe), zob. "Z beta-7 na beta-8". Odmowa sondy (Jira, GitLab, Confluence Space, OpenSearch, kolejka) ma w audycie powód `policy_forbid` (było `not_granted`).
 
 ### 4. OpenSearch (po recenzji, M3, L4 do L6)
 

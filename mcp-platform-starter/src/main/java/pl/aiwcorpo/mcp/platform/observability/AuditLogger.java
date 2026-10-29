@@ -119,12 +119,12 @@ public class AuditLogger {
      * {@code event: policy_decision} for a request that could not be decided (CC-141, CC-142): no policy bundle is loaded
      * ({@code policy_unavailable}) or the policy engine failed on it ({@code policy_error}). The caller gets {@code upstream_unavailable}.
      */
-    public void policyUnavailable(CallerContext caller, String tool, RiskLevel risk, String reason) {
-        policyRefused(caller, tool, risk, reason, "upstream_unavailable");
+    public void policyUnavailable(CallerContext caller, String tool, RiskLevel risk, String reason, long argsLength) {
+        policyRefused(caller, tool, risk, reason, "upstream_unavailable", argsLength);
     }
 
     /** {@code policy_decision} with {@code deny} and {@code outcome: error} for a call refused because of the server's own state or configuration. */
-    public void policyRefused(CallerContext caller, String tool, RiskLevel risk, String reason, String errorCode) {
+    public void policyRefused(CallerContext caller, String tool, RiskLevel risk, String reason, String errorCode, long argsLength) {
         Map<String, Object> event = base("policy_decision", caller);
         event.put("server", componentId);
         event.put("tool", tool);
@@ -135,6 +135,7 @@ public class AuditLogger {
         event.put("reason", reason);
         event.put("outcome", "error");
         event.put("errorCode", errorCode);
+        event.put("argsLength", Math.max(0, argsLength));
         write(event);
     }
 
