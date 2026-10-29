@@ -44,6 +44,15 @@ public class McpPlatformProperties {
     /** Id of this server ({@code mcp-<system>}): expected {@code aud}, Redis key prefix, audit componentId. */
     private String serverId;
 
+    /**
+     * Type of the credential this server's system is reached with, the {@code context.credentialType} of every Cedar request
+     * (CC-136): {@code user-oauth}, {@code user-secret}, {@code token-exchange} or {@code service-account}. It is the type the
+     * gateway's configuration of the system uses. Optional when {@code manifest.accepted-credential-types} has exactly one
+     * entry (that one is used); required otherwise. Rules such as "a service account reads a queue only inside the granted
+     * scope" depend on it, so a server never evaluates a policy without it.
+     */
+    private String credentialType;
+
     /** Source of the backend credential. The internal JWT is required in every mode. */
     private AuthMode authMode = AuthMode.GATEWAY;
 
@@ -64,6 +73,25 @@ public class McpPlatformProperties {
     private final Policy policy = new Policy();
     private final Manifest manifest = new Manifest();
 
+    /**
+     * The credential type for {@code context.credentialType}: the configured one, else the only accepted type of the manifest,
+     * else {@code null} (the configuration guard refuses to start in that case).
+     */
+    public String effectiveCredentialType() {
+        if (credentialType != null && !credentialType.isBlank()) {
+            return credentialType;
+        }
+        return manifest.getAcceptedCredentialTypes().size() == 1 ? manifest.getAcceptedCredentialTypes().getFirst() : null;
+    }
+
+    public String getCredentialType() {
+        return credentialType;
+    }
+
+    public void setCredentialType(String credentialType) {
+        this.credentialType = credentialType;
+    }
+
     /** The backend system this server serves: {@code server-id} without the {@code mcp-} prefix. */
     public String system() {
         return serverId == null || !serverId.startsWith("mcp-") ? null : serverId.substring("mcp-".length());
@@ -81,7 +109,7 @@ public class McpPlatformProperties {
         /**
          * How many refusals of requests without a usable token ({@code missing_token} and {@code malformed}) one process
          * reports per second, as an audit event and a log line; the rest only count in the
-         * {@code mcp_server_audit_authentication_suppressed_total} metric. Such a request costs nothing, so without a cap
+         * {@code mcp_audit_authentication_suppressed_total} metric (tags {@code component=server}, {@code reason}). Such a request costs nothing, so without a cap
          * it could fill the audit stream. At least 1 (the same default as the gateway's).
          */
         private int missingTokenEventsPerSecond = 20;

@@ -27,6 +27,7 @@ public final class ManifestCheck implements SmartInitializingSingleton {
     private final McpPlatformProperties props;
     private final ToolRiskRegistry registry;
     private final boolean strict;
+    private final boolean devEnvironment;
     private volatile String manifest;
 
     /**
@@ -35,6 +36,15 @@ public final class ManifestCheck implements SmartInitializingSingleton {
      */
     public ManifestCheck(ObjectProvider<McpSyncServer> servers, McpPlatformProperties props, ToolRiskRegistry registry,
                          boolean strict) {
+        this(servers, props, registry, strict, false);
+    }
+
+    /**
+     * @param devEnvironment true with the {@code devstack} profile: the manifest then carries {@code environment: dev} (CC-138)
+     */
+    public ManifestCheck(ObjectProvider<McpSyncServer> servers, McpPlatformProperties props, ToolRiskRegistry registry,
+                         boolean strict, boolean devEnvironment) {
+        this.devEnvironment = devEnvironment;
         this.strict = strict;
         this.servers = servers;
         this.props = props;
@@ -47,7 +57,7 @@ public final class ManifestCheck implements SmartInitializingSingleton {
         if (server == null) {
             return;
         }
-        manifest = ManifestGenerator.generate(props, registry, server.listTools(), strict);
+        manifest = ManifestGenerator.generate(props, registry, server.listTools(), strict, devEnvironment);
         String file = props.getManifest().getOutputFile();
         if (file != null && !file.isBlank()) {
             try {

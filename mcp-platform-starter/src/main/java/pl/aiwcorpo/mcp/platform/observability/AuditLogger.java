@@ -116,6 +116,24 @@ public class AuditLogger {
     }
 
     /**
+     * {@code event: policy_decision} for a request that could not be decided (CC-141, CC-142): no policy bundle is loaded
+     * ({@code policy_unavailable}) or the policy engine failed on it ({@code policy_error}). The caller gets {@code upstream_unavailable}.
+     */
+    public void policyUnavailable(CallerContext caller, String tool, RiskLevel risk, String reason) {
+        Map<String, Object> event = base("policy_decision", caller);
+        event.put("server", componentId);
+        event.put("tool", tool);
+        if (risk != null) {
+            event.put("risk", risk.name());
+        }
+        event.put("decision", "deny");
+        event.put("reason", reason);
+        event.put("outcome", "error");
+        event.put("errorCode", "upstream_unavailable");
+        write(event);
+    }
+
+    /**
      * {@code event: authentication} (C8, CC-071): a request refused before any caller was established. The
      * schema allows only the fields written here: nothing taken from the unverified token (not even
      * {@code sub}) and no part of the token itself.

@@ -20,6 +20,7 @@ import pl.aiwcorpo.mcp.platform.ContractSchemas;
 import pl.aiwcorpo.mcp.platform.auth.TestCallers;
 import pl.aiwcorpo.mcp.platform.error.McpErrorMapper;
 import pl.aiwcorpo.mcp.platform.error.SanitizedToolException;
+import pl.aiwcorpo.mcp.platform.error.ToolErrorCode;
 import pl.aiwcorpo.mcp.platform.guard.RiskClassifiedTool;
 import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
 import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
@@ -175,7 +176,7 @@ class AuditingToolCallbackTest {
         assertThat(TestCallers.as(TestCallers.user("get_issue"), () -> callback.call("{}"))).isEqualTo("tool|second|first");
 
         ToolCallInterceptor deny = (invocation, next) -> {
-            throw new SanitizedToolException(new McpErrorMapper.SafeError("not_found_or_denied", "Not found."));
+            throw new SanitizedToolException(new McpErrorMapper.SafeError("not_found_or_denied", ToolErrorCode.NOT_FOUND_OR_DENIED_MESSAGE));
         };
         ToolCallback denied = decorate(() -> {
             throw new AssertionError("must not run");

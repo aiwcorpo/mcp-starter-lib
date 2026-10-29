@@ -56,6 +56,11 @@ public class PlatformConfigurationGuard implements InitializingBean {
     public static final String DEVSTACK_ACK_PROPERTY = "aiwcorpo.mcp.platform.devstack.acknowledged";
     public static final String DEVSTACK_ACK_ENVIRONMENT = "MCP_DEVSTACK_ACKNOWLEDGED";
 
+    /** True when {@code devstack} is the only active profile; with {@code allowTestKeys} it makes dev mode (CC-137). */
+    public static boolean devstackProfile(Environment environment) {
+        return List.of(environment.getActiveProfiles()).equals(List.of(DEVSTACK_PROFILE));
+    }
+
     /** The only paths that may be served without the internal JWT (health probes of the orchestrator). */
     public static final Set<String> ALLOWED_UNAUTHENTICATED_PATHS =
             Set.of("/actuator/health", "/actuator/health/liveness", "/actuator/health/readiness");
@@ -115,7 +120,7 @@ public class PlatformConfigurationGuard implements InitializingBean {
                         + "copied configuration does not carry it to production: " + DEVSTACK_ACK_PROPERTY + "=true and the "
                         + "environment variable " + DEVSTACK_ACK_ENVIRONMENT + "=true");
             } else {
-                // The manifest has no field for the environment (C6), so every start says it, and a gauge shows it.
+                // The manifest says environment: dev (CC-138); every start says it as well, and a gauge shows it.
                 LOG.warn("event=devstack_profile detail=\"signing keys named test-* are accepted (internal JWT: {}, policy "
                         + "bundles: {}); this server must not run in production\"", properties.getInternalJwt().isAllowTestKeys(),
                         properties.getPolicy().isAllowTestKeys());
@@ -199,6 +204,7 @@ public class PlatformConfigurationGuard implements InitializingBean {
         }
         policyProblems(properties.getPolicy(), dev, testKeysAllowed, problems);
         manifestProblems(properties.getManifest(), problems);
+        credentialTypeProblems(properties, problems);
 
         if (!dev) {
             if (properties.getMtls().isRequired()
@@ -302,6 +308,28 @@ public class PlatformConfigurationGuard implements InitializingBean {
                 problems.add("aiwcorpo.mcp.platform.manifest.accepted-credential-types: '" + type + "' is not one of "
                         + CREDENTIAL_TYPES);
             }
+        }
+    }
+
+    /**
+     * {@code context.credentialType} comes from the server's own configuration and is never absent (CC-136): without it a rule
+     * that depends on the credential, such as the service account of Service Desk, would not apply to this server.
+     */
+    private static void credentialTypeProblems(McpPlatformProperties properties, List<String> problems) {
+        String configured = properties.getCredentialType();
+        if (configured != null && !configured.isBlank()) {
+            if (!CREDENTIAL_TYPES.contains(configured)) {
+                problems.add("aiwcorpo.mcp.platform.credential-type: '" + configured + "' is not one of " + CREDENTIAL_TYPES);
+            } else if (!properties.getManifest().getAcceptedCredentialTypes().isEmpty()
+                    && !properties.getManifest().getAcceptedCredentialTypes().contains(configured)) {
+                problems.add("aiwcorpo.mcp.platform.credential-type '" + configured + "' is not among "
+                        + "manifest.accepted-credential-types " + properties.getManifest().getAcceptedCredentialTypes()
+                        + ": the gateway would reject the manifest (credential_type_mismatch)");
+            }
+        } else if (properties.effectiveCredentialType() == null) {
+            problems.add("aiwcorpo.mcp.platform.credential-type must be set to one of " + CREDENTIAL_TYPES + " (the type the "
+                    + "gateway's configuration of the system uses): it is the credentialType of every policy request and is "
+                    + "taken from here when manifest.accepted-credential-types does not name exactly one type");
         }
     }
 

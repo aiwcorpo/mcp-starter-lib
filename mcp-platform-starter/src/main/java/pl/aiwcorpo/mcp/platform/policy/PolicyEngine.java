@@ -105,9 +105,15 @@ public final class PolicyEngine implements AutoCloseable {
      */
     public static PolicyEngine create(McpPlatformProperties.Policy policy, SSLContext sslContext, MeterRegistry meters)
             throws IOException, GeneralSecurityException {
-        BundleVerifier main = verifier(Channel.MAIN, policy.getMain(), policy.isAllowTestKeys());
+        return create(policy, sslContext, meters, false);
+    }
+
+    /** @param devstackProfile the server runs with the {@code devstack} profile: with {@code allow-test-keys} a {@code dev-} key id is accepted (CC-137) */
+    public static PolicyEngine create(McpPlatformProperties.Policy policy, SSLContext sslContext, MeterRegistry meters,
+                                      boolean devstackProfile) throws IOException, GeneralSecurityException {
+        BundleVerifier main = verifier(Channel.MAIN, policy.getMain(), policy.isAllowTestKeys(), devstackProfile);
         boolean withOverrides = policy.getOverrides().getUrl() != null && !policy.getOverrides().getUrl().isBlank();
-        BundleVerifier overrides = withOverrides ? verifier(Channel.OVERRIDES, policy.getOverrides(), policy.isAllowTestKeys())
+        BundleVerifier overrides = withOverrides ? verifier(Channel.OVERRIDES, policy.getOverrides(), policy.isAllowTestKeys(), devstackProfile)
                 : main;
         Map<Channel, String> minimum = new EnumMap<>(Channel.class);
         if (policy.getMain().getMinimumRevision() != null) {
@@ -132,12 +138,12 @@ public final class PolicyEngine implements AutoCloseable {
         return engine;
     }
 
-    private static BundleVerifier verifier(Channel channel, McpPlatformProperties.PolicyChannel config, boolean allowTestKeys)
-            throws IOException, GeneralSecurityException {
+    private static BundleVerifier verifier(Channel channel, McpPlatformProperties.PolicyChannel config, boolean allowTestKeys,
+                                           boolean devstackProfile) throws IOException, GeneralSecurityException {
         String pem = config.getPublicKey() != null && !config.getPublicKey().isBlank() ? config.getPublicKey()
                 : Files.readString(Path.of(config.getPublicKeyFile()));
         PublicKey key = BundleVerifier.ed25519PublicKeyFromPem(pem);
-        return BundleVerifier.of(channel, key, config.getKeyId(), allowTestKeys);
+        return BundleVerifier.of(channel, key, config.getKeyId(), allowTestKeys).withDevstackProfile(devstackProfile);
     }
 
     /**

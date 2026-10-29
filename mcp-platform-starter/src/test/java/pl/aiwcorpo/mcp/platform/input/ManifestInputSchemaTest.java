@@ -70,11 +70,11 @@ class ManifestInputSchemaTest {
     }
 
     @Test
-    void aContractPatternWithAlternationAtTheTopIsPublishedInOneAnchoredForm() {
-        String published = SchemaLimitedToolCallbacks.oneAnchoredPattern(
-                SchemaLimitedToolCallbacks.contractDefinition("OpenSearchIndexPrefix").path("pattern").asString());
+    void theOpenSearchIndexPrefixOfTheContractsIsPublishedAsItIsAndPassesTheAnchoringRule() {
+        String published = SchemaLimitedToolCallbacks.contractDefinition("OpenSearchIndexPrefix").path("pattern").asString();
 
-        assertThat(published).isEqualTo("^(?:[a-z0-9][a-z0-9._-]{0,253}[a-z0-9_]|[a-z0-9])$");
+        assertThat(published).as("one anchored pattern since CC-139, no rewriting by the starter")
+                .isEqualTo("^(?:[a-z0-9][a-z0-9._-]{0,253}[a-z0-9_]|[a-z0-9])$");
         assertThat(InputSchemaBounds.anchored(published)).isTrue();
         for (String prefix : List.of("a", "logs", "logs-team-a", "x_")) {
             assertThat(java.util.regex.Pattern.matches(published, prefix)).as(prefix).isTrue();
@@ -82,8 +82,6 @@ class ManifestInputSchemaTest {
         for (String prefix : List.of("", "-a", "logs-", ".hidden", "A")) {
             assertThat(java.util.regex.Pattern.matches(published, prefix)).as(prefix).isFalse();
         }
-        assertThat(SchemaLimitedToolCallbacks.oneAnchoredPattern("^[a-z]+$")).isEqualTo("^[a-z]+$");
-        assertThat(SchemaLimitedToolCallbacks.oneAnchoredPattern("^a$|b")).isEqualTo("^a$|b");
     }
 
     public record Person(@ArgumentLimits(maxLength = 40) String name, @Nullable @ArgumentLimits(maxLength = 80) String note) {

@@ -116,6 +116,59 @@ class PolicyEngineTest {
         }
     }
 
+    private static byte[] resource(String path) throws Exception {
+        try (java.io.InputStream in = PolicyEngineTest.class.getResourceAsStream(path)) {
+            return java.util.Objects.requireNonNull(in, path).readAllBytes();
+        }
+    }
+
+    /** The bundle of the contracts 3.1.1 for revision B: the same policies on the schema before CC-136 (other bytes of mcp.cedarschema). */
+    private void publishBundleOfContracts311() throws Exception {
+        gateway.main().publishRaw(B, resource("/contracts-3.1.1-bundle/policies-" + B + ".tar.gz"),
+                resource("/contracts-3.1.1-bundle/policies-" + B + ".tar.gz.sig"));
+    }
+
+    @Test
+    void aBundleOnTheSchemaOfContracts3_1_IsRejectedAsASchemaMismatchAndTheCurrentOneStays() throws Exception {
+        gateway.main().publish(A);
+        try (PolicyEngine engine = engine(null)) {
+            publishBundleOfContracts311();
+            engine.refresh(Channel.MAIN);
+
+            assertThat(engine.mainRevision()).contains(A);
+            assertThat(rejected("schema_mismatch")).isEqualTo(1.0);
+        }
+    }
+
+    @Test
+    void aFirstBundleOnTheSchemaOfContracts3_1_DoesNotStartTheServer() throws Exception {
+        publishBundleOfContracts311();
+
+        assertThatThrownBy(() -> engine(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("No policy bundle could be loaded");
+        assertThat(rejected("schema_mismatch")).isGreaterThanOrEqualTo(1.0);
+    }
+
+    private PolicyEngine engineWithDevKey(boolean devstackProfile) throws Exception {
+        String dev = "20261026151100-17ba079";
+        gateway.main().publish(dev, "policies-" + dev + ".tar.gz.sig-by-dev-key");
+        McpPlatformProperties.Policy policy = policy(null);
+        policy.getMain().setKeyId("dev-policy-main");
+        policy.getMain().setPublicKey(new String(resource("/mcp-contracts/test-vectors/keys/dev-policy-bundle.pub.pem"),
+                java.nio.charset.StandardCharsets.UTF_8));
+        return PolicyEngine.create(policy, null, meters, devstackProfile);
+    }
+
+    @Test
+    void aDevKeyIdIsAcceptedOnlyInDevMode() throws Exception {
+        gateway.main().offline(false);
+        assertThatThrownBy(() -> engineWithDevKey(false)).as("allow-test-keys alone is not dev mode").isInstanceOf(IllegalStateException.class);
+        assertThat(rejected("test_key_not_allowed")).isGreaterThanOrEqualTo(1.0);
+        try (PolicyEngine engine = engineWithDevKey(true)) {
+            assertThat(engine.mainRevision()).contains("20261026151100-17ba079");
+        }
+    }
+
     @Test
     void withoutABundleTheServerDoesNotStart() {
         gateway.main().offline(true);
@@ -165,6 +218,45 @@ class PolicyEngineTest {
             Thread.sleep(600);
             assertThat(second.snapshot().main().revision()).as("after the grace the server serves, with an alarm").isEqualTo(B);
         }
+    }
+
+    @Test
+    void whileNoPolicyCanBeUsedACallIsUpstreamUnavailableAndAuditedAsPolicyUnavailable(@TempDir Path state) throws Exception {
+        gateway.overrides().publish(OVERRIDES);
+        try (PolicyEngine first = engine(state)) {
+            assertThat(first.snapshot().overrides()).isPresent();
+        }
+        gateway.overrides().offline(true);
+        ch.qos.logback.classic.Logger auditLog = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("test.policy.unavailable");
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> lines = new ch.qos.logback.core.read.ListAppender<>();
+        lines.start();
+        auditLog.addAppender(lines);
+        try (PolicyEngine second = PolicyEngine.create(policy(state), null, meters)) {
+            pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry registry =
+                    new pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry(pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry.Unclassified.FAIL);
+            registry.register(new ReadThingTool());
+            pl.aiwcorpo.mcp.platform.resource.ResourcePolicy policy = new pl.aiwcorpo.mcp.platform.resource.ResourcePolicy(second,
+                    new pl.aiwcorpo.mcp.platform.resource.ResourceResolvers(java.util.List.of()), registry,
+                    new pl.aiwcorpo.mcp.platform.observability.AuditLogger("test.policy.unavailable", "mcp-jira"), "mcp-jira", "jira",
+                    "user-secret", 200);
+            pl.aiwcorpo.mcp.platform.auth.CallerContext claims = new pl.aiwcorpo.mcp.platform.auth.CallerContext(
+                    "6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "jkowalski", java.util.List.of("mcp-jira-read"), "claude-code", null, null,
+                    "read_thing", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", "00000000000000-0000000", null);
+            try (pl.aiwcorpo.mcp.platform.resource.ResourceContext context =
+                         pl.aiwcorpo.mcp.platform.resource.ResourceContext.open(claims, "read_thing", Map.of())) {
+                assertThatThrownBy(policy::authorizeCall).isInstanceOf(pl.aiwcorpo.mcp.platform.error.SanitizedToolException.class)
+                        .satisfies(error -> {
+                            var refused = (pl.aiwcorpo.mcp.platform.error.SanitizedToolException) error;
+                            assertThat(refused.getCode()).isEqualTo("upstream_unavailable");
+                            assertThat(refused.toSafeError().message()).isEqualTo("Policies are not available. Try again later.");
+                        });
+            }
+        } finally {
+            auditLog.detachAppender(lines);
+        }
+        assertThat(lines.list).singleElement().satisfies(line -> assertThat(line.getFormattedMessage())
+                .contains("\"event\":\"policy_decision\"", "\"decision\":\"deny\"", "\"reason\":\"policy_unavailable\"",
+                        "\"errorCode\":\"upstream_unavailable\"", "\"outcome\":\"error\""));
     }
 
     private static java.util.Optional<String> awaitMainRevision(PolicyEngine engine, String revision) throws InterruptedException {

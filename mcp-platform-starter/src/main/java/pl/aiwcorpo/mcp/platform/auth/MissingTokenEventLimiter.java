@@ -10,7 +10,7 @@ import java.util.function.LongSupplier;
  * header) and {@code malformed} (a foreign {@code Authorization} scheme, a string that is not three segments, a header
  * that is not a JSON object). Both cost the caller nothing, so without a cap anyone who reaches the port could fill the
  * audit stream and the application log (CC-120). Each reason has a budget of its own: a flood of one must not use up the
- * other. What is over a budget is only counted ({@value #METRIC}, tag {@code reason}), neither audited nor logged.
+ * other. What is over a budget is only counted ({@value #METRIC}, tags {@code component=server} and {@code reason}), neither audited nor logged.
  *
  * <p>Nothing else is capped, in particular not a token that got past parsing and the key lookup (a header with
  * {@code crit}, a wrong signature, claims): that takes effort and is an attempt, not noise.
@@ -18,7 +18,9 @@ import java.util.function.LongSupplier;
 public final class MissingTokenEventLimiter {
 
     public static final int DEFAULT_PER_SECOND = 20;
-    public static final String METRIC = "mcp_server_audit_authentication_suppressed_total";
+    /** Name shared by every receiver (CC-143): the starter, the broker and the gateway differ in the {@code component} tag. */
+    public static final String METRIC = "mcp_audit_authentication_suppressed_total";
+    static final String COMPONENT = "server";
 
     private static final long SECOND_NANOS = 1_000_000_000L;
 
@@ -50,7 +52,7 @@ public final class MissingTokenEventLimiter {
             window[1] = 0;
         }
         if (++window[1] > perSecond) {
-            meters.counter(METRIC, "reason", reason.code()).increment();
+            meters.counter(METRIC, "component", COMPONENT, "reason", reason.code()).increment();
             return false;
         }
         return true;

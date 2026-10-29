@@ -65,11 +65,23 @@ public final class ManifestGenerator {
      */
     public static String generate(McpPlatformProperties props, ToolRiskRegistry registry, List<McpSchema.Tool> published,
                                   boolean strict) {
+        return generate(props, registry, published, strict, false);
+    }
+
+    /**
+     * @param devEnvironment true for a server of the {@code devstack} profile: the manifest says {@code "environment": "dev"} (CC-138), which a
+     *                       gateway in production mode rejects ({@code environment_mismatch}). Otherwise the field is left out, which means production.
+     */
+    public static String generate(McpPlatformProperties props, ToolRiskRegistry registry, List<McpSchema.Tool> published,
+                                  boolean strict, boolean devEnvironment) {
         ObjectNode manifest = JSON.createObjectNode();
         manifest.put("serverId", props.getServerId());
         manifest.put("version", props.getManifest().getVersion());
         manifest.put("system", props.system());
         manifest.put("internalUrl", props.getManifest().getInternalUrl());
+        if (devEnvironment) {
+            manifest.put("environment", "dev");
+        }
         ObjectNode credential = manifest.putObject("credential");
         credential.put("required", props.getManifest().isCredentialRequired());
         ArrayNode accepted = credential.putArray("acceptedTypes");

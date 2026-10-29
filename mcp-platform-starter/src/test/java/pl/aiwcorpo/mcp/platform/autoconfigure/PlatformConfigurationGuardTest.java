@@ -96,6 +96,25 @@ class PlatformConfigurationGuardTest {
         assertThatThrownBy(() -> check(props, production())).hasMessageContaining("accepted-credential-types must list");
     }
 
+    @Test
+    void theCredentialTypeComesFromTheConfigurationAndIsNeverAbsent() {
+        McpPlatformProperties one = valid();
+        assertThatCode(() -> check(one, production())).doesNotThrowAnyException();
+        assertThat(one.effectiveCredentialType()).as("the only accepted type is the type").isEqualTo("user-secret");
+
+        McpPlatformProperties several = valid();
+        several.getManifest().setAcceptedCredentialTypes(java.util.List.of("user-oauth", "user-secret"));
+        assertThatThrownBy(() -> check(several, production())).hasMessageContaining("credential-type must be set");
+        several.setCredentialType("user-oauth");
+        assertThatCode(() -> check(several, production())).doesNotThrowAnyException();
+        assertThat(several.effectiveCredentialType()).isEqualTo("user-oauth");
+
+        several.setCredentialType("service-account");
+        assertThatThrownBy(() -> check(several, production())).hasMessageContaining("credential_type_mismatch");
+        several.setCredentialType("password");
+        assertThatThrownBy(() -> check(several, production())).hasMessageContaining("'password' is not one of");
+    }
+
     private static MockEnvironment devstack(boolean property) {
         MockEnvironment env = production();
         env.setActiveProfiles("devstack");

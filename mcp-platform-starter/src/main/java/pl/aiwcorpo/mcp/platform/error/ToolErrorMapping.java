@@ -10,13 +10,13 @@ import java.util.Optional;
  * @Bean
  * ToolErrorMapping jiraErrors() {
  *     return ex -> ex instanceof IssueNotVisibleException
- *             ? Optional.of(new SafeError("not_found_or_denied", "The issue does not exist or is not visible."))
+ *             ? Optional.of(new SafeError("not_found_or_denied", ToolErrorCode.NOT_FOUND_OR_DENIED_MESSAGE))
  *             : Optional.empty();
  * }
  * }</pre>
  *
  * <p><b>Contract:</b> the code must be a C10 code ({@link ToolErrorCode}), otherwise the client gets
- * {@code internal_error}. The message is handed verbatim to the AI client: author it yourself, never embed
+ * {@code internal_error}. The message is handed verbatim to the AI client: author it yourself (except for {@code not_found_or_denied}, whose text the platform fixes), never embed
  * an upstream response body, headers, a stack trace or a secret. Return {@link Optional#empty()} to fall
  * through to the next mapping and then the defaults.
  */

@@ -54,6 +54,16 @@ public final class PolicyRepository {
      * test key of the main channel (the key of the contracts' vectors; the bundle is for tests only).
      */
     public PolicyRepository publishGenerated(String revision, String serverId) {
+        return publishGenerated(revision, serverId, Map.of());
+    }
+
+    /**
+     * As {@link #publishGenerated(String, String)} with more policy files, for a test of a rule of the server's own (for example one
+     * that depends on {@code context.credentialType}).
+     *
+     * @param extraPolicies file name under {@code policies/} (with {@code .cedar}) to the policy text
+     */
+    public PolicyRepository publishGenerated(String revision, String serverId, Map<String, String> extraPolicies) {
         try {
             String schema = new String(readResource("mcp-contracts/cedar/mcp.cedarschema"), StandardCharsets.UTF_8);
             StringBuilder policies = new StringBuilder();
@@ -77,6 +87,7 @@ public final class PolicyRepository {
                         StandardCharsets.UTF_8).replaceAll("UserGroup::\"mcp-(?:jira|gitlab|confluence|servicedesk|opensearch)-(read|write|destructive)\"",
                         "UserGroup::\"" + serverId + "-$1\""));
             }
+            extraPolicies.forEach((name, text) -> files.put("policies/" + name, text));
             byte[] archive = gzip(tar(files));
             java.security.Signature signature = java.security.Signature.getInstance("Ed25519");
             String pem = new String(readResource("mcp-contracts/test-vectors/keys/test-policy-bundle.NOT-FOR-PRODUCTION.private.pem"),

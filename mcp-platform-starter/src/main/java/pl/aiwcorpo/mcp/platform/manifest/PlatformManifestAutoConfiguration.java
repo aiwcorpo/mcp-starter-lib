@@ -7,6 +7,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplicat
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
+import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 import org.springframework.core.env.Environment;
 import pl.aiwcorpo.mcp.platform.observability.PlatformObservabilityAutoConfiguration;
@@ -22,7 +23,8 @@ public class PlatformManifestAutoConfiguration {
                           Environment environment) {
         // From the profiles, like the wrapper's policy: a bean cannot relax the check of the manifest.
         return new ManifestCheck(servers, props, registry,
-                PlatformObservabilityAutoConfiguration.policyFor(environment).requireBoundedSchema());
+                PlatformObservabilityAutoConfiguration.policyFor(environment).requireBoundedSchema(),
+                PlatformConfigurationGuard.devstackProfile(environment));
     }
 
     @Bean

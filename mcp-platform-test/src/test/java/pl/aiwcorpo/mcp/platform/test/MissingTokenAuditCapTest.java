@@ -6,6 +6,8 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.prometheusmetrics.PrometheusConfig;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
 import java.util.Map;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -17,6 +19,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import pl.aiwcorpo.mcp.platform.auth.InternalJwtRejection;
 import pl.aiwcorpo.mcp.platform.auth.MissingTokenEventLimiter;
 import pl.aiwcorpo.mcp.platform.test.app.ProbeServer;
 
@@ -26,7 +29,8 @@ import pl.aiwcorpo.mcp.platform.test.app.ProbeServer;
  */
 @SpringBootTest(classes = ProbeServer.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
         properties = {"spring.ai.mcp.server.name=missing-token-cap-test",
-                "aiwcorpo.mcp.platform.internal-jwt.missing-token-events-per-second=2"})
+                "aiwcorpo.mcp.platform.internal-jwt.missing-token-events-per-second=2",
+                "aiwcorpo.mcp.platform.internal-jwt.max-request-body=2KB"})
 @ActiveProfiles("dev")
 class MissingTokenAuditCapTest {
 
@@ -77,8 +81,35 @@ class MissingTokenAuditCapTest {
         assertThat(written + (suppressed() - before)).isEqualTo(requests);
     }
 
+    @Test
+    void aRequestRefusedWith400Or413BeforeTheJwtIsNotAnAuthenticationEventAndNotCounted() throws Exception {
+        lines.start();
+        audit.addAppender(lines);
+        double before = suppressed();
+        Map<String, String> headers = Map.of("Authorization", "Bearer a.b.c");
+
+        assertThat(new RawMcp(port).post("[{\"jsonrpc\":\"2.0\"}]", headers, null).statusCode()).as("a batch is not one object").isEqualTo(400);
+        assertThat(new RawMcp(port).post("{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"pad\":\"" + "x".repeat(4096) + "\"}", headers, null)
+                .statusCode()).as("the body is over the limit").isEqualTo(413);
+
+        assertThat(CapturedLogs.snapshot(lines).stream().filter(line -> line.getFormattedMessage().contains("\"event\":\"authentication\"")))
+                .as("no authentication event for a request that never reached the verification").isEmpty();
+        assertThat(suppressed()).isEqualTo(before);
+    }
+
+    @Test
+    void theSurplusCounterHasTheNameAndTheTagsOfTheContract() {
+        PrometheusMeterRegistry scrape = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
+        MissingTokenEventLimiter limiter = new MissingTokenEventLimiter(1, () -> 0L, scrape);
+        limiter.tryAcquire(InternalJwtRejection.MALFORMED);
+        limiter.tryAcquire(InternalJwtRejection.MALFORMED);
+
+        assertThat(scrape.scrape()).contains("mcp_audit_authentication_suppressed_total{component=\"server\",reason=\"malformed\"} 1.0");
+        assertThat(MissingTokenEventLimiter.METRIC).isEqualTo("mcp_audit_authentication_suppressed_total");
+    }
+
     private double suppressed() {
-        var counter = meters.find(MissingTokenEventLimiter.METRIC).tag("reason", "missing_token").counter();
+        var counter = meters.find(MissingTokenEventLimiter.METRIC).tag("component", "server").tag("reason", "missing_token").counter();
         return counter == null ? 0 : counter.count();
     }
 }

@@ -248,7 +248,6 @@ public final class SchemaLimitedToolCallbacks {
                 throw new IllegalStateException("@ArgumentLimits on " + where + ": '" + limits.contractPattern()
                         + "' is not a string definition with a pattern in common.schema.json");
             }
-            pattern = oneAnchoredPattern(pattern);
             if (maxLength < 0) {
                 maxLength = definition.path("maxLength").asInt(-1);
             }
@@ -258,52 +257,6 @@ public final class SchemaLimitedToolCallbacks {
                     + "@ArgumentLimits(maxLength = ...), otherwise the model may send any amount of text");
         }
         return new Limits(limits.minLength(), maxLength, pattern);
-    }
-
-    /**
-     * The manifest rules (CC-123) want one pattern between {@code ^} and {@code $}, with an alternation only inside a
-     * group; a definition of the contracts written as {@code ^a$|^b$} (OpenSearchIndexPrefix in 3.0.1) is the same
-     * language as {@code ^(?:a|b)$} and is published in that form. A pattern that is not of that shape is left as it is
-     * and stops the server with the bounded-schema message.
-     */
-    static String oneAnchoredPattern(String pattern) {
-        if (InputSchemaBounds.anchored(pattern) || !pattern.startsWith("^") || !pattern.endsWith("$")) {
-            return pattern;
-        }
-        List<String> alternatives = new ArrayList<>();
-        StringBuilder current = new StringBuilder();
-        int depth = 0;
-        boolean inClass = false;
-        for (int i = 0; i < pattern.length(); i++) {
-            char c = pattern.charAt(i);
-            if (c == '\\' && i + 1 < pattern.length()) {
-                current.append(c).append(pattern.charAt(++i));
-                continue;
-            }
-            if (inClass) {
-                inClass = c != ']';
-            } else if (c == '[') {
-                inClass = true;
-            } else if (c == '(') {
-                depth++;
-            } else if (c == ')') {
-                depth--;
-            } else if (c == '|' && depth == 0) {
-                alternatives.add(current.toString());
-                current.setLength(0);
-                continue;
-            }
-            current.append(c);
-        }
-        alternatives.add(current.toString());
-        List<String> bodies = new ArrayList<>();
-        for (String alternative : alternatives) {
-            if (!alternative.startsWith("^") || !alternative.endsWith("$") || alternative.endsWith("\\$")) {
-                return pattern;
-            }
-            bodies.add(alternative.substring(1, alternative.length() - 1));
-        }
-        return "^(?:" + String.join("|", bodies) + ")$";
     }
 
     /**

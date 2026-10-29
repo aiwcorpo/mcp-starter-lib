@@ -59,9 +59,8 @@ public class PlatformSecurityAutoConfiguration {
     }
 
     /**
-     * Shows in the metrics that this server runs with the {@code devstack} profile (test signing keys accepted): the C6 manifest
-     * has no field for the environment, so a gauge {@code mcp_server_devstack_active} is the machine-readable mark next to the
-     * warning that every start logs.
+     * Shows in the metrics that this server runs with the {@code devstack} profile (test signing keys accepted): next to {@code "environment": "dev"} in the
+     * C6 manifest (CC-138) and the warning that every start logs, the gauge {@code mcp_server_devstack_active} is the machine-readable mark.
      */
     @Bean
     @Lazy(false)

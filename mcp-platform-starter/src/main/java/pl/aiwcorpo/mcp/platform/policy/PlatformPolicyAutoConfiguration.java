@@ -12,6 +12,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Lazy;
 import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
+import org.springframework.core.env.Environment;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
 import pl.aiwcorpo.mcp.platform.resource.ResourcePolicy;
@@ -36,7 +37,7 @@ public class PlatformPolicyAutoConfiguration {
     @Bean(destroyMethod = "close")
     @Lazy(false)
     PolicyEngine policyEngine(McpPlatformProperties props, ObjectProvider<SslBundles> sslBundles,
-                              ObjectProvider<MeterRegistry> meters, ObjectProvider<PlatformConfigurationGuard> guard)
+                              ObjectProvider<MeterRegistry> meters, ObjectProvider<PlatformConfigurationGuard> guard, Environment environment)
             throws IOException, GeneralSecurityException {
         guard.getIfAvailable();    // creates the guard first: it throws before anything is pulled
         McpPlatformProperties.Policy policy = props.getPolicy();
@@ -44,7 +45,8 @@ public class PlatformPolicyAutoConfiguration {
         if (policy.getSslBundle() != null && !policy.getSslBundle().isBlank()) {
             sslContext = sslBundles.getObject().getBundle(policy.getSslBundle()).createSslContext();
         }
-        return PolicyEngine.create(policy, sslContext, meters.getIfAvailable());
+        return PolicyEngine.create(policy, sslContext, meters.getIfAvailable(),
+                PlatformConfigurationGuard.devstackProfile(environment));
     }
 
     @Bean
@@ -55,7 +57,7 @@ public class PlatformPolicyAutoConfiguration {
     @Bean
     ResourcePolicy resourcePolicy(PolicyEngine engine, ResourceResolvers resolvers, ToolRiskRegistry registry,
                                   AuditLogger audit, McpPlatformProperties props) {
-        return new ResourcePolicy(engine, resolvers, registry, audit, props.getServerId(), props.system(),
+        return new ResourcePolicy(engine, resolvers, registry, audit, props.getServerId(), props.system(), props.effectiveCredentialType(),
                 props.getTools().getMaxFilteredElements());
     }
 }

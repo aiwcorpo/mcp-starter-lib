@@ -39,7 +39,8 @@ import tools.jackson.databind.json.JsonMapper;
  *   <li>backend unreachable ({@link ResourceAccessException}) or answering 502/503/504:
  *       {@code upstream_unavailable}, fixed text.</li>
  * </ul>
- * A code outside C10 becomes {@code internal_error}; fields C10 does not define for the code are dropped;
+ * {@code not_found_or_denied} always carries the one text of the contract, whatever a server mapping wrote (CC-146). A code
+ * outside C10 becomes {@code internal_error}; fields C10 does not define for the code are dropped;
  * the message is cut to 500 characters; a result that still does not match {@code tool-error.schema.json}
  * (e.g. a required field missing) becomes {@code internal_error}. The current request's credential is removed from every message.
  *
@@ -190,7 +191,9 @@ public class McpErrorMapper {
                 details.put(key, value instanceof String text ? SecretRedactor.redact(text) : value);
             }
         });
-        SafeError normalized = new SafeError(error.code(), truncate(SecretRedactor.redact(error.message())), details);
+        String message = ToolErrorCode.NOT_FOUND_OR_DENIED.code().equals(error.code())
+                ? ToolErrorCode.NOT_FOUND_OR_DENIED_MESSAGE : truncate(SecretRedactor.redact(error.message()));
+        SafeError normalized = new SafeError(error.code(), message, details);
         if (!TOOL_ERROR_SCHEMA.validate(JSON.valueToTree(asObject(normalized))).isEmpty()) {
             LOG.warn("event=tool_error_invalid code=\"{}\" detail=\"does not match tool-error.schema.json; sent as "
                     + "internal_error\"", error.code());

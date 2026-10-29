@@ -186,7 +186,7 @@ class ContractVectorsOnResourcePolicyTest {
             List<ResourceResolver<?>> resolvers = new ArrayList<>();
             resources.values().stream().map(ResolvedResource::type).distinct().forEach(type -> resolvers.add(new Resolver(type)));
             policy = new ResourcePolicy(engine, new ResourceResolvers(resolvers), registry,
-                    new AuditLogger("test.vectors.audit", serverId), serverId, system, 200);
+                    new AuditLogger("test.vectors.audit", serverId), serverId, system, "user-secret", 200);
         }
 
         ResolvedResource resource(JsonNode item) {

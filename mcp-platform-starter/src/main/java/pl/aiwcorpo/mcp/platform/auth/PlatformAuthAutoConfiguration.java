@@ -15,6 +15,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
+import org.springframework.core.env.Environment;
 import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
 
 /**
@@ -61,7 +62,8 @@ public class PlatformAuthAutoConfiguration {
     @Bean
     InternalJwtVerifier internalJwtVerifier(McpPlatformProperties props, ObjectProvider<GatewayKeys> keysProvider,
                                             ObjectProvider<JtiReplayStore> replayStoreProvider,
-                                            ObjectProvider<PlatformConfigurationGuard> guard) {
+                                            ObjectProvider<PlatformConfigurationGuard> guard,
+                                            Environment environment) {
         // The guard before the keys and the replay store are resolved, so that a server's own GatewayKeys or JtiReplayStore
         // (extension points) is created after the refusal too, not only the platform's. The guard is absent only in a Spring
         // test context that leaves the platform out on purpose (PlatformPresenceCheck refuses its absence everywhere else).
@@ -71,7 +73,8 @@ public class PlatformAuthAutoConfiguration {
         McpPlatformProperties.InternalJwt jwt = props.getInternalJwt();
         return new InternalJwtVerifier(
                 new InternalJwtVerifier.Settings(jwt.getIssuer(), props.getServerId(), jwt.getClockSkew(),
-                        jwt.getMaxLifetime(), jwt.isAllowTestKeys()),
+                        jwt.getMaxLifetime(), jwt.isAllowTestKeys(),
+                        PlatformConfigurationGuard.devstackProfile(environment)),
                 keys, replayStore, Clock.systemUTC());
     }
 

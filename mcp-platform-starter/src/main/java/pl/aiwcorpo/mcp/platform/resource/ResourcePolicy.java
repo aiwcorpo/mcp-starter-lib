@@ -61,7 +61,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
     private static final JsonMapper JSON = JsonMapper.builder().build();
     /** Elements of a list that get an audit event when removed; the rest are only counted in the log. */
     private static final int MAX_AUDITED_DROPS = 20;
-    private static final String NOT_FOUND = "The resource does not exist or you do not have access to it.";
+    private static final String NOT_FOUND = ToolErrorCode.NOT_FOUND_OR_DENIED_MESSAGE;
 
     private final PolicyEngine engine;
     private final ResourceResolvers resolvers;
@@ -70,9 +70,18 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
     private final String serverId;
     private final String system;
     private final int maxFilteredElements;
+    private final String credentialType;
 
+    /**
+     * @param credentialType the {@code context.credentialType} of every request (CC-136), from the server's configuration; never {@code null}
+     */
     public ResourcePolicy(PolicyEngine engine, ResourceResolvers resolvers, ToolRiskRegistry registry, AuditLogger audit,
-                          String serverId, String system, int maxFilteredElements) {
+                          String serverId, String system, String credentialType, int maxFilteredElements) {
+        if (credentialType == null) {
+            throw new IllegalStateException("a server has no policy without the credential type of its system (CC-136): "
+                    + "set aiwcorpo.mcp.platform.credential-type");
+        }
+        this.credentialType = credentialType;
         this.maxFilteredElements = maxFilteredElements;
         this.engine = engine;
         this.resolvers = resolvers;
@@ -125,13 +134,13 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
 
         boolean toolAllowed;
         try {
-            CedarRequest request = snapshot.entityBuilder().forToolCall(user, descriptor, context.arguments());
+            CedarRequest request = builder(snapshot).forToolCall(user, descriptor, context.arguments());
             toolAllowed = authorizer.isAllowed(request);
         } catch (EntityBuilderException ex) {
             throw builderFailure(ex);
         } catch (Exception ex) {
             LOG.warn("event=policy_evaluation_failed tool=\"{}\" detail=\"{}\"", tool, ex.getClass().getName());
-            toolAllowed = false;
+            throw unavailable("policy_error");
         }
         if (!toolAllowed) {
             deny(caller, tool, null, null, null, "policy_forbid", snapshot, ToolErrorCode.ACCESS_DENIED,
@@ -140,9 +149,10 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         if (descriptor.resourceRefs().isEmpty()) {
             return;
         }
+        refuseWithoutGrant(caller, tool, descriptor, user, snapshot, authorizer, context.arguments());
         AtomicReference<RuntimeException> failure = new AtomicReference<>();
         pl.aiwcorpo.mcp.cedar.entities.ResultFilter filter =
-                new pl.aiwcorpo.mcp.cedar.entities.ResultFilter(snapshot.entityBuilder(), authorizer);
+                new pl.aiwcorpo.mcp.cedar.entities.ResultFilter(builder(snapshot), authorizer);
         pl.aiwcorpo.mcp.cedar.entities.ResultFilter.CheckResult result = filter.checkAll(user, descriptor, context.arguments(),
                 (type, id) -> resolve(type, id, failure), Optional.empty());
         if (result.allowed()) {
@@ -168,6 +178,32 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
                 "denied".equals(reason) ? "policy_forbid" : "not_granted", snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
     }
 
+    /**
+     * CC-146: the grant comes first. A caller whose policy grants nothing on the container of a referenced resource gets
+     * {@code not_found_or_denied} before any resolver call and before an entity is built from what the system reports (see
+     * {@link GrantProbe}). A probe that cannot be built or evaluated decides nothing: the call goes on to the full check.
+     */
+    private void refuseWithoutGrant(CallerContext caller, String tool, ToolDescriptor descriptor, Caller user, Snapshot snapshot,
+                                    pl.aiwcorpo.mcp.cedar.entities.ResultFilter.Authorizer authorizer, Map<String, Object> arguments) {
+        for (pl.aiwcorpo.mcp.cedar.entities.ResourceRef ref : descriptor.resourceRefs()) {
+            for (String value : GrantProbe.values(arguments.get(ref.argument()))) {
+                Optional<ResolvedResource> probe = GrantProbe.of(ref.type(), value);
+                if (probe.isEmpty()) {
+                    continue;
+                }
+                boolean granted;
+                try {
+                    granted = authorizer.isAllowed(builder(snapshot).forResource(user, descriptor, arguments, probe.get()));
+                } catch (Exception ex) {
+                    continue;
+                }
+                if (!granted) {
+                    deny(caller, tool, ref.type(), value, null, "not_granted", snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
+                }
+            }
+        }
+    }
+
     private ResolvedResource resolve(String type, String id, AtomicReference<RuntimeException> failure) {
         ResourceBinding binding = registry.resourceRefsOf(ResourceContext.require().tool()).stream()
                 .filter(candidate -> candidate.type().equals(type)).findFirst().orElse(null);
@@ -187,10 +223,10 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         try {
             ResourceContext context = ResourceContext.require();
             Snapshot snapshot = snapshot();
-            return engine.authorizer(snapshot).isAllowed(snapshot.entityBuilder().forResource(user(context.caller()),
+            return engine.authorizer(snapshot).isAllowed(builder(snapshot).forResource(user(context.caller()),
                     descriptor(context.tool()), context.arguments(), resource));
         } catch (PolicyUnavailableException ex) {
-            throw unavailable();
+            throw unavailable("policy_unavailable");
         } catch (Exception ex) {
             return false;
         }
@@ -266,7 +302,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         ResourceContext context = ResourceContext.require();
         Snapshot snapshot = snapshot();
         try {
-            return QueryScope.of(snapshot.entityBuilder().queryConstraint(user(context.caller()), resourceType));
+            return QueryScope.of(builder(snapshot).queryConstraint(user(context.caller()), resourceType));
         } catch (EntityBuilderException ex) {
             throw builderFailure(ex);
         }
@@ -418,11 +454,16 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
 
     // ---- shared ----------------------------------------------------------------------------------------------
 
+    /** The builder of the loaded bundle with the credential type of this server in every request (CC-136). */
+    private EntityBuilder builder(Snapshot snapshot) {
+        return snapshot.entityBuilder().withCredentialType(credentialType);
+    }
+
     private Snapshot snapshot() {
         try {
             return engine.snapshot();
         } catch (PolicyUnavailableException ex) {
-            throw unavailable();
+            throw unavailable("policy_unavailable");
         }
     }
 
@@ -462,9 +503,15 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         return new SanitizedToolException(new McpErrorMapper.SafeError(ToolErrorCode.NOT_FOUND_OR_DENIED.code(), NOT_FOUND));
     }
 
-    private static SanitizedToolException unavailable() {
+    /**
+     * {@code upstream_unavailable} when nothing can be decided (CC-141): no bundle is loaded ({@code policy_unavailable}) or the
+     * policy engine failed on this request ({@code policy_error}). The refusal is audited as a decision with that reason.
+     */
+    private SanitizedToolException unavailable(String reason) {
+        ResourceContext.current().ifPresent(context -> audit.policyUnavailable(context.caller(), context.tool(),
+                registry.riskOf(context.tool()).orElse(null), reason));
         return new SanitizedToolException(new McpErrorMapper.SafeError(ToolErrorCode.UPSTREAM_UNAVAILABLE.code(),
-                "The policy is not available right now. Try again later."));
+                "Policies are not available. Try again later."));
     }
 
     private static RuntimeException builderFailure(EntityBuilderException ex) {

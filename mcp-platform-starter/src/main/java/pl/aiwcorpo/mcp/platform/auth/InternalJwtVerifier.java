@@ -27,7 +27,7 @@ import tools.jackson.databind.JsonNode;
  * <ol>
  *   <li>token present and three segments; header is JSON with {@code alg == ES256}</li>
  *   <li>{@code kid} in the gateway JWKS; {@code test-*} ids and the published test keys (by SPKI) only with
- *       {@code allowTestKeys}</li>
+ *       {@code allowTestKeys}; a {@code dev-*} {@code kid} only in dev mode (the {@code devstack} profile and {@code allowTestKeys})</li>
  *   <li>ES256 signature</li>
  *   <li>claims valid against {@code internal-jwt.schema.json}</li>
  *   <li>{@code iss}, {@code aud == serverId}</li>
@@ -43,6 +43,8 @@ public final class InternalJwtVerifier {
     private static final Logger LOG = LoggerFactory.getLogger(InternalJwtVerifier.class);
 
     /** Far above any real token (a few hundred bytes); bounds the work an unauthenticated caller can cause. */
+    private static final String DEV_KID_PREFIX = "dev-";
+
     private static final int MAX_TOKEN_LENGTH = 8 * 1024;
 
     /**
@@ -51,9 +53,19 @@ public final class InternalJwtVerifier {
      * @param clockSkew     tolerance for {@code exp} and {@code iat}
      * @param maxLifetime   largest accepted {@code exp - iat}
      * @param allowTestKeys accept {@code test-*} keys and the published test keys (dev and tests only)
+     * @param devstackProfile the server runs with the {@code devstack} profile; together with {@code allowTestKeys} it is dev
+     *                      mode, the only one in which a {@code dev-*} key is accepted (CC-137)
      */
     public record Settings(String issuer, String audience, Duration clockSkew, Duration maxLifetime,
-                           boolean allowTestKeys) {
+                           boolean allowTestKeys, boolean devstackProfile) {
+
+        public Settings(String issuer, String audience, Duration clockSkew, Duration maxLifetime, boolean allowTestKeys) {
+            this(issuer, audience, clockSkew, maxLifetime, allowTestKeys, false);
+        }
+
+        boolean devMode() {
+            return allowTestKeys && devstackProfile;
+        }
     }
 
     private final Settings settings;
@@ -91,7 +103,8 @@ public final class InternalJwtVerifier {
         }
         String kid = kidNode.asString();
         ECKey key = findKey(kid).orElseThrow(() -> reject(InternalJwtRejection.UNKNOWN_KID));
-        if (!settings.allowTestKeys() && PublishedTestKeys.isTestKey(kid, key)) {
+        if (!settings.allowTestKeys() && PublishedTestKeys.isTestKey(kid, key)
+                || kid.startsWith(DEV_KID_PREFIX) && !settings.devMode()) {
             throw reject(InternalJwtRejection.TEST_KEY_NOT_ALLOWED);
         }
         JsonNode typ = header.get("typ");

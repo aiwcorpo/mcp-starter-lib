@@ -22,6 +22,12 @@ public enum ToolErrorCode {
     UPSTREAM_UNAVAILABLE("upstream_unavailable"),
     INTERNAL_ERROR("internal_error");
 
+    /**
+     * The only text of {@code not_found_or_denied} (CC-146, {@code const} in {@code tool-error.schema.json}): a message that
+     * varied with the cause would tell a missing resource from a forbidden one.
+     */
+    public static final String NOT_FOUND_OR_DENIED_MESSAGE = "The resource does not exist or you do not have access to it.";
+
     private final String code;
 
     ToolErrorCode(String code) {
