@@ -7,11 +7,10 @@ import java.util.HashMap;
 import java.util.Map;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
-import org.springframework.boot.WebApplicationType;
-import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.context.ConfigurableApplicationContext;
 import io.modelcontextprotocol.server.McpSyncServer;
 import io.modelcontextprotocol.spec.McpSchema;
+import pl.aiwcorpo.mcp.platform.test.SpringTestContextStart;
 import pl.aiwcorpo.mcp.platform.test.TestGateway;
 
 /** Review 3.0.0-alpha-1 H1: no tool reaches the MCP server without the platform's decorator. */
@@ -28,8 +27,7 @@ class ToolBypassTest {
         Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
         properties.put("server.port", "0");
         properties.putAll(overrides);
-        return new SpringApplicationBuilder(McpToolServer.class).web(WebApplicationType.SERVLET)
-                .properties(properties).profiles(profile).run();
+        return SpringTestContextStart.start(McpToolServer.class, properties, profile);
     }
 
     @Test

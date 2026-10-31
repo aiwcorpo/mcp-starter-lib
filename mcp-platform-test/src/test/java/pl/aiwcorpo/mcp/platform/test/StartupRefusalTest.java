@@ -9,6 +9,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.WebApplicationType;
 import org.springframework.boot.builder.SpringApplicationBuilder;
+import pl.aiwcorpo.mcp.platform.autoconfigure.DeploymentSignalAssumption;
 import pl.aiwcorpo.mcp.platform.test.app.ProbeServer;
 import pl.aiwcorpo.mcp.platform.test.excluding.ExcludingMcpServer;
 import pl.aiwcorpo.mcp.platform.test.excluding.ExcludingServer;
@@ -51,6 +52,7 @@ class StartupRefusalTest {
 
     @Test
     void aServerWithoutServerIdOrJwks() {
+        DeploymentSignalAssumption.assumeDeveloperMachine();
         assertThatThrownBy(() -> start(Map.of("aiwcorpo.mcp.platform.server-id", "",
                 "aiwcorpo.mcp.platform.internal-jwt.jwks-uri", ""), "dev"))
                 .rootCause().hasMessageContaining("server-id").hasMessageContaining("jwks-uri");
@@ -63,6 +65,7 @@ class StartupRefusalTest {
      */
     @Test
     void devOnANetworkAddress() {
+        DeploymentSignalAssumption.assumeDeveloperMachine();
         Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
         properties.put("spring.ai.mcp.server.name", "startup-refusal-test");
         assertThatThrownBy(() -> new SpringApplicationBuilder(ProbeServer.class).web(WebApplicationType.SERVLET)
@@ -98,6 +101,7 @@ class StartupRefusalTest {
 
     @Test
     void cloudPlatformNoneIsNoDeployment() {
+        DeploymentSignalAssumption.assumeDeveloperMachine();
         start(Map.of("spring.main.cloud-platform", "none"), "dev");
     }
 

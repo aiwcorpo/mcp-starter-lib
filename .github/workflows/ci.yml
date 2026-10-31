@@ -1,13 +1,36 @@
-# Thin wrapper: all logic is in ci/run.sh. Set the repository secrets MCP_MAVEN_REPOSITORY_URL, MCP_MAVEN_REPOSITORY_USER
-# and MCP_MAVEN_REPOSITORY_PASSWORD so a clean runner can fetch the mcp-contracts artifacts.
+# Thin wrapper: all logic is in ci/run.sh. Code from a pull request gets no secrets and no Docker socket; only the push to main does.
+# Secrets MCP_MAVEN_REPOSITORY_URL, _USER and _PASSWORD belong to the environment ci-main (so a pull request cannot read them);
+# pull requests resolve the mcp-contracts artifacts from the repository variable MCP_MAVEN_REPOSITORY_URL with a read-only account in
+# the repository secrets MCP_MAVEN_REPOSITORY_RO_USER / _RO_PASSWORD (not available to pull requests from forks).
 name: ci
 on:
   push:
     branches: [main]
   pull_request:
+permissions:
+  contents: read
 jobs:
-  verify:
+  verify-change:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    container:
+      image: maven:3.9.12-eclipse-temurin-25
+    env:
+      MCP_CI_NO_DOCKER: "true"
+      MCP_MAVEN_REPOSITORY_URL: ${{ vars.MCP_MAVEN_REPOSITORY_URL }}
+      MCP_MAVEN_REPOSITORY_USER: ${{ secrets.MCP_MAVEN_REPOSITORY_RO_USER }}
+      MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.MCP_MAVEN_REPOSITORY_RO_PASSWORD }}
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: ci/run.sh verify
+  verify-main:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: ci-main
     container:
       image: maven:3.9.12-eclipse-temurin-25
       volumes:
@@ -17,6 +40,9 @@ jobs:
       MCP_MAVEN_REPOSITORY_USER: ${{ secrets.MCP_MAVEN_REPOSITORY_USER }}
       MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.MCP_MAVEN_REPOSITORY_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: ci/run.sh verify

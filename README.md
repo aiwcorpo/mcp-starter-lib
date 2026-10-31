@@ -955,9 +955,11 @@ Jeden punkt wejścia: `ci/run.sh` (`make ci` woła `ci/run.sh verify`). Ten sam 
 | `ci/run.sh release` | `verify` i `install` do lokalnego repozytorium Maven; odmawia dla `-SNAPSHOT`, dla wersji już zainstalowanej i dla HEAD bez tagu `v<wersja>` |
 
 Nakładki wołające tylko ten skrypt: `.gitlab-ci.yml`, `Jenkinsfile`, `.github/workflows/ci.yml`. `verify` robi `clean verify`, kończy się błędem przy niepowodzeniu Mavena i gdy nie uruchomiono żadnego testu;
-nieznane polecenie to kod 2. W kontenerze (sygnał wdrożenia w `DevProfileEnvironment`) pomija klasy `PlatformConfigurationGuardTest`, `ServerCustomizerTest`, `StartupRefusalTest` i `ToolBypassTest`,
-które zakładają maszynę programisty (komunikat w logu); uruchom je raz na zwykłym runnerze (VM, executor powłoki). Sprawdzone: przebieg lokalny (931 testów) i w obrazie `maven:3.9.12-eclipse-temurin-25` (878 przypadków).
-Przy Dockerze bez routingu do hosta ustaw `TESTCONTAINERS_HOST_OVERRIDE`.
+nieznane polecenie to kod 2. Kod ze zmiany (merge request, pull request) nie dostaje gniazda Dockera ani sekretów main: zadanie zmian ma `MCP_CI_NO_DOCKER=true` (bez `RedisJtiReplayStoreTest`) i konto tylko do odczytu rejestru,
+zadanie main działa na runnerze z gniazdem, w środowisku `ci-main`, a cache zmian ma osobny klucz i `policy: pull`.
+Testy, które zakładają maszynę programisty, same się pomijają na hoście z sygnałem wdrożenia (kontener, pod, systemd; ten sam detektor co w starterze); w kontenerze pomijanych jest 16 testów, pozostałe 915 działa.
+Liczba pominiętych jest w logu, a `release` odmawia, gdy cokolwiek pominięto albo ustawiono `MCP_CI_NO_DOCKER`. Sprawdzone: przebieg lokalny i w obrazie `maven:3.9.12-eclipse-temurin-25`; nie na prawdziwym runnerze GitLab, Jenkins ani GitHub.
+Przy Dockerze bez routingu do hosta ustaw `TESTCONTAINERS_HOST_OVERRIDE`. `MAVEN_REPO_LOCAL` to jedno repozytorium Maven dla budowy, instalacji i kontroli istniejącej wersji.
 
 Artefakty `mcp-contracts` 5.1.0 muszą być w `~/.m2` albo w rejestrze wskazanym przez `MCP_MAVEN_REPOSITORY_URL` (`_USER`, `_PASSWORD`; `.ci/settings.xml`).
 `RedisJtiReplayStoreTest` uruchamia Redisa przez Testcontainers, więc potrzebny jest dostęp do środowiska kontenerów (gniazdo Dockera zamontowane w kontenerze CI albo `DOCKER_HOST`).

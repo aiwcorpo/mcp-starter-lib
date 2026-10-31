@@ -73,6 +73,7 @@ class PlatformConfigurationGuardTest {
 
     @Test
     void devMayUseHttpTestKeysAndNoStateDirectory() {
+        DeploymentSignalAssumption.assumeDeveloperMachine();
         McpPlatformProperties props = valid();
         props.getPolicy().getMain().setUrl("http://127.0.0.1:18747/policies/main/latest.json");
         props.getPolicy().setStateDir(null);
@@ -233,6 +234,7 @@ class PlatformConfigurationGuardTest {
 
     @Test
     void outsideDevJwksMustBeHttpsAndClientAuthNeed() {
+        DeploymentSignalAssumption.assumeDeveloperMachine();
         McpPlatformProperties props = valid();
         props.getInternalJwt().setJwksUri("http://mcp-gateway.internal:8080/.well-known/jwks.json");
 
@@ -253,6 +255,7 @@ class PlatformConfigurationGuardTest {
 
     @Test
     void devRelaxationsNeedTheDevProfile() {
+        DeploymentSignalAssumption.assumeDeveloperMachine();
         McpPlatformProperties props = valid();
         props.setAuthMode(AuthMode.DEV_PAT);
         props.getInternalJwt().setAllowTestKeys(true);
@@ -293,6 +296,7 @@ class PlatformConfigurationGuardTest {
 
     @Test
     void aSystemOutsideTheContractIsRefusedOutsideDevAndOnlyWarnedInDev() {
+        DeploymentSignalAssumption.assumeDeveloperMachine();
         McpPlatformProperties props = valid();
         props.setServerId("mcp-example");
 
@@ -304,6 +308,7 @@ class PlatformConfigurationGuardTest {
 
     @Test
     void devListensOnLoopbackOnly() {
+        DeploymentSignalAssumption.assumeDeveloperMachine();
         for (String address : new String[] {"127.0.0.1", "::1", "localhost"}) {
             MockEnvironment env = profiles("dev").withProperty("server.address", address);
             assertThatCode(() -> check(valid(), env)).as(address).doesNotThrowAnyException();
@@ -319,6 +324,7 @@ class PlatformConfigurationGuardTest {
 
     @Test
     void theStarterDefaultsDevToLoopbackAndNothingElse() {
+        DeploymentSignalAssumption.assumeDeveloperMachine();
         MockEnvironment dev = new MockEnvironment();
         dev.setActiveProfiles("dev");
         new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(dev, null);
@@ -345,6 +351,7 @@ class PlatformConfigurationGuardTest {
 
     @Test
     void devRunsTheServersOwnConfigurationWithoutCertificatesRedisOrInternalCa() {
+        DeploymentSignalAssumption.assumeDeveloperMachine();
         MockEnvironment dev = serverConfigAsInTheReadme("dev");
         new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(dev, null);
 
@@ -357,6 +364,7 @@ class PlatformConfigurationGuardTest {
 
     @Test
     void theCommandLineStillBeatsTheDevOverrides() {
+        DeploymentSignalAssumption.assumeDeveloperMachine();
         MockEnvironment dev = serverConfigAsInTheReadme("dev");
         dev.getPropertySources().remove("commandLineArgs");
         dev.getPropertySources().addFirst(new MapPropertySource("commandLineArgs",
@@ -380,6 +388,7 @@ class PlatformConfigurationGuardTest {
 
     @Test
     void aSeparateManagementServerInDevMustListenOnLoopbackToo() {
+        DeploymentSignalAssumption.assumeDeveloperMachine();
         MockEnvironment lan = profiles("dev").withProperty("server.port", "18600")
                 .withProperty("management.server.port", "18601");
         assertThatThrownBy(() -> check(valid(), lan)).hasMessageContaining("management.server.address");
@@ -413,6 +422,7 @@ class PlatformConfigurationGuardTest {
 
     @Test
     void theDeploymentCheckDoesNotTouchProductionProfilesOrADevelopersMachine() {
+        DeploymentSignalAssumption.assumeDeveloperMachine();
         MockEnvironment prodInKubernetes = serverConfigAsInTheReadme("prod").withProperty("spring.main.cloud-platform", "kubernetes");
         assertThatCode(() -> new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(prodInKubernetes, null))
                 .doesNotThrowAnyException();
@@ -422,6 +432,7 @@ class PlatformConfigurationGuardTest {
 
     @Test
     void theOverridesThatChangedTheServersConfigurationAreNamedInTheLog() {
+        DeploymentSignalAssumption.assumeDeveloperMachine();
         ch.qos.logback.classic.Logger logger = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory
                 .getLogger(PlatformConfigurationGuard.class);
         ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> appender =
@@ -469,6 +480,7 @@ class PlatformConfigurationGuardTest {
 
     @Test
     void cloudPlatformNoneIsNotADeployment() {
+        DeploymentSignalAssumption.assumeDeveloperMachine();
         MockEnvironment none = new MockEnvironment().withProperty("spring.main.cloud-platform", "none");
         assertThat(signal(none, host(Map.of(), Map.of()), false)).isEmpty();
         MockEnvironment dev = serverConfigAsInTheReadme("dev").withProperty("spring.main.cloud-platform", "none");
@@ -514,6 +526,7 @@ class PlatformConfigurationGuardTest {
 
     @Test
     void theManagementPortIsComparedAsANumber() {
+        DeploymentSignalAssumption.assumeDeveloperMachine();
         MockEnvironment randomBoth = profiles("dev").withProperty("server.port", "0").withProperty("management.server.port", "0");
         assertThatThrownBy(() -> check(valid(), randomBoth)).hasMessageContaining("management.server.address");
 

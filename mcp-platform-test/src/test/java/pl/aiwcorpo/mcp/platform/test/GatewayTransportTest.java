@@ -207,6 +207,19 @@ class GatewayTransportTest {
     }
 
     @Test
+    @DisplayName("the service variant (system:mcp-gateway) with vs: 401 as well")
+    void serviceVariantWithRemovedVirtualServerClaim() throws Exception {
+        RawMcp raw = new RawMcp(port);
+        String session = raw.openSession(GATEWAY);
+
+        HttpResponse<String> list = raw.post("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}",
+                GATEWAY.service().extraClaim("vs", "team-a-review").mint().headers(), session);
+        assertThat(list.statusCode()).isEqualTo(401);
+        assertThat(raw.post("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/list\"}", GATEWAY.service().mint().headers(), session)
+                .statusCode()).as("without the claim").isEqualTo(200);
+    }
+
+    @Test
     @DisplayName("a token is bound to one tool, one request id and one use")
     void tokenBinding() throws Exception {
         RawMcp raw = new RawMcp(port);

@@ -1,22 +1,29 @@
-# Thin wrapper: all logic is in ci/run.sh, which also runs in a developer's shell. Image pinned like mcp-policies.
+# Thin wrapper: all logic is in ci/run.sh, which also runs in a developer's shell.
 #
-# Maven registry with the mcp-contracts artifacts: MCP_MAVEN_REPOSITORY_URL, MCP_MAVEN_REPOSITORY_USER,
-# MCP_MAVEN_REPOSITORY_PASSWORD (masked CI/CD variables). RedisJtiReplayStoreTest needs a container runtime: use a
-# runner with the Docker socket mounted, or set DOCKER_HOST to a Docker-in-Docker service.
+# Two jobs, because code from a merge request must not get the Docker socket or the main secrets:
+#   verify-change  merge requests; plain runner without the socket, MCP_CI_NO_DOCKER=true (Redis test left out).
+#                  Gets only a read-only registry token (CI/CD variables MCP_MAVEN_REPOSITORY_URL, _USER, _PASSWORD:
+#                  deploy token with read_package_registry, masked, not protected).
+#   verify-main    default branch; runner tagged docker-socket (the socket mounted, for Testcontainers), environment
+#                  ci-main (protected). Defines its own MCP_MAVEN_REPOSITORY_* values scoped to that environment.
+# The cache of a merge request is a separate key and pull-only, so a merge request cannot plant files for the main job.
 stages:
   - verify
 
 default:
   image: maven:3.9.12-eclipse-temurin-25
-  cache:
-    key: maven
-    paths: [.m2/repository]
 
 variables:
-  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+  MAVEN_REPO_LOCAL: "$CI_PROJECT_DIR/.m2/repository"
 
-verify:
+verify-change:
   stage: verify
+  variables:
+    MCP_CI_NO_DOCKER: "true"
+  cache:
+    key: maven-change
+    policy: pull
+    paths: [.m2/repository]
   script:
     - ci/run.sh verify
   artifacts:
@@ -25,4 +32,21 @@ verify:
       junit: "**/target/surefire-reports/TEST-*.xml"
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+
+verify-main:
+  stage: verify
+  tags: [docker-socket]
+  environment:
+    name: ci-main
+  cache:
+    key: maven-main
+    policy: pull-push
+    paths: [.m2/repository]
+  script:
+    - ci/run.sh verify
+  artifacts:
+    when: always
+    reports:
+      junit: "**/target/surefire-reports/TEST-*.xml"
+  rules:
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH

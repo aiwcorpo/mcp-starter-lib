@@ -322,16 +322,20 @@ więc znika wszystko, co starter robił z linkiem. Biblioteki, paczki polityk i 
 
 - **Token z `vs` albo `vsc` to `401 invalid_claims`** (schemat `internal-jwt.schema.json` 5.x ma `unevaluatedProperties: false`). `TestGateway.Token.virtualServer(slug, scopes)` zniknęło; dla testu odrzucenia jest
   `Token.extraClaim(nazwa, wartość)` (claim spoza kontraktu, np. `extraClaim("vs", "abc-only")`). Testy serwera, które sprawdzały zawężenie linkiem (`virtualServer("abc-only", Map.of("jiraProjects", ...))`),
-  usuń albo zamień na zwykły odczyt z oczekiwaniem bez zawężenia.
+  usuń albo zamień na zwykły odczyt z oczekiwaniem bez zawężenia. Testy, które dotąd przyjmowały token z `vs` / `vsc` (gitlab: `GatewayLinkClaimsTest`; testy typu `acceptsTheVirtualServerClaims`),
+  zmień na oczekiwanie `401`: użyj `extraClaim`, nie usuwaj ich, bo pilnują odrzucenia. To samo dotyczy wariantu serwisowego (`system:mcp-gateway`) z `vs`: `401`.
 - **`CallerContext`** nie ma składników `virtualServer` i `virtualServerScopes` ani metody `virtualServerSlug()`; konstruktor kanoniczny ma o dwa argumenty mniej
   (`new CallerContext(sub, usr, grp, azp, tool, rid, prv, mfa)`). Dotyczy kodu, który buduje go sam (testy).
 - **`Caller` z `mcp-cedar-entities`** nie ma `withVirtualServer` ani składnika `virtualServer`; `VirtualServerScope` nie istnieje. `ResourcePolicy` buduje wywołującego bez nich.
 - **`QueryConstraint(resourceType, granted)`** (dwa składniki). Zapytania serwera nie mają zawężenia linkiem: `queryScope(type)` daje same granty z grup.
 - **`QueryScope`:** `linkIds()` jest puste, dopóki zakres nie przejdzie przez `narrowedTo(ids)` (nazwa zostaje dla zgodności źródeł; to zawężenie z argumentu, nie z linku), a `linkType()` zniknęło.
   `jqlProjectClause()`, `cqlSpaceClause()` i `jql(...)` / `cql(...)` nie dodają więc klauzuli zakresu bez `narrowedTo`. Kod serwera, który odmawiał albo zwracał pusty wynik dla `linkIds()` bez wspólnych elementów
-  z argumentem, staje się pustym warunkiem; zostaw tylko wywołania po `narrowedTo`. Dla OpenSearch `linkIds()` jest zawsze puste (`narrowedTo` dla tego typu rzuca, jak dotąd).
+  z argumentem, staje się martwą gałęzią: **usuń ją**. Po `narrowedTo(List.of(x))` zakres to dokładnie argument, więc puste przecięcie nie występuje. Do usunięcia: `JiraTool` (`scope.linkIds().filter(Set::isEmpty)`),
+  `ConfluencePageTools` (`scope.linkIds().map(Set::isEmpty)`), servicedesk `QueueGrants.permits` (warunek na `linkIds()`; zostaje `!scope.nothingToQuery() && scope.grantedIds().contains(queue)`), `ExampleSearchQuery` w szablonie i profilach.
+  Dla OpenSearch `linkIds()` jest zawsze puste (`narrowedTo` dla tego typu rzuca, jak dotąd).
 - **Audyt serwera:** zdarzenia nie mają pola `virtualServer`, a powód `link_scope` nie jest już emitowany (odmowa polityki w sondzie i po rozwiązaniu to `policy_forbid`). Alerty i reguły nad powodem `link_scope` usuń.
   Gateway 5.x mapuje stare wiersze aktywności przy odczycie (CC-188), ale serwer nic nie mapuje.
+- **Dokumentacja serwerów** (`README.md` i `docs/` każdego serwera, `docs/jak-napisac-narzedzie.md` szablonu, w której `linkIds()` opisuje zakres serwera): usuń opisy linków, `vs` / `vsc`, `link_scope`, `vs-narrow-*` i `virtual-server.cedar`; zakres to granty z grup i `narrowedTo`.
 - **`PolicyEngine`:** zniknęły `RecordingAuthorizer`, `recordingAuthorizer(Snapshot)` i `LINK_NARROWING_PREFIX` (służyły tylko do rozpoznania reguł `vs-narrow-*`). Użyj `authorizer(Snapshot)`.
 - **`mcp-platform-test`:** `PolicyRepository.publishGenerated` nie dołącza `virtual-server.cedar` (przykład zniknął z kontraktów 5.0.0). Testy serwera nie mogą już oczekiwać `link_scope`.
 
@@ -348,9 +352,17 @@ Wektory 5.1.0, które starter uruchamia: `jwt/` (59; `removed-vs*` dają `invali
 Wektor `result-filter/servicedesk-tickets-by-grant` zakłada typ poświadczenia konta serwisowego (przykładowe polityki bez `context.credentialType` traktują typ jak konto serwisowe,
 `credential-type.cedar`), więc test z kolejką poza grantem budujesz z `service-account` jako typem domyślnym, nie `user-secret`.
 
-### 5. CI
+### 5. Testy w kontenerze i CI serwerów
 
-`ci/run.sh` jest jedynym punktem wejścia (`make ci`, `.gitlab-ci.yml` jako cienka nakładka): `verify` (kontrola tekstu i `mvnw verify`), `hygiene`, `release` (README, "CI"). Serwery nie muszą nic zmieniać.
+- **`DevProfileLoopbackTest`** (i każdy test, który sam uruchamia serwer z profilem `dev` przez `SpringApplicationBuilder`) pada na hoście z sygnałem wdrożenia: w kontenerze CI, w podzie, pod systemd, bo strażnik uznaje to za wdrożenie.
+  Starter nie wykonuje tego sprawdzenia dla kontekstu zbudowanego przez framework testowy Springa (`@SpringBootTest`), więc test, który tylko potrzebuje działającego serwera, przepisz na `@SpringBootTest`.
+  Test, który sprawdza samą odmowę wdrożenia, oznacz warunkiem na ten sam sygnał; wzór: `DeploymentSignalAssumption` w `mcp-platform-starter/src/test` i `mcp-platform-test/src/test` tego repo
+  (`DevProfileEnvironment.deploymentSignal(new MockEnvironment(), DevProfileEnvironment.LOCAL_HOST, () -> false)` w pakiecie `pl.aiwcorpo.mcp.platform.autoconfigure`; klasa pomocnicza nie jest w wydanych artefaktach).
+  Pominięty test jest widoczny w raporcie surefire.
+- **CI serwera** (M5-5): każdy serwer ma własne `ci/run.sh`, `make ci` i cienkie nakładki (`.gitlab-ci.yml`, `Jenkinsfile`, `.github/workflows/ci.yml`). Wzór: pliki w tym repo. Zasady do przejęcia: kod z merge requestu nie dostaje gniazda Dockera
+  ani sekretów main (zadanie zmian z `MCP_CI_NO_DOCKER=true` i kontem do odczytu rejestru, zadanie main na runnerze z gniazdem i w środowisku `ci-main`), osobne klucze cache z `policy: pull` dla zmian, `clean verify`,
+  błąd przy zerze testów, `release` odmawia przy pominiętych testach.
+- **W tym repo:** `ci/run.sh` (`verify`, `hygiene`, `release`; README, "CI").
 
 ## Z beta-8 na beta-9
 

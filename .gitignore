@@ -14,3 +14,4 @@ target/
 *.crt
 # Logs
 *.log
+.m2/
