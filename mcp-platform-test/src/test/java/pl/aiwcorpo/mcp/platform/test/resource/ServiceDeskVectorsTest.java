@@ -139,7 +139,7 @@ class ServiceDeskVectorsTest {
         ResourcePolicy policy = new ResourcePolicy(engine, new ResourceResolvers(List.of(resolver)), registry,
                 new AuditLogger("test.servicedesk.vectors", "mcp-servicedesk"), "mcp-servicedesk", "servicedesk",
                 List.of(input.get("credentialType").asString()), 200);
-        CallerContext claims = new CallerContext("6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "sdreader", groups, "claude-code", null, null,
+        CallerContext claims = new CallerContext("6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "sdreader", groups, "claude-code",
                 "get_thing", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", "00000000000000-0000000", null);
 
         try (ResourceContext context = ResourceContext.open(claims, "get_thing", Map.of(argument, id))) {

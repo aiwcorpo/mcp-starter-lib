@@ -1,6 +1,6 @@
 # Migracja z 2.x na 3.0
 
-Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-alpha-14**.
+Dokument rośnie razem z wydaniami 3.0.0-alpha, -beta i 3.0.0. Stan: **3.0.0-beta-10**.
 
 ## Zmiana modelu
 
@@ -307,6 +307,50 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
   długi ciąg trzeba poprawić.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
+
+## Z beta-9 na beta-10
+
+Przejście na kontrakty **5.1.0** (M5; CHANGELOG kontraktów, 5.0.0 i 5.1.0, sekcje "Migracja" dla ws-02, ws-03 i ws-04). Zapisane linki (`/v/<slug>/mcp`) i claimy `vs` / `vsc` przestały istnieć,
+więc znika wszystko, co starter robił z linkiem. Biblioteki, paczki polityk i serwery przechodzą razem z gatewayem 5.x: serwer beta-10 odrzuca token z `vs` albo `vsc`, a gateway 4.x je wystawia.
+
+### 1. Wersja
+
+`<mcp-platform.version>3.0.0-beta-10</mcp-platform.version>` w szablonie albo `<version>3.0.0-beta-10</version>` w imporcie `mcp-platform-bom`; BOM ustawia `mcp-contracts`, `mcp-cedar-entities`,
+`mcp-policy-bundle` i `mcp-manifest` na 5.1.0. Wartości wersji w README serwera popraw ręcznie.
+
+### 2. Co przestaje działać
+
+- **Token z `vs` albo `vsc` to `401 invalid_claims`** (schemat `internal-jwt.schema.json` 5.x ma `unevaluatedProperties: false`). `TestGateway.Token.virtualServer(slug, scopes)` zniknęło; dla testu odrzucenia jest
+  `Token.extraClaim(nazwa, wartość)` (claim spoza kontraktu, np. `extraClaim("vs", "abc-only")`). Testy serwera, które sprawdzały zawężenie linkiem (`virtualServer("abc-only", Map.of("jiraProjects", ...))`),
+  usuń albo zamień na zwykły odczyt z oczekiwaniem bez zawężenia.
+- **`CallerContext`** nie ma składników `virtualServer` i `virtualServerScopes` ani metody `virtualServerSlug()`; konstruktor kanoniczny ma o dwa argumenty mniej
+  (`new CallerContext(sub, usr, grp, azp, tool, rid, prv, mfa)`). Dotyczy kodu, który buduje go sam (testy).
+- **`Caller` z `mcp-cedar-entities`** nie ma `withVirtualServer` ani składnika `virtualServer`; `VirtualServerScope` nie istnieje. `ResourcePolicy` buduje wywołującego bez nich.
+- **`QueryConstraint(resourceType, granted)`** (dwa składniki). Zapytania serwera nie mają zawężenia linkiem: `queryScope(type)` daje same granty z grup.
+- **`QueryScope`:** `linkIds()` jest puste, dopóki zakres nie przejdzie przez `narrowedTo(ids)` (nazwa zostaje dla zgodności źródeł; to zawężenie z argumentu, nie z linku), a `linkType()` zniknęło.
+  `jqlProjectClause()`, `cqlSpaceClause()` i `jql(...)` / `cql(...)` nie dodają więc klauzuli zakresu bez `narrowedTo`. Kod serwera, który odmawiał albo zwracał pusty wynik dla `linkIds()` bez wspólnych elementów
+  z argumentem, staje się pustym warunkiem; zostaw tylko wywołania po `narrowedTo`. Dla OpenSearch `linkIds()` jest zawsze puste (`narrowedTo` dla tego typu rzuca, jak dotąd).
+- **Audyt serwera:** zdarzenia nie mają pola `virtualServer`, a powód `link_scope` nie jest już emitowany (odmowa polityki w sondzie i po rozwiązaniu to `policy_forbid`). Alerty i reguły nad powodem `link_scope` usuń.
+  Gateway 5.x mapuje stare wiersze aktywności przy odczycie (CC-188), ale serwer nic nie mapuje.
+- **`PolicyEngine`:** zniknęły `RecordingAuthorizer`, `recordingAuthorizer(Snapshot)` i `LINK_NARROWING_PREFIX` (służyły tylko do rozpoznania reguł `vs-narrow-*`). Użyj `authorizer(Snapshot)`.
+- **`mcp-platform-test`:** `PolicyRepository.publishGenerated` nie dołącza `virtual-server.cedar` (przykład zniknął z kontraktów 5.0.0). Testy serwera nie mogą już oczekiwać `link_scope`.
+
+### 3. Schemat Cedar: nowe bajty (CC-173)
+
+`mcp.cedarschema` 5.x (SHA-256 `51d71b2dbb7f61fd2593cf4c2f1a2373dea06e8b4431425a3f1aa24fa10a0ba5`, poprzednio `902b2540...`) nie ma `context.virtualServer`, `context.vsScopes` ani typu `VsScopes`.
+Paczka polityk zbudowana pod 4.x daje `schema_mismatch` (zostaje poprzednia, a pierwsza paczka nie pozwala wystartować serwerowi); serwer beta-10 potrzebuje paczki z `mcp-policies` zbudowanej na 5.x (ws-09),
+a serwer beta-9 nie przyjmie paczki 5.x. Bajty schematu w 5.0.0 i 5.1.0 są takie same, więc paczka zbudowana pod 5.0.0 zostaje ważna. Test: `PolicyEngineTest` z paczką z kontraktów 4.1.0
+(`aBundleOnTheSchemaOfContracts4_...`). Polityka czytająca `context.vsScopes` nie przechodzi walidacji (`policy_invalid`).
+
+### 4. Testy i wektory
+
+Wektory 5.1.0, które starter uruchamia: `jwt/` (59; `removed-vs*` dają `invalid_claims`), `audit-events/` (115), `result-filter/` (7, bez wariantów "through-link"), `resource-checks/`, `query-rendering/`, `bundles/`.
+Wektor `result-filter/servicedesk-tickets-by-grant` zakłada typ poświadczenia konta serwisowego (przykładowe polityki bez `context.credentialType` traktują typ jak konto serwisowe,
+`credential-type.cedar`), więc test z kolejką poza grantem budujesz z `service-account` jako typem domyślnym, nie `user-secret`.
+
+### 5. CI
+
+`ci/run.sh` jest jedynym punktem wejścia (`make ci`, `.gitlab-ci.yml` jako cienka nakładka): `verify` (kontrola tekstu i `mvnw verify`), `hygiene`, `release` (README, "CI"). Serwery nie muszą nic zmieniać.
 
 ## Z beta-8 na beta-9
 

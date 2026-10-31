@@ -58,8 +58,7 @@ final class GrantProbe {
     /**
      * The probe for a caller who holds no scope on the container type, for the types whose container the identifier does not name: the
      * page or the ticket in a container that no scope of the caller covers (a sentinel id, which cannot be granted because the caller has
-     * no scope of that type at all; when the call comes through a virtual server link that narrows the container type, the first id of the link, so that the
-     * narrowing, which only removes what lies outside it, does not deny the probe). A policy that denies it grants nothing without scopes (the service account of
+     * no scope of that type at all). A policy that denies it grants nothing without scopes (the service account of
      * {@code credential-type.cedar}); one that allows it (the reading of {@code read.cedar}, which follows the user's own rights in the
      * system) leaves the decision to the full check after resolution.
      */

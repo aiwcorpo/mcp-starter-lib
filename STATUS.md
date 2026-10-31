@@ -1,7 +1,22 @@
 # STATUS - mcp-starter-lib (ws-02)
 
 Linia `pl.aiwcorpo.mcp:mcp-platform*` 3.x (niezależna od wersji kontraktów). Kontrakty:
-`pl.aiwcorpo.mcp:mcp-contracts:4.1.0` od beta-7 (4.0.0 w beta-6; 3.1.0 w beta-1 ... beta-5, 2.2.5 w alpha-12 ... alpha-14, 2.1.1 od alpha-7, 2.0.2 do alpha-6).
+`pl.aiwcorpo.mcp:mcp-contracts:5.1.0` od beta-10 (4.1.0 od beta-7; 4.0.0 w beta-6; 3.1.0 w beta-1 ... beta-5, 2.2.5 w alpha-12 ... alpha-14, 2.1.1 od alpha-7, 2.0.2 do alpha-6).
+
+## M5: przejście na kontrakty 5.1.0 i wydanie 3.0.0-beta-10
+
+Wzorzec zmian: CHANGELOG kontraktów 5.0.0 i 5.1.0, "Migracja" dla ws-02 (zapisane linki, claimy `vs` / `vsc` i `context.virtualServer` / `vsScopes` usunięte; CC-173, CC-174). Kamienie (po każdym: testy, commit, ten plik):
+
+| Kamień | Zakres | Stan |
+| --- | --- | --- |
+| K1 | BOM, starter i mcp-platform-test na 5.1.0; `CallerContext` bez `virtualServer` / `virtualServerScopes`; weryfikator bez `vs` / `vsc` (token z którymkolwiek: `401 invalid_claims` ze schematu kontraktu); `Caller` bez `withVirtualServer`; `QueryConstraint(resourceType, granted)`; `QueryScope` bez zawężenia linkiem (`linkIds()` tylko po `narrowedTo`, `linkType()` usunięte); zdarzenia audytu bez `virtualServer`, bez powodu `link_scope`; `RecordingAuthorizer` usunięty; `TestGateway.Token.extraClaim` zamiast `virtualServer(...)`; test paczki z kontraktów 4.1.0 (`schema_mismatch`); wektory 5.1.0 (`jwt/` 59, `audit-events/` 115, `result-filter/` 7) | zrobione |
+| K2 | pkt E: `ci/run.sh` (`verify`, `hygiene`, `release`), `make ci`, `.gitlab-ci.yml` jako nakładka, `.ci/settings.xml` (rejestr Maven jak w mcp-policies) | w toku |
+| K3 | README, `MIGRATION-3.0.md` "Z beta-9 na beta-10", wydanie 3.0.0-beta-10 (main, czyste drzewo, tag `v3.0.0-beta-10`, potem `3.0.0-beta-11-SNAPSHOT`) | do zrobienia |
+
+Usunięte pliki: `LinkScopeTest` (CC-146c dotyczyło zawężenia linkiem, które nie istnieje). Zmienione oczekiwania: `ResourcePolicyTest`, `ExampleServerResourcesTest`, `ScopeGrantTest` bez wariantów z linkiem; `ContractVectorsOnResourcePolicyTest` nie sprawdza już `virtualServer` w `queryConstraints`
+(wektor `result-filter/servicedesk-tickets-by-grant` budowany z `service-account` jako typem domyślnym, bo wektor liczono bez `context.credentialType`, co `credential-type.cedar` traktuje jak konto serwisowe).
+
+Zostaje poza zakresem M5 w tym repo: CI na przynajmniej jednym runnerze poza lokalnym obrazem kontenera (przebieg `ci/run.sh verify` w `maven:3.9.12-eclipse-temurin-25` opisany niżej), publikacja do rejestru Maven (D12: lokalnie `~/.m2`).
 
 ## M4: przejście na kontrakty 4.0.0 i wydanie 3.0.0-beta-6
 

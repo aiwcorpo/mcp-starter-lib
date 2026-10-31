@@ -8,6 +8,7 @@ import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTranspor
 import io.modelcontextprotocol.spec.McpSchema;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
@@ -186,6 +187,23 @@ class GatewayTransportTest {
                 GATEWAY.service().mint().headers(), session);
         assertThat(list.statusCode()).isEqualTo(200);
         assertThat(list.body()).contains("probe_caller");
+    }
+
+    @Test
+    @DisplayName("a token with the removed virtual server claims vs or vsc: 401 (invalid_claims), never a call")
+    void removedVirtualServerClaims() throws Exception {
+        RawMcp raw = new RawMcp(port);
+        String session = raw.openSession(GATEWAY);
+
+        TestGateway.Minted withVs = GATEWAY.user().tool("probe_caller").extraClaim("vs", "team-a-review").mint();
+        TestGateway.Minted withVsc = GATEWAY.user().tool("probe_caller").extraClaim("vsc", Map.of()).mint();
+        TestGateway.Minted withBoth = GATEWAY.user().tool("probe_caller").extraClaim("vs", "abc-only")
+                .extraClaim("vsc", Map.of("jiraProjects", List.of("ABC"))).mint();
+        for (TestGateway.Minted token : List.of(withVs, withVsc, withBoth)) {
+            assertThat(raw.post(RawMcp.toolCall("probe_caller"), token.headers(), session).statusCode()).isEqualTo(401);
+        }
+        assertThat(raw.post(RawMcp.toolCall("probe_caller"), GATEWAY.user().tool("probe_caller").mint().headers(), session).statusCode())
+                .as("the same call without the claims").isEqualTo(200);
     }
 
     @Test

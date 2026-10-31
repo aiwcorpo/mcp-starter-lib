@@ -10,9 +10,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import org.slf4j.Logger;
@@ -221,24 +219,12 @@ public final class InternalJwtVerifier {
     private static CallerContext caller(JsonNode claims) {
         List<String> groups = new ArrayList<>();
         claims.get("grp").forEach(group -> groups.add(group.asString()));
-        Map<String, List<String>> scopes = null;
-        JsonNode vsc = claims.get("vsc");
-        if (vsc != null) {
-            scopes = new LinkedHashMap<>();
-            for (Map.Entry<String, JsonNode> field : vsc.properties()) {
-                List<String> ids = new ArrayList<>();
-                field.getValue().forEach(id -> ids.add(id.asString()));
-                scopes.put(field.getKey(), ids);
-            }
-        }
         JsonNode mfa = claims.get("mfa");
         return new CallerContext(
                 claims.get("sub").asString(),
                 text(claims, "usr"),
                 groups,
                 text(claims, "azp"),
-                text(claims, "vs"),
-                scopes,
                 text(claims, "tool"),
                 claims.get("rid").asString(),
                 claims.get("prv").asString(),

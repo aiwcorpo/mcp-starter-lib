@@ -16,7 +16,6 @@ import pl.aiwcorpo.mcp.cedar.entities.EntityBuilderException;
 import pl.aiwcorpo.mcp.cedar.entities.ResolvedResource;
 import pl.aiwcorpo.mcp.cedar.entities.ResourceIds;
 import pl.aiwcorpo.mcp.cedar.entities.ToolDescriptor;
-import pl.aiwcorpo.mcp.cedar.entities.VirtualServerScope;
 import pl.aiwcorpo.mcp.platform.auth.CallerContext;
 import pl.aiwcorpo.mcp.platform.error.InvalidToolArgumentException;
 import pl.aiwcorpo.mcp.platform.error.McpErrorMapper;
@@ -134,7 +133,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         Snapshot snapshot = snapshot();
         Caller user = user(caller);
         ToolDescriptor descriptor = descriptor(tool);
-        PolicyEngine.RecordingAuthorizer authorizer = engine.recordingAuthorizer(snapshot);
+        pl.aiwcorpo.mcp.cedar.entities.ResultFilter.Authorizer authorizer = engine.authorizer(snapshot);
 
         boolean toolAllowed;
         try {
@@ -147,10 +146,6 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
             throw unavailable("policy_error");
         }
         if (!toolAllowed) {
-            if (authorizer.lastDeniedByLinkNarrowing() && !descriptor.resourceRefs().isEmpty()) {
-                // The link narrows a resource named in an argument (vs-narrow-call-*): the same answer as for a resource that does not exist (CC-146c).
-                deny(caller, tool, null, null, null, "link_scope", snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
-            }
             deny(caller, tool, null, null, null, "policy_forbid", snapshot, ToolErrorCode.ACCESS_DENIED,
                     "You are not allowed to use this tool.");
         }
@@ -201,7 +196,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
                     "The tool could not complete the request."));
         }
         deny(caller, tool, result.deniedType().orElse(null), result.deniedId().orElse(null), null,
-                "denied".equals(reason) ? (authorizer.lastDeniedByLinkNarrowing() ? "link_scope" : "policy_forbid") : "not_granted",
+                "denied".equals(reason) ? "policy_forbid" : "not_granted",
                 snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
     }
 
@@ -226,9 +221,8 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
                     continue;
                 }
                 if (!granted) {
-                    // The policy itself refused the probe (a forbid rule, a missing permit, the narrowing of the link): C8 policy_forbid or link_scope.
-                    deny(caller, tool, ref.type(), value, null, authorizer instanceof PolicyEngine.RecordingAuthorizer recording
-                            && recording.lastDeniedByLinkNarrowing() ? "link_scope" : "policy_forbid", snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
+                    // The policy itself refused the probe (a forbid rule or a missing permit): C8 policy_forbid.
+                    deny(caller, tool, ref.type(), value, null, "policy_forbid", snapshot, ToolErrorCode.NOT_FOUND_OR_DENIED, NOT_FOUND);
                 }
             }
         }
@@ -257,11 +251,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         if (containers.stream().anyMatch(container -> !builder.queryConstraint(user, container).granted().isEmpty())) {
             return;
         }
-        String container = "ServiceDesk::Ticket".equals(type) ? "ServiceDesk::Queue" : "Confluence::Page";
-        String linkContainer = builder.queryConstraint(user, container).virtualServer().filter(ids -> !ids.isEmpty())
-                .map(ids -> ids.first()).orElse(null);
-        Optional<ResolvedResource> probe = GrantProbe.withoutScopes(type, value,
-                linkContainer != null ? linkContainer : "ServiceDesk::Ticket".equals(type) ? "0" : "NOGRANT");
+        Optional<ResolvedResource> probe = GrantProbe.withoutScopes(type, value, "ServiceDesk::Ticket".equals(type) ? "0" : "NOGRANT");
         if (probe.isEmpty()) {
             return;
         }
@@ -361,7 +351,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
 
     /**
      * Refuses the call unless the resource is allowed, for a resource the tool finds itself (the project an issue is
-     * created in, the page a link points to).
+     * created in, the page a reference points to).
      *
      * @throws SanitizedToolException {@code not_found_or_denied}
      */
@@ -423,7 +413,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
     /**
      * What a query for {@code resourceType} must be limited to (a grantable type: {@code Jira::Project},
      * {@code Confluence::Space}, {@code Confluence::Page}, {@code GitLab::Group}, {@code OpenSearch::Index},
-     * {@code ServiceDesk::Queue}). Built from the token's virtual server and the grants of its groups in the bundle.
+     * {@code ServiceDesk::Queue}). Built from the grants of the caller's groups in the bundle; narrow it to the containers named in an argument with {@link QueryScope#narrowedTo}.
      */
     public QueryScope queryScope(String resourceType) {
         ResourceContext context = ResourceContext.require();
@@ -602,15 +592,11 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         return new ToolDescriptor(serverId, system, tool, risk.name(), action, refs);
     }
 
-    /** The caller of the Cedar request, from the verified claims of the internal JWT (C2), {@code vs} and {@code vsc} included. */
+    /** The caller of the Cedar request, from the verified claims of the internal JWT (C2). */
     static Caller user(CallerContext claims) {
         Caller caller = Caller.of(claims.subject(), claims.username(), claims.groups(), claims.client());
         if (claims.mfaAge().isPresent()) {
             caller = caller.withMfaAge(claims.mfaAge().getAsLong());
-        }
-        if (claims.virtualServer() != null) {
-            caller = caller.withVirtualServer(VirtualServerScope.fromClaims(claims.virtualServer(),
-                    claims.virtualServerScopes() == null ? Map.of() : claims.virtualServerScopes()));
         }
         return caller;
     }

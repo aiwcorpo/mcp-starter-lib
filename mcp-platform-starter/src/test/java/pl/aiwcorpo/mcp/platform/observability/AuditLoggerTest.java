@@ -60,15 +60,14 @@ class AuditLoggerTest {
     }
 
     @Test
-    void aVirtualServerCallWithUnusualCharactersStaysOnOneEscapedLine() {
-        CallerContext caller = new CallerContext("sub-1", "zołta\u2028k\u0007", List.of(), "claude-code",
-                "team-a-dev", Map.of(), "get_issue", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f",
+    void aCallWithUnusualCharactersInTheUsernameStaysOnOneEscapedLine() {
+        CallerContext caller = new CallerContext("sub-1", "zołta\u2028k\u0007", List.of(), "claude-code", "get_issue", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f",
                 "20261026120000-a1b2c3d", 30L);
 
         audit.toolCall(caller, "get_issue", RiskLevel.READ_ONLY, null, "error", "internal_error", 3, 2);
 
         String line = onlyLine();
-        assertThat(line).contains("\"virtualServer\":\"team-a-dev\"");
+        assertThat(line).doesNotContain("virtualServer");
         assertThat(line.chars()).allMatch(c -> c >= 0x20 && c < 0x7f);
     }
 }

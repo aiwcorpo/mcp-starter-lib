@@ -17,8 +17,10 @@ import pl.aiwcorpo.mcp.cedar.entities.ResourceIds;
  * control.
  *
  * <ul>
- *   <li>{@link #linkIds()}: the virtual server (link) the call came through narrows this type to these ids. Always put
- *       into the query ({@link #jqlProjectClause()}, {@link #cqlSpaceClause()}). Empty = no narrowing.</li>
+ *   <li>{@link #linkIds()}: the ids a search was narrowed to with {@link #narrowedTo} (the container ids named in an argument
+ *       of the tool). Always put into the query ({@link #jqlProjectClause()}, {@link #cqlSpaceClause()}). Empty = no narrowing,
+ *       which is what a scope straight from {@link ResourcePolicy#queryScope} is: since contracts 5.0.0 the call carries no
+ *       virtual server and the token narrows nothing. The name is kept from 3.0.0-beta for source compatibility of the servers.</li>
  *   <li>{@link #grantedIds()}: what the groups of the caller grant, from the scope mapping of the bundle. A system that
  *       applies the user's own rights (Jira, Confluence, GitLab with the user's token) needs no clause for it; where it
  *       does not (OpenSearch, a service account) the query is limited to it, and <b>an empty set means the query is not
@@ -30,23 +32,32 @@ import pl.aiwcorpo.mcp.cedar.entities.ResourceIds;
 public final class QueryScope {
 
     private final String resourceType;
-    private final Optional<SortedSet<String>> linkIds;
-    private final String linkType;
+    private final Optional<SortedSet<String>> narrowing;
+    private final String narrowingType;
     private final SortedSet<String> grantedIds;
     private final boolean narrowedByArgument;
 
     private QueryScope(QueryConstraint constraint) {
         this.resourceType = constraint.resourceType();
-        this.linkIds = constraint.virtualServer();
-        this.linkType = constraint.virtualServerType();
+        this.narrowing = Optional.empty();
+        this.narrowingType = narrowingTypeOf(constraint.resourceType());
         this.grantedIds = constraint.granted();
         this.narrowedByArgument = false;
     }
 
+    /** The container type an argument narrows a scope of {@code resourceType} to: the type itself, or {@code Confluence::Space} for pages. */
+    private static String narrowingTypeOf(String resourceType) {
+        return switch (resourceType) {
+            case "Jira::Issue" -> "Jira::Project";
+            case "Confluence::Page" -> "Confluence::Space";
+            default -> resourceType;
+        };
+    }
+
     private QueryScope(QueryScope base, SortedSet<String> narrowedIds) {
         this.resourceType = base.resourceType;
-        this.linkIds = Optional.of(narrowedIds);
-        this.linkType = base.linkType;
+        this.narrowing = Optional.of(narrowedIds);
+        this.narrowingType = base.narrowingType;
         this.grantedIds = base.grantedIds;
         this.narrowedByArgument = true;
     }
@@ -54,8 +65,8 @@ public final class QueryScope {
     /**
      * The scope narrowed to the project or space ids named in an argument of the tool, for a search the model limits to a project or a space (they are not
      * fields of a condition, CC-160). The ids go into the <b>scope part</b> of the query ({@code project in (...)}, {@code space in (...)}), after the
-     * conditions in parentheses, never into them, and the narrowing can only shrink the scope: with a link the result is the intersection of the
-     * argument and the link, without one the argument itself; an empty intersection is {@link #nothingToQuery()} (an empty result, or
+     * conditions in parentheses, never into them, and the narrowing can only shrink the scope: narrowing a scope that is already narrowed gives the intersection
+     * of the two, otherwise the argument itself; an empty intersection is {@link #nothingToQuery()} (an empty result, or
      * {@link #requireQueryable()} for a fetch by id). The grants stay a clause of their own ({@code jql(fields, true)}), and with them an argument outside the
      * grants is refused as for an empty grant.
      *
@@ -72,18 +83,18 @@ public final class QueryScope {
         Objects.requireNonNull(ids, "ids");
         SortedSet<String> argument = new TreeSet<>();
         for (String id : ids) {
-            if (id == null || !ResourceIds.isValid(linkType, ResourceIds.Kind.RESOURCE, id)) {
-                throw new IllegalArgumentException("not a valid " + linkType + " identifier");
+            if (id == null || !ResourceIds.isValid(narrowingType, ResourceIds.Kind.RESOURCE, id)) {
+                throw new IllegalArgumentException("not a valid " + narrowingType + " identifier");
             }
             argument.add(id);
         }
-        if (linkIds.isPresent()) {
-            argument.retainAll(linkIds.get());
+        if (narrowing.isPresent()) {
+            argument.retainAll(narrowing.get());
         }
         return new QueryScope(this, argument);
     }
 
-    /** True for a scope made by {@link #narrowedTo}; {@link #linkIds()} are then the argument (and the link) and not the link alone. */
+    /** True for a scope made by {@link #narrowedTo}; {@link #linkIds()} are then the argument (intersected with an earlier narrowing). */
     public boolean narrowedByArgument() {
         return narrowedByArgument;
     }
@@ -97,14 +108,9 @@ public final class QueryScope {
         return resourceType;
     }
 
-    /** The ids the virtual server narrows to, or empty when the call is not narrowed for this type. */
+    /** The ids the scope was narrowed to by {@link #narrowedTo}, or empty when it is not narrowed. */
     public Optional<SortedSet<String>> linkIds() {
-        return linkIds;
-    }
-
-    /** The type of {@link #linkIds()}: the type itself, or {@code Confluence::Space} for pages. */
-    public String linkType() {
-        return linkType;
+        return narrowing;
     }
 
     /** Ids (roots of subtrees for hierarchical types) the caller's groups grant. */
@@ -133,12 +139,11 @@ public final class QueryScope {
     }
 
     /**
-     * {@code project in ("ABC", "DEF")} for the projects the link narrows to; empty when it does not. A link that
-     * narrows to no project at all cannot exist (the contracts allow 1..50 ids per field).
+     * {@code project in ("ABC", "DEF")} for the projects the scope was narrowed to by {@link #narrowedTo}; empty when it was not.
      */
     public Optional<String> jqlProjectClause() {
         requireType("Jira::Project", "Jira::Issue");
-        return linkIds.map(ids -> inList("project", ids));
+        return narrowing.map(ids -> inList("project", ids));
     }
 
     /** As {@link #jqlProjectClause()} with the granted projects too, for a service account that sees more than the user may. */
@@ -152,33 +157,29 @@ public final class QueryScope {
         }
         requireOverlapWithGrants();
         String granted = inList("project", grantedIds);
-        return Optional.of(linkIds.map(ids -> inList("project", ids) + " AND " + granted).orElse(granted));
+        return Optional.of(narrowing.map(ids -> inList("project", ids) + " AND " + granted).orElse(granted));
     }
 
-    /** {@code space in ("ENG")} for the spaces the link narrows to (pages are narrowed through their space). */
+    /** {@code space in ("ENG")} for the spaces the scope was narrowed to (pages are narrowed through their space). */
     public Optional<String> cqlSpaceClause() {
         requireType("Confluence::Space", "Confluence::Page");
-        return linkIds.map(ids -> inList("space", ids));
+        return narrowing.map(ids -> inList("space", ids));
     }
 
     /**
      * The index patterns that name the scope, as a list to join with commas, <b>for {@code GET _resolve/index/<expression>} only</b>
      * (CC-160): a search, {@code _count} or an aggregation goes to the concrete names of {@link #resolveIndexNames}, never to
      * these patterns, because {@code p-*} also matches an alias that points at the indices of another team. Each prefix {@code p}
-     * gives the pair: for each prefix {@code p} the
-     * pair {@code p} and {@code p-*}, never {@code p*} (that would reach {@code logs-team-ab} for {@code logs-team-a}).
-     * With a link that narrows, only what both the grants and the link cover is left (the longer prefix of a pair when one
-     * contains the other).
+     * gives the pair {@code p} and {@code p-*}, never {@code p*} (that would reach {@code logs-team-ab} for {@code logs-team-a}).
      *
-     * @throws IllegalStateException when there is nothing to query ({@link #grantsNothing()}, or the link and the grants do
-     *         not meet): an empty expression would make OpenSearch search every index, so the call must end with no result
+     * @throws IllegalStateException when there is nothing to query ({@link #grantsNothing()}): an empty expression would make OpenSearch search every index, so the call must end with no result
      *         instead. Check {@link #nothingToQuery()} first.
      */
     public List<String> opensearchIndexPatterns() {
         List<String> patterns = indexPatterns();
         if (patterns.isEmpty()) {
-            throw new IllegalStateException("the caller may query no index (grantsNothing or the link and the grants do not "
-                    + "meet): do not run the query; an empty index expression would search every index");
+            throw new IllegalStateException("the caller may query no index (grantsNothing()): "
+                    + "do not run the query; an empty index expression would search every index");
         }
         return patterns;
     }
@@ -193,12 +194,12 @@ public final class QueryScope {
      * (that is not an error), and the fetch of one resource by id must end with {@code not_found_or_denied}
      * ({@link #requireQueryable()}), the same answer as for a resource the user cannot see.
      *
-     * <p>For OpenSearch, no index is both granted and inside the link. For the other grantable types it is {@link #grantsNothing()}:
+     * <p>For OpenSearch, no index is granted. For the other grantable types it is {@link #grantsNothing()}:
      * ask it where the query is limited by grants (a service account, {@code includeGrants}); a system that applies the user's own
      * rights needs no grant to run the query.
      */
     public boolean nothingToQuery() {
-        if (linkIds.isPresent() && linkIds.get().isEmpty()) {
+        if (narrowing.isPresent() && narrowing.get().isEmpty()) {
             return true;
         }
         return "OpenSearch::Index".equals(resourceType) ? indexPatterns().isEmpty() : grantedIds.isEmpty();
@@ -221,7 +222,7 @@ public final class QueryScope {
     /**
      * The concrete index names an OpenSearch query may run on (CC-160): the entries of {@code indices} in the answer of
      * {@code GET _resolve/index/}{@link #opensearchIndexExpression()} whose name is a granted prefix or starts with {@code <prefix>-}
-     * (and inside the link), sorted. <b>Aliases and data streams are never included, whatever their name:</b> an alias named
+     * sorted. <b>Aliases and data streams are never included, whatever their name:</b> an alias named
      * {@code logs-team-a-all} can point at the indices of another team, and counts and aggregations over it would include them. The
      * query then goes to this list of names and never to a pattern. An empty list means there is nothing to query: return an empty
      * result without calling the system.
@@ -334,27 +335,10 @@ public final class QueryScope {
         return List.copyOf(patterns);
     }
 
-    /** The granted prefixes inside the link, without those another prefix already covers. */
+    /** The granted prefixes without those another prefix already covers. OpenSearch scopes are never narrowed by an argument. */
     private List<String> indexPrefixes() {
         requireType("OpenSearch::Index");
-        SortedSet<String> prefixes = new TreeSet<>();
-        if (linkIds.isEmpty()) {
-            prefixes.addAll(grantedIds);
-        } else {
-            for (String granted : grantedIds) {
-                for (String link : linkIds.get()) {
-                    longerIfNested(granted, link).ifPresent(prefixes::add);
-                }
-            }
-        }
-        return withoutCovered(prefixes);
-    }
-
-    private static Optional<String> longerIfNested(String a, String b) {
-        if (a.equals(b) || a.startsWith(b + "-")) {
-            return Optional.of(a);
-        }
-        return b.startsWith(a + "-") ? Optional.of(b) : Optional.empty();
+        return withoutCovered(new TreeSet<>(grantedIds));
     }
 
     private static List<String> withoutCovered(SortedSet<String> prefixes) {
@@ -386,7 +370,7 @@ public final class QueryScope {
         }
         requireOverlapWithGrants();
         String granted = inList("space", grantedIds);
-        return Optional.of(linkIds.map(ids -> inList("space", ids) + " AND " + granted).orElse(granted));
+        return Optional.of(narrowing.map(ids -> inList("space", ids) + " AND " + granted).orElse(granted));
     }
 
     /**
@@ -413,7 +397,7 @@ public final class QueryScope {
     }
 
     /**
-     * A JQL query built from structured conditions, limited to the projects of the link (and, with {@code includeGrants},
+     * A JQL query built from structured conditions, limited to the projects the scope was narrowed to (and, with {@code includeGrants},
      * to the granted ones): see {@link StructuredQuery}. The query is never taken from the model as text.
      *
      * @param fields the fields the tool lets the model put conditions on; a subset of {@link StructuredQuery#JQL_CONDITION_FIELDS}
@@ -435,7 +419,7 @@ public final class QueryScope {
                 projectClauses(includeGrants));
     }
 
-    /** A CQL query built from structured conditions, limited to the spaces of the link: see {@link StructuredQuery}. */
+    /** A CQL query built from structured conditions, limited to the spaces the scope was narrowed to: see {@link StructuredQuery}. */
     public StructuredQuery.Builder cql(Set<String> fields) {
         return cql(fields, StructuredQuery.CQL_ORDER_FIELDS);
     }
@@ -456,7 +440,7 @@ public final class QueryScope {
     private List<String> projectClauses(boolean includeGrants) {
         requireType("Jira::Project", "Jira::Issue");
         List<String> clauses = new ArrayList<>();
-        linkIds.ifPresent(ids -> clauses.add(inList("project", ids)));
+        narrowing.ifPresent(ids -> clauses.add(inList("project", ids)));
         if (includeGrants) {
             if (grantedIds.isEmpty()) {
                 throw new IllegalStateException("the caller is granted no project: do not run the query (grantsNothing())");
@@ -470,7 +454,7 @@ public final class QueryScope {
     private List<String> spaceClauses(boolean includeGrants) {
         requireType("Confluence::Space", "Confluence::Page");
         List<String> clauses = new ArrayList<>();
-        linkIds.ifPresent(ids -> clauses.add(inList("space", ids)));
+        narrowing.ifPresent(ids -> clauses.add(inList("space", ids)));
         if (includeGrants) {
             if (!"Confluence::Space".equals(resourceType)) {
                 throw new IllegalStateException("the grants of pages are page subtrees: ask for the Confluence::Space scope to limit by grants");
@@ -486,7 +470,7 @@ public final class QueryScope {
 
     /** A scope narrowed by an argument that the grants do not touch is empty for a query limited by grants. */
     private void requireOverlapWithGrants() {
-        if (narrowedByArgument && linkIds.isPresent() && java.util.Collections.disjoint(linkIds.get(), grantedIds)) {
+        if (narrowedByArgument && narrowing.isPresent() && java.util.Collections.disjoint(narrowing.get(), grantedIds)) {
             throw new IllegalStateException("the argument names nothing the caller is granted: do not run the query (nothingToQuery())");
         }
     }

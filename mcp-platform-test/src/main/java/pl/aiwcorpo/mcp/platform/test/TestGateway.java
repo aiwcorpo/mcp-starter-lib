@@ -268,8 +268,7 @@ public final class TestGateway implements AutoCloseable {
         private List<String> groups = new ArrayList<>(List.of("mcp-jira-read"));
         private String client = "claude-code";
         private String tool;
-        private String virtualServer;
-        private Map<String, List<String>> virtualServerScopes;
+        private final Map<String, Object> extraClaims = new LinkedHashMap<>();
         private Long mfa;
         private String audience;
         private String issuer = ISSUER;
@@ -310,10 +309,12 @@ public final class TestGateway implements AutoCloseable {
             return this;
         }
 
-        /** {@code vs} and {@code vsc} together; an empty map is a link without narrowing. */
-        public Token virtualServer(String slug, Map<String, List<String>> scopes) {
-            virtualServer = slug;
-            virtualServerScopes = scopes;
+        /**
+         * A claim outside the contract, for the tests of the rejection: the schema allows no other claims, so a token with one
+         * ends as {@code 401 invalid_claims}. Claims of the contract keep their own methods and win over this one.
+         */
+        public Token extraClaim(String name, Object value) {
+            extraClaims.put(name, value);
             return this;
         }
 
@@ -358,8 +359,9 @@ public final class TestGateway implements AutoCloseable {
         }
 
         public Minted mint() {
-            JWTClaimsSet.Builder claims = new JWTClaimsSet.Builder()
-                    .issuer(issuer)
+            JWTClaimsSet.Builder claims = new JWTClaimsSet.Builder();
+            extraClaims.forEach(claims::claim);
+            claims.issuer(issuer)
                     .claim("aud", audience)
                     .issueTime(Date.from(issuedAt))
                     .expirationTime(Date.from(issuedAt.plus(lifetime)))
@@ -372,9 +374,6 @@ public final class TestGateway implements AutoCloseable {
                 claims.subject(subject).claim("usr", username).claim("grp", groups).claim("azp", client);
                 if (tool != null) {
                     claims.claim("tool", tool);
-                }
-                if (virtualServer != null) {
-                    claims.claim("vs", virtualServer).claim("vsc", virtualServerScopes == null ? Map.of() : virtualServerScopes);
                 }
                 if (mfa != null) {
                     claims.claim("mfa", mfa);

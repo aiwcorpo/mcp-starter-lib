@@ -39,7 +39,7 @@ class InternalJwtVectorsTest {
     private static final String ROOT = "mcp-contracts/test-vectors/";
 
     /** Files in test-vectors/jwt of mcp-contracts 3.0.2. */
-    private static final int EXPECTED_VECTORS = 60;
+    private static final int EXPECTED_VECTORS = 59;
 
     record Vector(String name, JsonNode data) {
         @Override
@@ -104,8 +104,6 @@ class InternalJwtVectorsTest {
             assertThat(caller.requestId()).isEqualTo(claims.get("rid").asString());
             assertThat(caller.policyRevision()).isEqualTo(claims.get("prv").asString());
             assertThat(caller.tool()).isEqualTo(claims.has("tool") ? claims.get("tool").asString() : null);
-            assertThat(caller.virtualServer()).isEqualTo(claims.has("vs") ? claims.get("vs").asString() : null);
-            assertThat(caller.virtualServerScopes() != null).isEqualTo(claims.has("vsc"));
             assertThat(expected.get("httpStatus").asInt()).isEqualTo(200);
         } else {
             assertThatThrownBy(() -> verifier.verify(token, binding))

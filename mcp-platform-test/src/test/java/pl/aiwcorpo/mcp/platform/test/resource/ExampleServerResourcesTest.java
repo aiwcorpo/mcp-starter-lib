@@ -20,7 +20,7 @@ import pl.aiwcorpo.mcp.platform.test.TestGateway;
 
 /**
  * The template's scenario on a server that is none of the five systems ({@code mcp-example}): a read that is allowed, a
- * restricted resource that is refused, a link that narrows the result, an update only inside the granted scope. The
+ * restricted resource that is refused, a search whose result is filtered, an update only inside the granted scope. The
  * resources are the fake Jira's; the groups are the server's own ({@code mcp-example-*}).
  */
 @SpringBootTest(classes = JiraServer.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -60,19 +60,13 @@ class ExampleServerResourcesTest {
     }
 
     @Test
-    void aReadIsAllowedARestrictedResourceIsRefusedAndALinkNarrows() {
+    void aReadIsAllowedARestrictedResourceIsRefusedAndASearchIsFiltered() {
         try (McpSyncClient client = client(user -> user.groups(List.of("mcp-example-read")))) {
             assertThat(text(call(client, "get_issue", Map.of("issueKey", "ABC-1")))).contains("ABC-1");
             assertThat(text(call(client, "get_issue", Map.of("issueKey", "HR-5")))).contains("not_found_or_denied");
             assertThat(text(call(client, "get_issue", Map.of("issueKey", "ABC-123")))).contains("not_found_or_denied");
             assertThat(text(call(client, "search_issues", Map.of("projectKeys", List.of("ABC")))))
                     .contains("ABC-1", "DEF-7").doesNotContain("HR-5");
-        }
-        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-example-read"))
-                .virtualServer("abc-only", Map.of("jiraProjects", List.of("ABC"))))) {
-            assertThat(text(call(client, "search_issues", Map.of("projectKeys", List.of("ABC")))))
-                    .contains("ABC-1").doesNotContain("DEF-7").doesNotContain("HR-5");
-            assertThat(text(call(client, "get_issue", Map.of("issueKey", "DEF-7")))).contains("not_found_or_denied");
         }
     }
 

@@ -5,7 +5,7 @@ gateway'em: nie loguje użytkowników, nie decyduje o uprawnieniach do narzędzi
 robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadczenie do systemu docelowego,
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
-Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 4.1.0.
+Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 5.1.0.
 Wersja: **3.0.0-beta-9** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
@@ -33,7 +33,7 @@ gateway --mTLS + JWT C2 + X-MCP-Credential--> SecurityHeadersFilter
 **`InternalJwtFilter` (C2).** Przepuszcza tylko żądanie z certyfikatem klienta o CN `mcp-gateway` i poprawnym
 wewnętrznym JWT: ES256, `kid` z JWKS gateway'a, `iss`, `aud` == `server-id`, `exp`/`iat` z tolerancją do 30 s,
 `exp - iat` do 60 s, claimy zgodne z `schemas/internal-jwt.schema.json` (walidowane schematem z jara kontraktów,
-także wzorce `vsc` i `vs` razem z `vsc`), `jti` użyty pierwszy raz (Redis), `rid` == `X-Request-Id`, `tool`
+claimy `vs` i `vsc` już nie istnieją: token z którymkolwiek z nich to `401 invalid_claims`), `jti` użyty pierwszy raz (Redis), `rid` == `X-Request-Id`, `tool`
 obecny dokładnie przy `tools/call` i równy `params.name`, wariant serwisowy tylko dla `initialize`,
 `server/discover`, `tools/list`, `ping` i `GET /mcp-manifest`. Klucze z identyfikatorem `test-*` i opublikowane klucze testowe
 (rozpoznawane po SPKI z `mcp-contracts/security/published-test-keys.json`) są odrzucane, chyba że
@@ -52,9 +52,9 @@ znormalizowaną przez kontener i tylko wtedy, gdy surowe URI jest dokładnie tą
 `\` albo `//` zawsze przechodzi pełną weryfikację. Wzorców (`/**`) nie da się skonfigurować.
 
 **`CallerContext`.** Zweryfikowane claimy bieżącego żądania: `subject`, `username`, `groups`, `client`,
-`virtualServer`, `virtualServerScopes` (`vsc`), `tool`, `requestId`, `policyRevision`, `mfaAgeSeconds`.
+`tool`, `requestId`, `policyRevision`, `mfaAgeSeconds`.
 `CallerContext.current()` na wątku żądania. Pola odpowiadają wejściu entity buildera Cedar z
-`mcp-cedar-entities`; z niego `ResourcePolicy` buduje wywołującego (`vs` i `vsc` z JWT trafiają do `context.vsScopes`).
+`mcp-cedar-entities`; z niego `ResourcePolicy` buduje wywołującego (`Caller` nie ma już składnika `virtualServer`).
 
 **`CredentialContext` (C3).** Poświadczenie do systemu docelowego, wstrzyknięte przez gateway:
 
@@ -572,7 +572,7 @@ wywołaniem resolvera, przed budową encji z danych systemu i przed odczytem kla
 identyfikatora argumentu (i jego kontenera, który identyfikator nazywa: projekt klucza zgłoszenia, grupa ścieżki GitLaba) z najmniej restrykcyjną
 klasyfikacją (`category: ""`, puste `labels` i `tags`). Odmowa sondy to `not_found_or_denied` bez wywołania systemu; zgoda przepuszcza do pełnej
 oceny po rozwiązaniu. Dzięki temu wywołujący bez grantu na typ nie dostaje `internal_error` (brak wymaganej klasyfikacji) ani `upstream_unavailable` z
-resolvera, które zdradziłyby istnienie zasobu. W audycie odmowa sondy ma powód `policy_forbid` (odmówiła polityka: `forbid`, brak `permit` albo zawężenie linku).
+resolvera, które zdradziłyby istnienie zasobu. W audycie odmowa sondy ma powód `policy_forbid` (odmówiła polityka: `forbid`, albo brak `permit`).
 **Ograniczenie sondy:** zakłada, że polityka jest monotoniczna w klasyfikacji, czyli klasyfikacja tylko zawęża (reguły `forbid`, jak w przykładach kontraktów). Reguła, która przyznaje
 dostęp dopiero przy wybranej klasyfikacji (`permit ... when resource.category == "public"`), odrzuciłaby sondę z `category: ""` mimo grantu; i odwrotnie, sonda z kontenera z identyfikatora
 odmówi zgłoszenia przeniesionego do projektu, na który użytkownik ma grant, a na stary projekt klucza nie ma. W obu przypadkach odmowa jest bezpieczna (fail-closed), ale nieprecyzyjna.
@@ -582,8 +582,8 @@ oceniany przez politykę na stronie albo zgłoszeniu w kontenerze, którego żad
 `not_found_or_denied` przed resolverem, a zgoda (odczyt z `read.cedar` według praw użytkownika w systemie, wektor `srv-servicedesk-user-secret-not-restricted-by-grants`) przepuszcza do pełnej oceny.
 Zasób, który system zwrócił poza zakresami wywołującego i którego nie da się ocenić (brak klasyfikacji, zły identyfikator, brak kontenera), daje `not_found_or_denied` zamiast `internal_error`.
 Przy koncie serwisowym błąd resolvera dla strony albo zgłoszenia też wygląda jak brak zasobu (z wyjątkiem braku poświadczenia); przy poświadczeniu użytkownika zostaje `upstream_unavailable`, bo
-system sam ogranicza to, co użytkownik widzi. Zasób z argumentu poza zakresem linku (reguły `vs-narrow-*` z `virtual-server.cedar`, także `vs-narrow-call-*` na poziomie narzędzia) to `not_found_or_denied` z tym samym tekstem co brak
-zasobu (CC-146c), nie `access_denied`; powód w audycie zostaje `link_scope`. Rozpoznanie opiera się na identyfikatorach reguł rozstrzygających (prefiks `vs-narrow-`): paczka polityk musi je zachować. Wektory `servicedesk-service-account/`
+system sam ogranicza to, co użytkownik widzi. Zawężenia przez zapisany link już nie ma (kontrakty 5.0.0 usunęły `/v/`, `vs`, `vsc` i `virtual-server.cedar`), więc audyt nie ma powodu `link_scope`;
+filtr w adresie `/mcp?...` zawęża listę narzędzi w gatewayu i nie dociera do serwera. Wektory `servicedesk-service-account/`
 przechodzą na `authorizeCall` (`ServiceDeskVectorsTest`).
 
 ### `@ResourceRef` i `ResourceResolver`
@@ -613,7 +613,7 @@ public IssueView getIssue(@ArgumentLimits(maxLength = 16, contractPattern = "Jir
 
 Przed uruchomieniem narzędzia starter, w tej kolejności i z jednej paczki:
 
-1. `Action::"call"` na narzędziu, zbudowane z claimów tokenu (`sub`, `grp`, `azp`, `mfa`, `vs` i `vsc`) i argumentów tak
+1. `Action::"call"` na narzędziu, zbudowane z claimów tokenu (`sub`, `grp`, `azp` i `mfa`) i argumentów tak
    jak robi to gateway. Odmowa: `access_denied`, zdarzenie `policy_decision` w audycie.
 2. Dla argumentów z `@ResourceRef` **każda wartość każdego argumentu** (każdy element listy; źródło i cel transferu) jest
    rozwiązywana przez resolver i oceniana akcją narzędzia (`read`, `update`, `delete`, `admin`) na zasobie takim, jakim
@@ -689,7 +689,7 @@ Model **nie podaje tekstu zapytania**. JQL i CQL budujesz z ustrukturyzowanych w
 wartość nie zamknie cudzysłowu ani nawiasu, nie wywoła funkcji (`currentUser()`), nie doda `OR project = HR`.
 
 ```java
-QueryScope scope = policy.queryScope("Jira::Project");     // zakres z tokenu (link vsc) i grup z paczki
+QueryScope scope = policy.queryScope("Jira::Project");     // zakres z grup z paczki
 String jql = scope.jql(Set.of("status", "assignee", "text"))   // pola warunków: podzbiór listy z kontraktu
         .where("status", Operator.EQUALS, filter.status())        // null = warunek pominięty
         .where("text", Operator.CONTAINS, filter.text())
@@ -706,22 +706,22 @@ String jql = scope.jql(Set.of("status", "assignee", "text"))   // pola warunków
   kontraktu (`query-rendering.mjs`; decyzja koordynatora). Nie poszerza to zakresu: literał kończy tylko nieescapowany `"`, a `\` i `"` są escapowane, więc składnia Lucene działa wyłącznie wewnątrz
   warunku `text ~ "..."`, który jest koniunkcją z zakresem (`project in (...)`, `space in (...)`) i z uprawnieniami użytkownika w systemie. Zmienia się tylko semantyka wyszukiwania
   (`*` i `?` jako wildcard, `foo-bar` jako wykluczenie, `x~` jako fuzzy); gdy kontrakt tego zażąda, escapowanie dojdzie z nową wersją odniesienia;
-- `scope.cql(Set.of("title", "label", ...))` dla Confluence (zawężenie do przestrzeni linku); `scope.jql(fields, true)` i
+- `scope.cql(Set.of("title", "label", ...))` dla Confluence; `scope.jql(fields, true)` i
   `scope.cql(fields, true)` (typ `Confluence::Space`) dodają zakresy z grup (konto serwisowe; rzucają, gdy grup brak: pusty zakres to brak zapytania, nigdy zapytanie bez filtra);
 - **Zawężenie do projektu albo przestrzeni z argumentu:** `project` i `space` nie są polami warunku (listy normatywne), a serwer nie powinien pobierać 100 wyników, żeby oddać 25.
   `scope.narrowedTo(ids)` (Jira: klucze projektów, Confluence: klucze przestrzeni; ids z argumentu będącego `@ResourceRef` typu kontenera, który polityka oceniła przed narzędziem) zwraca zakres
-  będący **przecięciem argumentu z linkiem** (bez linku: argumentem), renderowany w części zakresu zapytania po warunkach (`(text ~ "x") AND project in ("DEF")`), nie jako warunek. Zawężenie
-  tylko zmniejsza zakres: id spoza linku odpada, puste przecięcie to `nothingToQuery()` (pusty wynik albo `requireQueryable()` przy pobraniu po id), a przy zapytaniu ograniczanym grantami
+  będący argumentem (przecięty z wcześniejszym zawężeniem, jeśli zakres już był zawężony), renderowany w części zakresu zapytania po warunkach (`(text ~ "x") AND project in ("DEF")`), nie jako warunek. Zawężenie
+  tylko zmniejsza zakres: id spoza wcześniejszego zawężenia odpada, puste przecięcie to `nothingToQuery()` (pusty wynik albo `requireQueryable()` przy pobraniu po id), a przy zapytaniu ograniczanym grantami
   (`jql(fields, true)`) argument bez wspólnych elementów z grantami to wyjątek, jak pusty grant. Identyfikator spoza wzorca kontraktu to `IllegalArgumentException`, nigdy tekst zapytania. Mieści się w
   kontrakcie `query-rendering`: to lista zakresu renderowana jak `scope` odniesienia (grupa warunków w nawiasie, potem `AND project in (...)`), nie nowe pole ani operator.
 - `jqlProjectClause()`, `cqlSpaceClause()` zostają jako gotowe fragmenty (identyfikatory cytowane przez `QueryScope.quote`, który odrzuca znaki sterujące);
-- **Zakres wyklucza wszystko (CC-147):** `scope.nothingToQuery()` (OpenSearch: żaden indeks nie jest jednocześnie przyznany i w linku; pozostałe typy: brak grantów, dla zapytań
+- **Zakres wyklucza wszystko (CC-147):** `scope.nothingToQuery()` (OpenSearch: żaden indeks nie jest przyznany; pozostałe typy: brak grantów, dla zapytań
   ograniczanych grantami) znaczy: wyszukiwanie i lista zwracają **pusty wynik bez wywołania systemu** (to nie błąd), a pobranie jednego zasobu po id woła
   `scope.requireQueryable()`, które kończy się `not_found_or_denied`, tak samo jak dla zasobu, którego użytkownik nie widzi;
 - **OpenSearch (CC-160): nazwy, nie wzorce.** `scope.opensearchIndexExpression()` (pary `p` i `p-*`, nigdy `p*`) służy **wyłącznie** do `GET _resolve/index/<wyrażenie>`; wyszukiwanie,
   `_count` i agregacje idą do **listy konkretnych nazw**, bo wzorzec `p-*` obejmuje też alias o takiej nazwie, który może wskazywać indeksy innych zespołów.
   `scope.resolveIndexNames(odpowiedź)` bierze z odpowiedzi tylko wpisy `indices` (aliasy i strumienie danych nigdy, jakąkolwiek mają nazwę), zostawia nazwy równe prefiksowi
-  albo zaczynające się od `<prefiks>-` (w obrębie linku) i zwraca je posortowane; pusta lista znaczy: nie wykonuj zapytania. Indeks podany jako argument:
+  albo zaczynające się od `<prefiks>-` i zwraca je posortowane; pusta lista znaczy: nie wykonuj zapytania. Indeks podany jako argument:
   `scope.resolveIndexArgument(argument, odpowiedź)` rzuca `invalid_argument` dla wzorca, listy po przecinku, `_all` i nazwy z kropką na początku (przed jakimkolwiek wywołaniem systemu), a
   `not_found_or_denied` dla aliasu, strumienia, indeksu poza zakresem i nazwy nieznanej systemowi. Do żądań dodaj `QueryScope.OPENSEARCH_SEARCH_PARAMETERS`
   (`expand_wildcards=open`, `ignore_unavailable=true`, `allow_no_indices=true`). Między rozwiązaniem a zapytaniem jest krótkie okno (administrator mógłby zamienić indeks na alias o tej samej nazwie):
@@ -731,7 +731,7 @@ String jql = scope.jql(Set.of("status", "assignee", "text"))   // pola warunków
   `QueryScope.OPENSEARCH_RESOLVE_PARAMETERS` (`expand_wildcards=open`, `ignore_unavailable=true`, `allow_no_indices=true`): bez `ignore_unavailable` brak indeksu o nazwie samego prefiksu (układ z
   samymi `p-2026.10`) kończy całe żądanie 404 `index_not_found_exception`. Odpowiedź 404 mimo to traktuj jak `QueryScope.EMPTY_RESOLVE_RESPONSE` (zabezpieczenie; zachowanie na żywym klastrze do potwierdzenia: ws-01). `QueryScope.requireNoAliases` jest przestarzałe (zapytanie do nazw nie wymaga odmowy). Dzięki temu `aggregate_logs` może wrócić po wdrożeniu tego
   w serwerze OpenSearch (reguła wyłączająca w paczce polityk znika dopiero wtedy). DSL zapytania OpenSearch buduj po stronie serwera, nie przyjmuj go od modelu;
-- gdzie system sam stosuje prawa użytkownika (Jira, Confluence, GitLab z jego tokenem), wystarczy zawężenie linku; gdzie nie
+- gdzie system sam stosuje prawa użytkownika (Jira, Confluence, GitLab z jego tokenem), wystarczy zawężenie z argumentu (`narrowedTo`); gdzie nie
   (OpenSearch, konto serwisowe) zapytanie ogranicza się do `grantedIds()`, a puste `grantsNothing()` znaczy: nie wykonuj zapytania.
   Ograniczenie zapytania nie zastępuje filtrowania wyniku.
 
@@ -913,7 +913,7 @@ class JiraToolsTest {
 
 - ustawia nowy wewnętrzny JWT (`Authorization: Bearer ...`, podpisany testowym kluczem A z kontraktów) i
   pasujący `X-Request-Id`; przy `tools/call` z `tool` równym `params.name`. Pierwszy argument zmienia claimy
-  użytkownika (`username`, `groups`, `virtualServer`, `mfaAgeSeconds`, ...);
+  użytkownika (`username`, `groups`, `mfaAgeSeconds`, ...); `extraClaim(nazwa, wartość)` dodaje claim spoza kontraktu (do testu odrzucenia: token z `vs` to 401);
 - drugi argument to **poświadczenie do systemu docelowego (C3)**, nie token do serwera: trafia dosłownie do
   `X-MCP-Credential` w formacie `<scheme> <value>` (scheme: `Bearer`, `Basic`, `Token`, `ApiKey`), a
   `X-MCP-Credential-Type` dostaje `user-secret` (inny typ: trzeci argument,
@@ -942,6 +942,20 @@ Przykładowe polityki wymagają w tokenie testowym grupy (`user.groups(List.of("
 export JAVA_HOME=/opt/homebrew/Cellar/openjdk@25/25.0.4.1/libexec/openjdk.jdk/Contents/Home
 ./mvnw install          # wymaga Dockera (Testcontainers: Redis z ACL jak w mcp-platform-dev)
 ```
+
+### CI
+
+Jeden punkt wejścia: `ci/run.sh` (`make ci` woła `ci/run.sh verify`). Ten sam skrypt działa w powłoce programisty i w obrazie
+`maven:3.9.12-eclipse-temurin-25`; `.gitlab-ci.yml` jest cienką nakładką, a Jenkinsfile i workflow GitHub Actions powinny wołać tylko ten skrypt.
+
+| Polecenie | Co robi |
+|---|---|
+| `ci/run.sh verify` (domyślnie) | kontrola tekstu źródeł (cudzysłowy i spacje spoza ASCII, ślady narzędzi), potem `mvnw verify` |
+| `ci/run.sh hygiene` | tylko kontrola tekstu |
+| `ci/run.sh release` | `verify` i `install` do lokalnego repozytorium Maven; odmawia dla `-SNAPSHOT`, dla wersji już zainstalowanej i dla HEAD bez tagu `v<wersja>` |
+
+Artefakty `mcp-contracts` 5.1.0 muszą być w `~/.m2` albo w rejestrze wskazanym przez `MCP_MAVEN_REPOSITORY_URL` (`_USER`, `_PASSWORD`; `.ci/settings.xml`).
+`RedisJtiReplayStoreTest` uruchamia Redisa przez Testcontainers, więc potrzebny jest dostęp do środowiska kontenerów (gniazdo Dockera zamontowane w kontenerze CI albo `DOCKER_HOST`).
 
 Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera to
 `spring-boot-starter-parent` 4.1.0:

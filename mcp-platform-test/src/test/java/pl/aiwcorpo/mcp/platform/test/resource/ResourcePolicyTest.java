@@ -22,8 +22,7 @@ import pl.aiwcorpo.mcp.platform.test.TestGateway;
 /**
  * The resource checks over the real transport, with the example policies of the contracts as the signed bundle: every
  * value of every resource argument is evaluated (S1), a resource without its classification is refused (S2), what is
- * not there and what is not allowed look the same, a system that is down is not a denial, results are filtered, and the
- * virtual server narrowing (vsc) of the token is applied.
+ * not there and what is not allowed look the same, a system that is down is not a denial, and results are filtered.
  */
 @SpringBootTest(classes = JiraServer.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("dev")
@@ -247,14 +246,13 @@ class ResourcePolicyTest {
         ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> lines = new ch.qos.logback.core.read.ListAppender<>();
         lines.start();
         audit.addAppender(lines);
-        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read"))
-                .virtualServer("abc-only", Map.of("jiraProjects", List.of("ABC"))))) {
+        try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
             call(client, "search_issues", Map.of("projectKeys", List.of("ABC")));
 
             List<String> events = pl.aiwcorpo.mcp.platform.test.CapturedLogs.snapshot(lines).stream()
                     .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage).toList();
             assertThat(events).anySatisfy(event -> assertThat(event).contains("\"event\":\"policy_decision\"")
-                    .contains("\"decision\":\"deny\"").contains("\"id\":\"DEF-7\"").contains("\"errorCode\":\"not_found_or_denied\""));
+                    .contains("\"decision\":\"deny\"").contains("\"id\":\"HR-5\"").contains("\"errorCode\":\"not_found_or_denied\""));
             assertThat(events).noneSatisfy(event -> assertThat(event).contains("test-jira-pat"));
         } finally {
             audit.detachAppender(lines);
@@ -287,47 +285,22 @@ class ResourcePolicyTest {
 
     @Test
     void aGenericPageIsFilteredLikeAnyOtherResultShape() {
-        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read"))
-                .virtualServer("abc-only", Map.of("jiraProjects", List.of("ABC"))))) {
+        try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
             McpSchema.CallToolResult result = call(client, "search_page", Map.of("projectKeys", List.of("ABC")));
 
             assertThat(result.isError()).isNotEqualTo(true);
-            assertThat(text(result)).contains("ABC-1").doesNotContain("DEF-7").doesNotContain("HR-5");
+            assertThat(text(result)).contains("ABC-1", "DEF-7").doesNotContain("HR-5");
         }
     }
 
     @Test
-    void anIssueOfAnotherProjectLinkedInTheSearchIsRemovedWhenTheVirtualServerNarrowsToAbc() {
-        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read"))
-                .virtualServer("abc-only", Map.of("jiraProjects", List.of("ABC"))))) {
-            McpSchema.CallToolResult result = call(client, "search_issues", Map.of("projectKeys", List.of("ABC")));
-
-            assertThat(result.isError()).isNotEqualTo(true);
-            assertThat(text(result)).contains("ABC-1", "ABC-2").doesNotContain("DEF-7").doesNotContain("HR-5");
-        }
-    }
-
-    @Test
-    void theVirtualServerNarrowingAlsoDeniesAnArgumentOutsideTheLink() {
-        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read"))
-                .virtualServer("abc-only", Map.of("jiraProjects", List.of("ABC"))))) {
-            assertThat(text(call(client, "get_issue", Map.of("issueKey", "ABC-1")))).contains("ABC-1");
-            assertThat(text(call(client, "get_issue", Map.of("issueKey", "DEF-7")))).contains("not_found_or_denied");
-            assertThat(text(call(client, "search_issues", Map.of("projectKeys", List.of("DEF"))))).contains("not_found_or_denied");
-        }
-    }
-
-    @Test
-    void theQueryIsBuiltByTheServerAndLimitedToTheProjectsOfTheLink() throws Exception {
-        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read"))
-                .virtualServer("two", Map.of("jiraProjects", List.of("ABC", "DEF"))))) {
+    void theQueryIsBuiltByTheServerAndHostileValuesStayInsideOneLiteral() throws Exception {
+        try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
             assertThat(JSON.readTree(text(call(client, "find_issues", Map.of("filter", Map.of("status", "Open"))))).asString())
-                    .isEqualTo("(status = \"Open\") AND project in (\"ABC\", \"DEF\") ORDER BY updated DESC");
+                    .isEqualTo("(status = \"Open\") ORDER BY updated DESC");
             String hostile = "x\\\" ) OR project = HR OR ( text ~ \"y";
             String built = JSON.readTree(text(call(client, "find_issues", Map.of("filter", Map.of("status", hostile))))).asString();
-            assertThat(built).startsWith("(status = \"x\\\\\\\" ) OR project = HR OR ( text ~ \\\"y\") AND project in (\"ABC\", \"DEF\")");
-        }
-        try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
+            assertThat(built).isEqualTo("(status = \"x\\\\\\\" ) OR project = HR OR ( text ~ \\\"y\") ORDER BY updated DESC");
             assertThat(JSON.readTree(text(call(client, "find_issues", Map.of("filter", Map.of("text", "a*"))))).asString())
                     .isEqualTo("(text ~ \"a*\") ORDER BY updated DESC");
         }

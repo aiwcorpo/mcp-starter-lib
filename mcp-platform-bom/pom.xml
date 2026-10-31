@@ -4,7 +4,7 @@
   the platform, Spring AI or mcp-contracts versions themselves.
 
   Spring Boot's own version comes from each server's <parent> (spring-boot-starter-parent) and must be
-  the one the starter is built against (4.1.0, see mcp-platform-starter/pom.xml).
+  the one the starter is built against (5.1.0, see mcp-platform-starter/pom.xml).
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -21,7 +21,7 @@
 
     <properties>
         <spring-ai.version>2.0.0</spring-ai.version>
-        <mcp-contracts.version>4.1.0</mcp-contracts.version>
+        <mcp-contracts.version>5.1.0</mcp-contracts.version>
     </properties>
 
     <dependencyManagement>

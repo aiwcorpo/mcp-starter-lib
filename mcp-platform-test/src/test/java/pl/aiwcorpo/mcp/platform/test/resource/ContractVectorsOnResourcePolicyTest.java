@@ -55,7 +55,7 @@ class ContractVectorsOnResourcePolicyTest {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final int RESOURCE_CHECKS = 4;
-    private static final int RESULT_FILTERS = 8;
+    private static final int RESULT_FILTERS = 7;
 
     private static TestGateway gateway;
     private static PolicyEngine engine;
@@ -145,10 +145,7 @@ class ContractVectorsOnResourcePolicyTest {
             for (String type : constraints.propertyNames()) {
                 QueryScope scope = fixture.policy.queryScope(type);
                 JsonNode expected = constraints.get(type);
-                assertThat(scope.linkType()).as(type).isEqualTo(expected.get("virtualServerType").asString());
-                assertThat(scope.linkIds().map(List::copyOf)).as(type + " link")
-                        .isEqualTo(expected.get("virtualServer").isNull() ? Optional.empty()
-                                : Optional.of(stringList(expected.get("virtualServer"))));
+                assertThat(scope.linkIds()).as(type + " narrowing").isEmpty();
                 assertThat(List.copyOf(scope.grantedIds())).as(type + " granted").isEqualTo(stringList(expected.get("granted")));
             }
         }
@@ -186,7 +183,15 @@ class ContractVectorsOnResourcePolicyTest {
             List<ResourceResolver<?>> resolvers = new ArrayList<>();
             resources.values().stream().map(ResolvedResource::type).distinct().forEach(type -> resolvers.add(new Resolver(type)));
             policy = new ResourcePolicy(engine, new ResourceResolvers(resolvers), registry,
-                    new AuditLogger("test.vectors.audit", serverId), serverId, system, List.of("user-secret"), 200);
+                    new AuditLogger("test.vectors.audit", serverId), serverId, system, credentialTypes(system), 200);
+        }
+
+        /**
+         * The vectors run the example policies without a credential type, which {@code credential-type.cedar} treats like the service account of
+         * the service desk (the default type of that server); the other systems apply the user's own rights.
+         */
+        private static List<String> credentialTypes(String system) {
+            return "servicedesk".equals(system) ? List.of("service-account") : List.of("user-secret");
         }
 
         ResolvedResource resource(JsonNode item) {
@@ -195,11 +200,8 @@ class ContractVectorsOnResourcePolicyTest {
 
         ResourceContext open(JsonNode input) {
             JsonNode caller = input.get("caller");
-            Map<String, List<String>> vsc = caller.has("vsc")
-                    ? JSON.convertValue(caller.get("vsc"), new TypeReference<Map<String, List<String>>>() { }) : null;
             CallerContext claims = new CallerContext(caller.get("sub").asString(), caller.get("usr").asString(),
-                    stringList(caller.get("grp")), caller.get("azp").asString(), caller.has("vs") ? caller.get("vs").asString() : null,
-                    vsc, toolName, "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", "00000000000000-0000000", null);
+                    stringList(caller.get("grp")), caller.get("azp").asString(), toolName, "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", "00000000000000-0000000", null);
             Map<String, Object> arguments = JSON.convertValue(input.get("arguments"), new TypeReference<Map<String, Object>>() { });
             return ResourceContext.open(claims, toolName, arguments);
         }

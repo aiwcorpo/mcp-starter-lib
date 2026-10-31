@@ -175,9 +175,6 @@ public class AuditLogger {
             if (caller.client() != null) {
                 event.put("client", caller.client());
             }
-            if (caller.virtualServer() != null) {
-                event.put("virtualServer", caller.virtualServer());
-            }
         }
         return event;
     }

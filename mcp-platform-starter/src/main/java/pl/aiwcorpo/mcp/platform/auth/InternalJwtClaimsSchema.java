@@ -10,7 +10,7 @@ import tools.jackson.databind.JsonNode;
 
 /**
  * {@code schemas/internal-jwt.schema.json} from the mcp-contracts jar on the classpath: required claims per
- * variant, no unknown claims, {@code vs} with {@code vsc}, identifier patterns of {@code vsc} per system,
+ * variant, no unknown claims (a token with {@code vs} or {@code vsc} is {@code invalid_claims}), identifier patterns,
  * {@code sub} of the user variant not starting with {@code system:}. The verifier checks against the
  * contract itself rather than a hand-made copy of its rules.
  */

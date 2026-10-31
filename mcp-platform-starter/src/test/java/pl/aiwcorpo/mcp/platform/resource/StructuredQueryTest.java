@@ -27,8 +27,8 @@ class StructuredQueryTest {
     private static final Set<String> FIELDS = Set.of("status", "assignee", "summary", "text");
 
     private static QueryScope scope(Set<String> link) {
-        return QueryScope.of(new QueryConstraint("Jira::Project", link == null ? Optional.empty() : Optional.of(new TreeSet<>(link)),
-                "Jira::Project", new TreeSet<>(Set.of("ABC"))));
+        QueryScope scope = QueryScope.of(new QueryConstraint("Jira::Project", new TreeSet<>(Set.of("ABC"))));
+        return link == null ? scope : scope.narrowedTo(link);
     }
 
     /** Tokens outside string literals, with each literal as one token starting with a double quote. Backslash escapes anywhere. */
@@ -111,23 +111,22 @@ class StructuredQueryTest {
 
     @Test
     void cqlGetsTheSpaceClauseAfterTheConditions() {
-        QueryScope spaces = QueryScope.of(new QueryConstraint("Confluence::Page", Optional.of(new TreeSet<>(Set.of("ENG"))),
-                "Confluence::Space", new TreeSet<>()));
+        QueryScope spaces = QueryScope.of(new QueryConstraint("Confluence::Page", new TreeSet<>())).narrowedTo(Set.of("ENG"));
 
         assertThat(spaces.cql(Set.of("title", "label")).where("title", Operator.CONTAINS, "plan").orderBy("lastmodified", Direction.ASC).build())
                 .isEqualTo("(title ~ \"plan\") AND space in (\"ENG\") ORDER BY lastmodified ASC");
     }
 
     @Test
-    void grantsAndLinkAreTwoClausesAfterTheConditions() {
-        QueryScope both = QueryScope.of(new QueryConstraint("Jira::Project", Optional.of(new TreeSet<>(Set.of("ABC", "DEF"))),
-                "Jira::Project", new TreeSet<>(Set.of("ABC"))));
+    void grantsAndNarrowingAreTwoClausesAfterTheConditions() {
+        QueryScope both = QueryScope.of(new QueryConstraint("Jira::Project", new TreeSet<>(Set.of("ABC"))))
+                .narrowedTo(Set.of("ABC", "DEF"));
 
         assertThat(both.jql(FIELDS, true).where("status", Operator.EQUALS, "Open").build())
                 .isEqualTo("(status = \"Open\") AND project in (\"ABC\", \"DEF\") AND project in (\"ABC\")");
     }
 
-    /** The review's payload and its relatives, as a value of every operator, in the link-narrowed scope. */
+    /** The review's payload and its relatives, as a value of every operator, in a narrowed scope. */
     @ParameterizedTest
     @ValueSource(strings = {
             "summary ~ a\\\" ) OR project = HR OR ( summary ~ \"b\\\" \"",
@@ -158,8 +157,7 @@ class StructuredQueryTest {
     @ValueSource(strings = {"x\\\" ) OR space = SECRET OR ( title ~ \"y", "\\", "\"", "\" OR space = SECRET OR \"", ") OR (",
             "order by title", "currentUser()", "-- c", "/* c */", "\u00e9\u0301", "*"})
     void aCqlValueIsAlwaysOneStringLiteralToo(String hostile) {
-        QueryScope spaces = QueryScope.of(new QueryConstraint("Confluence::Space", Optional.of(new TreeSet<>(Set.of("ENG"))),
-                "Confluence::Space", new TreeSet<>(Set.of("ENG"))));
+        QueryScope spaces = QueryScope.of(new QueryConstraint("Confluence::Space", new TreeSet<>(Set.of("ENG")))).narrowedTo(Set.of("ENG"));
         for (Operator operator : Operator.values()) {
             String query = spaces.cql(Set.of("title")).where("title", operator, hostile).build();
             List<String> tokens = lex(query);

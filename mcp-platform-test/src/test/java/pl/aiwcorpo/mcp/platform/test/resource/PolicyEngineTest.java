@@ -149,6 +149,33 @@ class PolicyEngineTest {
         assertThat(rejected("schema_mismatch")).isGreaterThanOrEqualTo(1.0);
     }
 
+    /** The bundle of the contracts 4.1.0 for revision B: it still has the virtual server rules and the schema with vsScopes (other bytes of mcp.cedarschema). */
+    private void publishBundleOfContracts410() throws Exception {
+        gateway.main().publishRaw(B, resource("/contracts-4.1.0-bundle/policies-" + B + ".tar.gz"),
+                resource("/contracts-4.1.0-bundle/policies-" + B + ".tar.gz.sig"));
+    }
+
+    @Test
+    void aBundleOnTheSchemaOfContracts4_IsRejectedAsASchemaMismatchAndTheCurrentOneStays() throws Exception {
+        gateway.main().publish(A);
+        try (PolicyEngine engine = engine(null)) {
+            publishBundleOfContracts410();
+            engine.refresh(Channel.MAIN);
+
+            assertThat(engine.mainRevision()).contains(A);
+            assertThat(rejected("schema_mismatch")).isEqualTo(1.0);
+        }
+    }
+
+    @Test
+    void aFirstBundleOnTheSchemaOfContracts4_DoesNotStartTheServer() throws Exception {
+        publishBundleOfContracts410();
+
+        assertThatThrownBy(() -> engine(null)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("No policy bundle could be loaded");
+        assertThat(rejected("schema_mismatch")).isGreaterThanOrEqualTo(1.0);
+    }
+
     private PolicyEngine engineWithDevKey(boolean devstackProfile) throws Exception {
         String dev = "20261026151100-17ba079";
         gateway.main().publish(dev, "policies-" + dev + ".tar.gz.sig-by-dev-key");
@@ -240,7 +267,7 @@ class PolicyEngineTest {
                     new pl.aiwcorpo.mcp.platform.observability.AuditLogger("test.policy.unavailable", "mcp-jira"), "mcp-jira", "jira",
                     java.util.List.of("user-secret"), 200);
             pl.aiwcorpo.mcp.platform.auth.CallerContext claims = new pl.aiwcorpo.mcp.platform.auth.CallerContext(
-                    "6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "jkowalski", java.util.List.of("mcp-jira-read"), "claude-code", null, null,
+                    "6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "jkowalski", java.util.List.of("mcp-jira-read"), "claude-code",
                     "read_thing", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", "00000000000000-0000000", null);
             try (pl.aiwcorpo.mcp.platform.resource.ResourceContext context =
                          pl.aiwcorpo.mcp.platform.resource.ResourceContext.open(claims, "read_thing", Map.of())) {

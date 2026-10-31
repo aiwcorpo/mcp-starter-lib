@@ -101,12 +101,7 @@ class ScopeGrantTest {
     }
 
     private String call(List<String> groups, String ticketId) {
-        return call(groups, ticketId, null);
-    }
-
-    private String call(List<String> groups, String ticketId, Map<String, List<String>> link) {
         CallerContext claims = new CallerContext("6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "sdreader", groups, "claude-code",
-                link == null ? null : "queues", link,
                 "get_ticket", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", "00000000000000-0000000", null);
         try (ResourceContext context = ResourceContext.open(claims, "get_ticket", Map.of("ticketId", ticketId))) {
             policy().authorizeCall();
@@ -189,25 +184,19 @@ class ScopeGrantTest {
     }
 
     @Test
-    void aLinkOnlyNarrowsAndDoesNotAddTheNeedForAScopeGroup() {
-        // A reader of the system with no queue group: without a link the policy lets the user's own rights decide, and the link must not change that.
-        tickets = Map.of("T-1", ticket("T-1", "42"), "T-2", ticket("T-2", "7"));
+    void aReaderWithNoQueueGroupIsJudgedByTheUsersOwnRightsInTheSystem() {
+        tickets = Map.of("T-1", ticket("T-1", "42"));
         types = List.of("user-secret");
-        List<String> reader = List.of("mcp-servicedesk-read");
-        Map<String, List<String>> link = Map.of("servicedeskQueues", List.of("42"));
 
-        assertThat(call(reader, "T-1")).isEqualTo("allowed");
-        assertThat(call(reader, "T-1", link)).isEqualTo("allowed");
-        assertThat(call(reader, "T-2", link)).as("outside the link, after the resolution").isEqualTo(DENIED);
-        assertThat(call(reader, "T-404", link)).isEqualTo(DENIED);
+        assertThat(call(List.of("mcp-servicedesk-read"), "T-1")).isEqualTo("allowed");
     }
 
     @Test
-    void theServiceAccountWithoutAQueueGrantIsStillRefusedThroughALink() {
+    void theServiceAccountWithoutAQueueGrantIsRefused() {
         tickets = Map.of("T-1", ticket("T-1", "42"));
         types = List.of("service-account");
 
-        assertThat(call(List.of("mcp-servicedesk-read"), "T-1", Map.of("servicedeskQueues", List.of("42")))).isEqualTo(DENIED);
+        assertThat(call(List.of("mcp-servicedesk-read"), "T-1")).isEqualTo(DENIED);
         assertThat(asked).isEmpty();
     }
 
@@ -215,7 +204,7 @@ class ScopeGrantTest {
     void theToolCallStillNeedsItsOwnGroup() {
         assertThatThrownBy(() -> {
             CallerContext claims = new CallerContext("6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "x", List.of("mcp-servicedesk-queue-42"),
-                    "claude-code", null, null, "get_ticket", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", "00000000000000-0000000", null);
+                    "claude-code", "get_ticket", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", "00000000000000-0000000", null);
             try (ResourceContext context = ResourceContext.open(claims, "get_ticket", Map.of("ticketId", "T-1"))) {
                 policy().authorizeCall();
             }

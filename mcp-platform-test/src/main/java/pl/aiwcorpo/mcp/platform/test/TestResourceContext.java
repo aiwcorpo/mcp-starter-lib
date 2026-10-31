@@ -27,7 +27,7 @@ public final class TestResourceContext {
     /** A context for {@code tool} called by a user in the group {@code mcp-jira-read} with {@code arguments}. */
     public static ResourceContext open(String tool, Map<String, Object> arguments) {
         CallerContext caller = new CallerContext("6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "jkowalski",
-                List.of("mcp-jira-read"), "claude-code", null, null, tool, RequestIds.newRequestId(),
+                List.of("mcp-jira-read"), "claude-code", tool, RequestIds.newRequestId(),
                 TestGateway.DEFAULT_POLICY_REVISION, null);
         return ResourceContext.open(caller, tool, arguments);
     }
