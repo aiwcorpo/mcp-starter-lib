@@ -954,6 +954,11 @@ Jeden punkt wejścia: `ci/run.sh` (`make ci` woła `ci/run.sh verify`). Ten sam 
 | `ci/run.sh hygiene` | tylko kontrola tekstu |
 | `ci/run.sh release` | `verify` i `install` do lokalnego repozytorium Maven; odmawia dla `-SNAPSHOT`, dla wersji już zainstalowanej i dla HEAD bez tagu `v<wersja>` |
 
+Nakładki wołające tylko ten skrypt: `.gitlab-ci.yml`, `Jenkinsfile`, `.github/workflows/ci.yml`. `verify` robi `clean verify`, kończy się błędem przy niepowodzeniu Mavena i gdy nie uruchomiono żadnego testu;
+nieznane polecenie to kod 2. W kontenerze (sygnał wdrożenia w `DevProfileEnvironment`) pomija klasy `PlatformConfigurationGuardTest`, `ServerCustomizerTest`, `StartupRefusalTest` i `ToolBypassTest`,
+które zakładają maszynę programisty (komunikat w logu); uruchom je raz na zwykłym runnerze (VM, executor powłoki). Sprawdzone: przebieg lokalny (931 testów) i w obrazie `maven:3.9.12-eclipse-temurin-25` (878 przypadków).
+Przy Dockerze bez routingu do hosta ustaw `TESTCONTAINERS_HOST_OVERRIDE`.
+
 Artefakty `mcp-contracts` 5.1.0 muszą być w `~/.m2` albo w rejestrze wskazanym przez `MCP_MAVEN_REPOSITORY_URL` (`_USER`, `_PASSWORD`; `.ci/settings.xml`).
 `RedisJtiReplayStoreTest` uruchamia Redisa przez Testcontainers, więc potrzebny jest dostęp do środowiska kontenerów (gniazdo Dockera zamontowane w kontenerze CI albo `DOCKER_HOST`).
 

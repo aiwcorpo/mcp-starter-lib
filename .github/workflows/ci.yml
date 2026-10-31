@@ -1,0 +1,22 @@
+# Thin wrapper: all logic is in ci/run.sh. Set the repository secrets MCP_MAVEN_REPOSITORY_URL, MCP_MAVEN_REPOSITORY_USER
+# and MCP_MAVEN_REPOSITORY_PASSWORD so a clean runner can fetch the mcp-contracts artifacts.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    container:
+      image: maven:3.9.12-eclipse-temurin-25
+      volumes:
+        - /var/run/docker.sock:/var/run/docker.sock
+    env:
+      MCP_MAVEN_REPOSITORY_URL: ${{ secrets.MCP_MAVEN_REPOSITORY_URL }}
+      MCP_MAVEN_REPOSITORY_USER: ${{ secrets.MCP_MAVEN_REPOSITORY_USER }}
+      MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.MCP_MAVEN_REPOSITORY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: ci/run.sh verify

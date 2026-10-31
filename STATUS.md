@@ -10,13 +10,13 @@ Wzorzec zmian: CHANGELOG kontraktów 5.0.0 i 5.1.0, "Migracja" dla ws-02 (zapisa
 | Kamień | Zakres | Stan |
 | --- | --- | --- |
 | K1 | BOM, starter i mcp-platform-test na 5.1.0; `CallerContext` bez `virtualServer` / `virtualServerScopes`; weryfikator bez `vs` / `vsc` (token z którymkolwiek: `401 invalid_claims` ze schematu kontraktu); `Caller` bez `withVirtualServer`; `QueryConstraint(resourceType, granted)`; `QueryScope` bez zawężenia linkiem (`linkIds()` tylko po `narrowedTo`, `linkType()` usunięte); zdarzenia audytu bez `virtualServer`, bez powodu `link_scope`; `RecordingAuthorizer` usunięty; `TestGateway.Token.extraClaim` zamiast `virtualServer(...)`; test paczki z kontraktów 4.1.0 (`schema_mismatch`); wektory 5.1.0 (`jwt/` 59, `audit-events/` 115, `result-filter/` 7) | zrobione |
-| K2 | pkt E: `ci/run.sh` (`verify`, `hygiene`, `release`), `make ci`, `.gitlab-ci.yml` jako nakładka, `.ci/settings.xml` (rejestr Maven jak w mcp-policies) | w toku |
+| K2 | pkt E: `ci/run.sh` (`verify`, `hygiene`, `release`), `make ci`, nakładki `.gitlab-ci.yml`, `Jenkinsfile`, `.github/workflows/ci.yml`, `.ci/settings.xml` (rejestr Maven przez `MCP_MAVEN_REPOSITORY_URL` jak w mcp-policies); `clean verify`, błąd przy padniętym Mavenie (atrapa `mvnw` z `exit 1`) i przy 0 testów, nieznany krok i pusty argument to kod 2; w kontenerze pomija 4 klasy zakładające maszynę programisty | zrobione |
 | K3 | README, `MIGRATION-3.0.md` "Z beta-9 na beta-10", wydanie 3.0.0-beta-10 (main, czyste drzewo, tag `v3.0.0-beta-10`, potem `3.0.0-beta-11-SNAPSHOT`) | do zrobienia |
 
 Usunięte pliki: `LinkScopeTest` (CC-146c dotyczyło zawężenia linkiem, które nie istnieje). Zmienione oczekiwania: `ResourcePolicyTest`, `ExampleServerResourcesTest`, `ScopeGrantTest` bez wariantów z linkiem; `ContractVectorsOnResourcePolicyTest` nie sprawdza już `virtualServer` w `queryConstraints`
 (wektor `result-filter/servicedesk-tickets-by-grant` budowany z `service-account` jako typem domyślnym, bo wektor liczono bez `context.credentialType`, co `credential-type.cedar` traktuje jak konto serwisowe).
 
-Zostaje poza zakresem M5 w tym repo: CI na przynajmniej jednym runnerze poza lokalnym obrazem kontenera (przebieg `ci/run.sh verify` w `maven:3.9.12-eclipse-temurin-25` opisany niżej), publikacja do rejestru Maven (D12: lokalnie `~/.m2`).
+Poza zakresem: przebieg na prawdziwym runnerze GitLab/Jenkins/GitHub (sprawdzono lokalnie i w obrazie `maven:3.9.12-eclipse-temurin-25` z gniazdem Dockera), publikacja do rejestru Maven (D12: lokalnie `~/.m2`), uruchomienie 4 pominiętych w kontenerze klas na zwykłym runnerze.
 
 ## M4: przejście na kontrakty 4.0.0 i wydanie 3.0.0-beta-6
 
