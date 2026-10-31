@@ -11,7 +11,7 @@ Wzorzec zmian: CHANGELOG kontraktów 5.0.0 i 5.1.0, "Migracja" dla ws-02 (zapisa
 | --- | --- | --- |
 | K1 | BOM, starter i mcp-platform-test na 5.1.0; `CallerContext` bez `virtualServer` / `virtualServerScopes`; weryfikator bez `vs` / `vsc` (token z którymkolwiek: `401 invalid_claims` ze schematu kontraktu); `Caller` bez `withVirtualServer`; `QueryConstraint(resourceType, granted)`; `QueryScope` bez zawężenia linkiem (`linkIds()` tylko po `narrowedTo`, `linkType()` usunięte); zdarzenia audytu bez `virtualServer`, bez powodu `link_scope`; `RecordingAuthorizer` usunięty; `TestGateway.Token.extraClaim` zamiast `virtualServer(...)`; test paczki z kontraktów 4.1.0 (`schema_mismatch`); wektory 5.1.0 (`jwt/` 59, `audit-events/` 115, `result-filter/` 7) | zrobione |
 | K2 | pkt E: `ci/run.sh` (`verify`, `hygiene`, `release`), `make ci`, nakładki `.gitlab-ci.yml`, `Jenkinsfile`, `.github/workflows/ci.yml`, `.ci/settings.xml` (rejestr Maven przez `MCP_MAVEN_REPOSITORY_URL` jak w mcp-policies); `clean verify`, błąd przy padniętym Mavenie (atrapa `mvnw` z `exit 1`) i przy 0 testów, nieznany krok i pusty argument to kod 2; w kontenerze pomija 4 klasy zakładające maszynę programisty | zrobione |
-| K3 | README, `MIGRATION-3.0.md` "Z beta-9 na beta-10", wydanie 3.0.0-beta-10 (main, czyste drzewo, tag `v3.0.0-beta-10`, potem `3.0.0-beta-11-SNAPSHOT`) | do zrobienia |
+| K3 | README, `MIGRATION-3.0.md` "Z beta-9 na beta-10", wydanie 3.0.0-beta-10 (main, czyste drzewo, tag `v3.0.0-beta-10`, potem `3.0.0-beta-11-SNAPSHOT`) | zrobione |
 
 Usunięte pliki: `LinkScopeTest` (CC-146c dotyczyło zawężenia linkiem, które nie istnieje). Zmienione oczekiwania: `ResourcePolicyTest`, `ExampleServerResourcesTest`, `ScopeGrantTest` bez wariantów z linkiem; `ContractVectorsOnResourcePolicyTest` nie sprawdza już `virtualServer` w `queryConstraints`
 (wektor `result-filter/servicedesk-tickets-by-grant` budowany z `service-account` jako typem domyślnym, bo wektor liczono bez `context.credentialType`, co `credential-type.cedar` traktuje jak konto serwisowe).
@@ -64,6 +64,8 @@ Wektory 4.1.0: `credential-type-header/` (13; strona serwera 9 uruchamiana), `au
 
 - entity-builder.md 9b.2: sonda z identyfikatora zakłada, że polityka jest monotoniczna w klasyfikacji (tylko `forbid`); warto zapisać to jako regułę dla `mcp-policies`.
 - C8: `policy_error` na serwerze obejmuje tylko błąd oceny `Action::"call"` na narzędziu; błąd oceny pojedynczego elementu wyniku usuwa element bez zdarzenia.
+
+3.0.0-beta-10: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-10`, tag `v3.0.0-beta-10` (po wydaniu `3.0.0-beta-11-SNAPSHOT`). Kontrakty 5.1.0 (M5), razem 931 testów (starter 756, mcp-platform-test 175). Instrukcja: `MIGRATION-3.0.md`, "Z beta-9 na beta-10". Zakres: tabela "M5" wyżej.
 
 3.0.0-beta-9: wydane - `pl.aiwcorpo.mcp:mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-9`, tag `v3.0.0-beta-9` (po wydaniu `3.0.0-beta-10-SNAPSHOT`). Instrukcja: `MIGRATION-3.0.md`, "Z beta-8 na beta-9". Zawartość: awaria resolvera dla konta serwisowego w audycie jako `upstream_unavailable` (na zewnątrz `not_found_or_denied`, WARN `resolver_failed_hidden`); błąd sondy bez zakresu dla Page/Ticket przy wywołaniu przez link. Sentinel kontenera ("NOGRANT", "0") leżał poza zakresem linku, więc `vs-narrow-*` odmawiało czytelnikowi z tokenem użytkownika bez grupy zakresu, choć bez linku czytał (link ma tylko zawężać, niezmiennik 5). Teraz sonda używa pierwszego id kontenera z linku, gdy link zawęża ten typ; konto serwisowe bez grantu nadal jest odmawiane. Test: `ScopeGrantTest`.
 
@@ -722,3 +724,5 @@ bezpieczeństwa, smoke od README, dokumentacja końcowa. Usunięcia z briefu zro
 - C8: zdarzenie audytu dla odrzuconego uwierzytelnienia na serwerze (przyjęte jako CC-071, zrobione w alpha-7).
 - C6/C10: zamknięty `inputSchema` i treść `invalid_argument` przy naruszeniu schematu (CC-???, alpha-6).
 - C6: nazwy `$defs` w `common.schema.json` jako stabilne API dla serwerów (`contractPattern`) (CC-???, alpha-6).
+
+M5: osiągnięty (2026-10-31) - kontrakty 5.1.0 w BOM, starterze i mcp-platform-test, `ci/run.sh` z nakładkami, wydane 3.0.0-beta-10 (tag `v3.0.0-beta-10`).
