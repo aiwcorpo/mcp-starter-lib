@@ -4,6 +4,12 @@ Format: wersje SemVer; kolejność od najnowszej. Przed 3.0.0 wersje `alpha` i `
 `v3.0.0-beta-N`) nie gwarantują zgodności między sobą; kroki migracji każdej z nich są w `MIGRATION-3.0.md`.
 Linia `mcp-platform` 3.x nie ma związku z wersją `mcp-contracts` (BOM zarządza obiema).
 
+## 3.0.0-beta-13 - 2026-11-03
+
+- `CursorCodec`: kursor jest szyfrowany i uwierzytelniany (AES-256-GCM), nie tylko podpisany. Klucz z `paging.cursor-key` przez
+  HKDF-SHA256 z `server-id` jako kontekstem, losowy nonce, dane uwierzytelniane to `sub`, narzędzie i odcisk zapytania. Ładunek
+  (np. wartości sortowania ukrytego trafienia) jest nieczytelny dla klienta. API bez zmian; każdy zły kursor to nadal ten sam `invalid_argument`.
+
 ## 3.0.0-beta-12 - 2026-11-03
 
 Zmiany zgodne z beta-11 (podbicie wersji); poprawki po przeglądzie beta-11.

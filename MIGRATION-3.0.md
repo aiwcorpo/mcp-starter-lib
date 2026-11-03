@@ -308,6 +308,18 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
+## Z beta-12 na beta-13
+
+Podbicie wersji: `<mcp-platform.version>3.0.0-beta-13</mcp-platform.version>` albo `<version>3.0.0-beta-13</version>` w imporcie `mcp-platform-bom`. Sygnatury `CursorCodec` bez zmian, kontrakty 6.2.1.
+
+- **Kursor jest szyfrowany (AES-256-GCM)**, a nie tylko podpisany: pozycja w kursorze (na przykład wartości sortowania `search_after` trafienia, które polityka
+  ukryła) nie jest już czytelna dla klienta. Nowy format zaczyna się od `c2.`; wciąż mieści się w `CursorCodec.ARGUMENT_PATTERN` i `MAX_CURSOR_LENGTH`.
+  Kursory wydane przez beta-12 i wcześniejsze są odrzucane (`invalid_argument`, ten sam tekst); żyją 15 minut, więc nic nie trzeba robić.
+- Klucz kursora jest wyprowadzany z `paging.cursor-key` przez HKDF z `server-id`: ten sam `cursor-key` w dwóch serwerach daje dwa różne klucze. Traktuj `cursor-key` jak sekret
+  (Base64, co najmniej 32 bajty, nie w repozytorium).
+- Serwery, które wkładały do pozycji kursora wartości sortowania lub inne dane elementów, nie muszą nic zmieniać; to jest dokładnie przypadek, który szyfrowanie zamyka.
+  Pozycja nadal nie powinna zawierać poświadczeń (otwierający serwer widzi ją jawnie).
+
 ## Z beta-11 na beta-12
 
 Samo podbicie wersji: `<mcp-platform.version>3.0.0-beta-12</mcp-platform.version>` w szablonie albo `<version>3.0.0-beta-12</version>` w imporcie `mcp-platform-bom`. Kontrakty zostają 6.2.1,

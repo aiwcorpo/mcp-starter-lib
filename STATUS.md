@@ -1,5 +1,9 @@
 # STATUS - mcp-starter-lib (ws-02)
 
+## 3.0.0-beta-13: kursor szyfrowany
+
+Zgłoszenie z przeglądu serwera OpenSearch: kursor był podpisany, ale czytelny, więc pozycja (wartości sortowania ukrytego trafienia) wyciekała do klienta. `CursorCodec` jest teraz AEAD: AES-256-GCM, klucz z `cursor-key` przez HKDF-SHA256 z `server-id`, losowy nonce 12 B, AAD = `sub` + narzędzie + odcisk zapytania, jeden `invalid_argument` dla każdego błędu. API bez zmian. Testy: ładunek nieczytelny i nonce losowy, zmiana każdego bajtu, inny zapis tych samych bajtów, inny serwer z tym samym kluczem.
+
 ## Poprawki po przeglądzie beta-11 i wydanie 3.0.0-beta-12
 
 Źródło: `review-starter-beta11.md`. Zgodność: tylko dodatki w API, przejście beta-11 -> beta-12 to podbicie wersji (`MIGRATION-3.0.md`, "Z beta-11 na beta-12").
@@ -763,3 +767,5 @@ M5: w toku - kod produkcyjny na kontraktach 5.1.0 wydany jako 3.0.0-beta-10; bra
 3.0.0-beta-11: wydane - `pl.aiwcorpo.mcp:mcp-platform|mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-11`, tag `v3.0.0-beta-11` (po wydaniu `3.0.0-beta-12-SNAPSHOT`). Kontrakty 6.2.1, `ci/run.sh release` z 976 przypadkami testowymi i 0 pominiętych. Instrukcja: `MIGRATION-3.0.md`, "Z beta-10 na beta-11". Zakres: tabela "M6 etap 3" na górze.
 
 3.0.0-beta-12: wydane - `pl.aiwcorpo.mcp:mcp-platform|mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-12`, tag `v3.0.0-beta-12` (po wydaniu `3.0.0-beta-13-SNAPSHOT`). Kontrakty 6.2.1, 989 przypadków testowych, 0 pominiętych. Instrukcja: `MIGRATION-3.0.md`, "Z beta-11 na beta-12" (podbicie wersji). Zakres: tabela "Poprawki po przeglądzie beta-11" na górze.
+
+3.0.0-beta-13: wydane - `pl.aiwcorpo.mcp:mcp-platform|mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-13`, tag `v3.0.0-beta-13` (po wydaniu `3.0.0-beta-14-SNAPSHOT`). Instrukcja: `MIGRATION-3.0.md`, "Z beta-12 na beta-13".

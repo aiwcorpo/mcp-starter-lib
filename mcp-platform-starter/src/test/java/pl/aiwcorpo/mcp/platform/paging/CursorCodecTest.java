@@ -101,12 +101,9 @@ class CursorCodecTest {
     @Test
     void forgedTruncatedAndMalformedCursorsAreRefused() {
         String cursor = codec.issueFor("user-1", "search_issues", FP, "42");
-        String[] parts = cursor.split("\\.");
-        String flipped = parts[0].substring(0, parts[0].length() - 1) + (parts[0].endsWith("A") ? "B" : "A");
 
-        for (String bad : new String[] {null, "", ".", "abc", flipped + "." + parts[1], parts[0] + ".", "." + parts[1],
-                parts[0] + "." + parts[1] + ".x", parts[0] + "." + parts[1].substring(1), "!!!.???",
-                "x".repeat(CursorCodec.MAX_CURSOR_LENGTH + 1)}) {
+        for (String bad : new String[] {null, "", ".", "c2.", "c2", "abc", cursor.substring(0, cursor.length() - 4),
+                cursor.substring(0, 10), "c2.!!!???", "c2." + "A".repeat(80), "x".repeat(CursorCodec.MAX_CURSOR_LENGTH + 1)}) {
             assertThatThrownBy(() -> codec.openFor("user-1", bad, "search_issues", FP))
                     .as(String.valueOf(bad)).isInstanceOf(InvalidToolArgumentException.class)
                     .hasMessage(CursorCodec.REFUSED_MESSAGE);
@@ -138,18 +135,39 @@ class CursorCodecTest {
     }
 
     @Test
-    void aChangedSignatureByteOrAnotherSpellingOfTheSameBytesIsRefused() {
-        String cursor = codec.issueFor("user-1", "search_issues", FP, "42");
-        String[] parts = cursor.split("\\.");
-        String signature = parts[1];
-        char last = signature.charAt(signature.length() - 1);
-        // 32 bytes leave four unused bits in the last character: the decoder reads these spellings as the same signature.
-        String sameBytesOtherSpelling = parts[0] + "." + signature.substring(0, signature.length() - 1)
-                + (last == 'A' ? 'B' : 'A');
-        String changedFirstByte = parts[0] + "." + (signature.charAt(0) == 'A' ? 'B' : 'A') + signature.substring(1);
+    void thePositionIsNotReadableInTheCursor() {
+        String position = "sort=[\"hidden-salary-91000\",42]";
+        String cursor = codec.issueFor("user-1", "search_issues", FP, position);
 
-        for (String bad : new String[] {sameBytesOtherSpelling, changedFirstByte, parts[0] + "=." + signature,
-                parts[0] + "." + signature + "="}) {
+        byte[] body = java.util.Base64.getUrlDecoder().decode(cursor.substring(cursor.indexOf('.') + 1));
+        assertThat(cursor).doesNotContain("hidden").doesNotContain("salary");
+        assertThat(new String(body, java.nio.charset.StandardCharsets.ISO_8859_1)).doesNotContain("hidden", "salary");
+        assertThat(codec.issueFor("user-1", "search_issues", FP, position)).isNotEqualTo(cursor);
+    }
+
+    @Test
+    void anyChangedByteOfACursorIsRefused() {
+        String cursor = codec.issueFor("user-1", "search_issues", FP, "42");
+        String prefix = cursor.substring(0, cursor.indexOf('.') + 1);
+        byte[] body = java.util.Base64.getUrlDecoder().decode(cursor.substring(prefix.length()));
+
+        for (int i = 0; i < body.length; i++) {
+            byte[] changed = body.clone();
+            changed[i] ^= 0x01;
+            String bad = prefix + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(changed);
+            assertThatThrownBy(() -> codec.openFor("user-1", bad, "search_issues", FP)).as("byte " + bad)
+                    .isInstanceOf(InvalidToolArgumentException.class).hasMessage(CursorCodec.REFUSED_MESSAGE);
+        }
+    }
+
+    @Test
+    void anotherSpellingOfTheSameBytesIsRefused() {
+        String cursor = codec.issueFor("user-1", "search_issues", FP, "42");
+        char last = cursor.charAt(cursor.length() - 1);
+        String otherSpelling = cursor.substring(0, cursor.length() - 1) + (last == 'A' ? 'B' : 'A');
+
+        for (String bad : new String[] {otherSpelling, cursor + "=", cursor + "A", cursor.replace("c2.", "c1."),
+                cursor.substring(cursor.indexOf('.') + 1)}) {
             assertThatThrownBy(() -> codec.openFor("user-1", bad, "search_issues", FP)).as(bad)
                     .isInstanceOf(InvalidToolArgumentException.class).hasMessage(CursorCodec.REFUSED_MESSAGE);
         }

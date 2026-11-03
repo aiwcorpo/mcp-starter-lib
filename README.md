@@ -6,7 +6,7 @@ robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadc
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
 Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 6.2.1.
-Wersja: **3.0.0-beta-12** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+Wersja: **3.0.0-beta-13** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 Tag `v3.0.0-beta-11` jest lokalny i nie służy do publikacji przez GitHub Actions (jego workflow wydania jest starszy od przeglądu
 bezpieczeństwa); pierwsze publiczne wydanie to nowy tag, nie ten.
 
@@ -334,7 +334,7 @@ poniżej `$JAVA_HOME/bin/java` (`JAVA_HOME` wskazuje JDK 25).
             <dependency>
                 <groupId>pl.aiwcorpo.mcp</groupId>
                 <artifactId>mcp-platform-bom</artifactId>
-                <version>3.0.0-beta-12</version>
+                <version>3.0.0-beta-13</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -810,14 +810,17 @@ public PagedResult<IssueHit> searchIssues(
 - **Kursor jest nieprzezroczysty dla klienta i związany**: z `sub` wywołującego, nazwą narzędzia, odciskiem zapytania
   (`CursorCodec.fingerprint(...)`: tekst, filtry, sortowanie, rozmiar strony, bez samego kursora) i czasem (domyślnie 15 min,
   `paging.cursor-validity`). Kursor innego użytkownika, innego narzędzia albo zmienionego zapytania, sfałszowany, ucięty i
-  przeterminowany kończy się tym samym `invalid_argument` ze stałym tekstem, więc komunikat nie zdradza przyczyny. Podpis to
-  HMAC-SHA256; wszystkie instancje serwera muszą mieć ten sam `paging.cursor-key`, inaczej kursor wydany przez jedną odrzuci
+  przeterminowany kończy się tym samym `invalid_argument` ze stałym tekstem, więc komunikat nie zdradza przyczyny. Kursor to AES-256-GCM:
+  klucz jest wyprowadzony z `paging.cursor-key` przez HKDF-SHA256 z `server-id` jako kontekstem, nonce jest losowy, a dane uwierzytelniane to `sub`, narzędzie i odcisk zapytania; wszystkie instancje serwera muszą mieć ten sam `paging.cursor-key`, inaczej kursor wydany przez jedną odrzuci
   druga (bez klucza starter losuje go na proces i ostrzega przy pierwszym wydanym kursorze, więc serwer bez narzędzia stronicującego
-  nie ostrzega wcale). Podpis obejmuje też `server-id`, więc kursor jednego serwera odrzuci inny serwer nawet z tym samym kluczem.
+  nie ostrzega wcale). Klucz zależy od `server-id`, więc kursor jednego serwera odrzuci inny serwer nawet z tym samym `cursor-key`.
 - **Kursor nie jest uprawnieniem.** Niesie wyłącznie pozycję w stronicowaniu systemu (offset, `nextPageToken`, wartość
   klucza); zakres wywołującego (`QueryScope`) liczy się od nowa dla każdej strony, a `ResultFilter` filtruje każdą stronę, więc
-  podrobiony kursor niczego nie poszerza. Treść kursora da się odczytać (base64url, bez szyfrowania): nie wkładaj w nią
-  poświadczenia ani niczego, czego klient nie może zobaczyć. Najwyżej 512 bajtów pozycji.
+  podrobiony kursor niczego nie poszerza. **Ładunek kursora jest poufny**: pozycja może zawierać wartości
+  ukrytego elementu (wartości sortowania `search_after` trafienia odfiltrowanego przez politykę), więc klient nie może jej odczytać
+  ani zmienić bajtu. Mimo szyfrowania nie wkładaj w pozycję poświadczenia: serwer, który kursor otwiera, widzi ją jawnie.
+  `cursor-key` traktuj jak sekret (Base64, co najmniej 32 bajty; rotacja unieważnia kursory, co przy 15 minutach ważności jest nieszkodliwe).
+  Najwyżej 512 bajtów pozycji.
 - **Strona może być pusta albo krótsza i mieć `nextCursor`**, jeśli `ResultFilter` usunął z niej elementy, a krótka strona z kursorem
   zdradza, że w tym oknie coś było ukryte (seria pustych stron: że dalej są tylko niewidoczne). Dlatego narzędzie, które przyjmuje
   rozmiar strony od klienta, dopełnia ją przez `PageFiller.fill(pozycja, rozmiar, maxOdczytow, pobierz, dozwolone)`: czyta kolejne
@@ -1127,7 +1130,7 @@ Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera t
 ```xml
 <dependency>
   <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-  <version>3.0.0-beta-12</version><type>pom</type><scope>import</scope>
+  <version>3.0.0-beta-13</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
 
