@@ -20,9 +20,18 @@ import java.util.OptionalLong;
  * @param requestId           {@code rid}, equal to {@code X-Request-Id}
  * @param policyRevision      {@code prv}, the policy bundle revision the gateway decided with
  * @param mfaAgeSeconds       {@code mfa}, or {@code null} when unknown
+ * @param mcpRisk             {@code mcp_risk}, the administrator's classification; only in {@link ReceiverMode#ADAPTER}, otherwise {@code null}
+ * @param mcpAction           {@code mcp_action}, as above
  */
 public record CallerContext(String subject, String username, List<String> groups, String client,
-                            String tool, String requestId, String policyRevision, Long mfaAgeSeconds) {
+                            String tool, String requestId, String policyRevision, Long mfaAgeSeconds,
+                            String mcpRisk, String mcpAction) {
+
+    /** Without the classification of an adapter; what every native server has. */
+    public CallerContext(String subject, String username, List<String> groups, String client, String tool,
+                         String requestId, String policyRevision, Long mfaAgeSeconds) {
+        this(subject, username, groups, client, tool, requestId, policyRevision, mfaAgeSeconds, null, null);
+    }
 
     /** {@code sub} of the gateway's service variant (calls without a user). */
     public static final String SERVICE_SUBJECT = "system:mcp-gateway";

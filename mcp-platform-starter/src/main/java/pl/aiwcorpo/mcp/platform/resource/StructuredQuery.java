@@ -150,7 +150,7 @@ public final class StructuredQuery {
         }
 
         /**
-         * The query: the conditions in parentheses, then the scope clauses, joined by {@code AND}, then {@code ORDER BY}; empty when
+         * The query: the conditions in parentheses, then the scope clauses and, for CQL, the constant {@code type = page} (CC-219), joined by {@code AND}, then {@code ORDER BY}; empty when
          * there is nothing to say.
          */
         public String build() {
@@ -159,6 +159,10 @@ public final class StructuredQuery {
                 clauses.add("(" + String.join(" AND ", conditions) + ")");
             }
             clauses.addAll(scope);
+            if (language == Language.CQL) {
+                // content/search without it also returns comments, attachments and blogs, which the server would drop afterwards (CC-219).
+                clauses.add("type = page");
+            }
             String query = String.join(" AND ", clauses) + (order == null ? "" : " ORDER BY " + order);
             if (query.length() > MAX_QUERY_LENGTH) {
                 throw new IllegalArgumentException("the query is longer than " + MAX_QUERY_LENGTH + " characters");

@@ -118,6 +118,21 @@ public class McpPlatformProperties {
          */
         private boolean allowTestKeys = false;
 
+        /**
+         * {@code native} (default): a server written on the starter, which refuses a token with {@code mcp_risk} or
+         * {@code mcp_action}. {@code adapter}: the sidecar of an adapter, which takes the classification from them and
+         * refuses a {@code tools/call} without them (CC-226).
+         */
+        private pl.aiwcorpo.mcp.platform.auth.ReceiverMode receiverMode = pl.aiwcorpo.mcp.platform.auth.ReceiverMode.NATIVE;
+
+        public pl.aiwcorpo.mcp.platform.auth.ReceiverMode getReceiverMode() {
+            return receiverMode;
+        }
+
+        public void setReceiverMode(pl.aiwcorpo.mcp.platform.auth.ReceiverMode receiverMode) {
+            this.receiverMode = receiverMode;
+        }
+
         /** Where used {@code jti} values are kept. {@code memory} only with the {@code dev} profile. */
         private ReplayStore replayStore = ReplayStore.REDIS;
 

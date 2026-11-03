@@ -114,7 +114,7 @@ class StructuredQueryTest {
         QueryScope spaces = QueryScope.of(new QueryConstraint("Confluence::Page", new TreeSet<>())).narrowedTo(Set.of("ENG"));
 
         assertThat(spaces.cql(Set.of("title", "label")).where("title", Operator.CONTAINS, "plan").orderBy("lastmodified", Direction.ASC).build())
-                .isEqualTo("(title ~ \"plan\") AND space in (\"ENG\") ORDER BY lastmodified ASC");
+                .isEqualTo("(title ~ \"plan\") AND space in (\"ENG\") AND type = page ORDER BY lastmodified ASC");
     }
 
     @Test
@@ -164,7 +164,7 @@ class StructuredQueryTest {
 
             assertThat(tokens.get(0)).as(query).isEqualTo("(");
             assertThat(tokens.get(1)).as(query).isEqualTo("title");
-            assertThat(tokens.subList(4, tokens.size())).as(query).containsExactly(")", "AND", "space", "in", "(", "\"ENG\"", ")");
+            assertThat(tokens.subList(4, tokens.size())).as(query).containsExactly(")", "AND", "space", "in", "(", "\"ENG\"", ")", "AND", "type", "=", "page");
             assertThat(query).doesNotContain("\n").doesNotContain("\r").doesNotContain("\t");
         }
     }

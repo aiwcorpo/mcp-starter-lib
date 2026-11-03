@@ -1,5 +1,9 @@
 # STATUS - mcp-starter-lib (ws-02)
 
+## 3.0.0-beta-14: kontrakty 6.3.2
+
+CQL z `AND type = page` (CC-219); tryb odbiorcy JWT `native` / `adapter` (CC-226, `classification_missing`, `CallerContext.mcpRisk/mcpAction`, log i licznik wartości innej niż `READ_ONLY`); `decision` opcjonalne w zdarzeniu `authentication` (starter zapisuje nadal). Wektory `jwt/` (66, z `receiverMode`), `audit-events/` (128), `query-rendering/` (27) przechodzą. Migracja: `MIGRATION-3.0.md`, "Z beta-13 na beta-14".
+
 ## 3.0.0-beta-13: kursor szyfrowany
 
 Zgłoszenie z przeglądu serwera OpenSearch: kursor był podpisany, ale czytelny, więc pozycja (wartości sortowania ukrytego trafienia) wyciekała do klienta. `CursorCodec` jest teraz AEAD: AES-256-GCM, klucz z `cursor-key` przez HKDF-SHA256 z `server-id`, losowy nonce 12 B, AAD = `sub` + narzędzie + odcisk zapytania, jeden `invalid_argument` dla każdego błędu. API bez zmian. Testy: ładunek nieczytelny i nonce losowy, zmiana każdego bajtu, inny zapis tych samych bajtów, inny serwer z tym samym kluczem.
@@ -38,7 +42,7 @@ nowych typów zasobów C7 (kontrakt) i poziomu ryzyka pośredniego (decyzja czł
 Poza zakresem: przebieg `release.yml` i publikacja do GitHub Packages (repozytorium i pakiety nie istnieją), SBOM (wtyczka CycloneDX nie jest w `~/.m2`; krok jest w workflow), ścieżka Windows poza WSL2.
 
 Linia `pl.aiwcorpo.mcp:mcp-platform*` 3.x (niezależna od wersji kontraktów). Kontrakty:
-`pl.aiwcorpo.mcp:mcp-contracts:6.2.1` od beta-11 (5.1.0 w beta-10, 4.1.0 od beta-7; 4.0.0 w beta-6; 3.1.0 w beta-1 ... beta-5, 2.2.5 w alpha-12 ... alpha-14, 2.1.1 od alpha-7, 2.0.2 do alpha-6).
+`pl.aiwcorpo.mcp:mcp-contracts:6.3.2` od beta-14 (6.2.1 w beta-11 ... beta-13, 5.1.0 w beta-10, 4.1.0 od beta-7; 4.0.0 w beta-6; 3.1.0 w beta-1 ... beta-5, 2.2.5 w alpha-12 ... alpha-14, 2.1.1 od alpha-7, 2.0.2 do alpha-6).
 
 ## M5: przejście na kontrakty 5.1.0 i wydanie 3.0.0-beta-10
 
@@ -769,3 +773,5 @@ M5: w toku - kod produkcyjny na kontraktach 5.1.0 wydany jako 3.0.0-beta-10; bra
 3.0.0-beta-12: wydane - `pl.aiwcorpo.mcp:mcp-platform|mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-12`, tag `v3.0.0-beta-12` (po wydaniu `3.0.0-beta-13-SNAPSHOT`). Kontrakty 6.2.1, 989 przypadków testowych, 0 pominiętych. Instrukcja: `MIGRATION-3.0.md`, "Z beta-11 na beta-12" (podbicie wersji). Zakres: tabela "Poprawki po przeglądzie beta-11" na górze.
 
 3.0.0-beta-13: wydane - `pl.aiwcorpo.mcp:mcp-platform|mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-13`, tag `v3.0.0-beta-13` (po wydaniu `3.0.0-beta-14-SNAPSHOT`). Instrukcja: `MIGRATION-3.0.md`, "Z beta-12 na beta-13".
+
+3.0.0-beta-14: wydane - `pl.aiwcorpo.mcp:mcp-platform|mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-14`, tag `v3.0.0-beta-14` (po wydaniu `3.0.0-beta-15-SNAPSHOT`). Kontrakty 6.3.2. Instrukcja: `MIGRATION-3.0.md`, "Z beta-13 na beta-14".

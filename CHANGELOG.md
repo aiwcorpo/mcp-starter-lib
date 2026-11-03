@@ -4,6 +4,15 @@ Format: wersje SemVer; kolejność od najnowszej. Przed 3.0.0 wersje `alpha` i `
 `v3.0.0-beta-N`) nie gwarantują zgodności między sobą; kroki migracji każdej z nich są w `MIGRATION-3.0.md`.
 Linia `mcp-platform` 3.x nie ma związku z wersją `mcp-contracts` (BOM zarządza obiema).
 
+## 3.0.0-beta-14 - 2026-11-03
+
+- Kontrakty `mcp-contracts` 6.3.2 (CHANGELOG 6.3.0, 6.3.1, 6.3.2, sekcje ws-02).
+- CQL kończy się `AND type = page` (CC-219); wektory `query-rendering/` (27) przechodzą.
+- `ReceiverMode` (`internal-jwt.receiver-mode`, `native` albo `adapter`, CC-226): serwer natywny odrzuca `mcp_risk` i `mcp_action` jako `invalid_claims`;
+  sidecar adaptera odmawia `tools/call` bez nich (`classification_missing`), wystawia je w `CallerContext.mcpRisk()` / `mcpAction()`, a wartość inną niż
+  `READ_ONLY` loguje i liczy. Wektory `jwt/` (66) z `receiverMode` przechodzą.
+- `decision` w zdarzeniu `authentication` jest opcjonalne w kontrakcie; starter nadal je zapisuje. Katalog `audit-events/` ma 128 wektorów.
+
 ## 3.0.0-beta-13 - 2026-11-03
 
 - `CursorCodec`: kursor jest szyfrowany i uwierzytelniany (AES-256-GCM), nie tylko podpisany. Klucz z `paging.cursor-key` przez

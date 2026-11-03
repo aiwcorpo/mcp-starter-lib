@@ -4,6 +4,7 @@ import com.nimbusds.jose.JOSEException;
 import com.nimbusds.jose.JWSObject;
 import com.nimbusds.jose.crypto.ECDSAVerifier;
 import com.nimbusds.jose.jwk.ECKey;
+import io.micrometer.core.instrument.MeterRegistry;
 import java.text.ParseException;
 import java.time.Clock;
 import java.time.Duration;
@@ -53,12 +54,22 @@ public final class InternalJwtVerifier {
      * @param allowTestKeys accept {@code test-*} keys and the published test keys (dev and tests only)
      * @param devstackProfile the server runs with the {@code devstack} profile; together with {@code allowTestKeys} it is dev
      *                      mode, the only one in which a {@code dev-*} key is accepted (CC-137)
+     * @param receiverMode  {@link ReceiverMode#NATIVE} (default) or the sidecar of an adapter (CC-226)
      */
     public record Settings(String issuer, String audience, Duration clockSkew, Duration maxLifetime,
-                           boolean allowTestKeys, boolean devstackProfile) {
+                           boolean allowTestKeys, boolean devstackProfile, ReceiverMode receiverMode) {
+
+        public Settings {
+            receiverMode = receiverMode == null ? ReceiverMode.NATIVE : receiverMode;
+        }
+
+        public Settings(String issuer, String audience, Duration clockSkew, Duration maxLifetime,
+                        boolean allowTestKeys, boolean devstackProfile) {
+            this(issuer, audience, clockSkew, maxLifetime, allowTestKeys, devstackProfile, ReceiverMode.NATIVE);
+        }
 
         public Settings(String issuer, String audience, Duration clockSkew, Duration maxLifetime, boolean allowTestKeys) {
-            this(issuer, audience, clockSkew, maxLifetime, allowTestKeys, false);
+            this(issuer, audience, clockSkew, maxLifetime, allowTestKeys, false, ReceiverMode.NATIVE);
         }
 
         boolean devMode() {
@@ -71,8 +82,16 @@ public final class InternalJwtVerifier {
     private final JtiReplayStore replayStore;
     private final Clock clock;
     private final InternalJwtClaimsSchema schema = new InternalJwtClaimsSchema();
+    private final MeterRegistry meters;
 
     public InternalJwtVerifier(Settings settings, GatewayKeys keys, JtiReplayStore replayStore, Clock clock) {
+        this(settings, keys, replayStore, clock, null);
+    }
+
+    /** @param meters counts the classifications other than {@code READ_ONLY} an adapter sidecar receives; may be {@code null} */
+    public InternalJwtVerifier(Settings settings, GatewayKeys keys, JtiReplayStore replayStore, Clock clock,
+                               MeterRegistry meters) {
+        this.meters = meters;
         this.settings = settings;
         this.keys = keys;
         this.replayStore = replayStore;
@@ -120,6 +139,11 @@ public final class InternalJwtVerifier {
         List<String> violations = schema.violations(claims);
         if (!violations.isEmpty()) {
             LOG.debug("event=internal_jwt_claims_invalid violations={}", violations);
+            throw reject(InternalJwtRejection.INVALID_CLAIMS);
+        }
+        boolean classified = claims.has("mcp_risk") || claims.has("mcp_action");
+        if (classified && settings.receiverMode() != ReceiverMode.ADAPTER) {
+            // Only the sidecar of an adapter takes a classification from the token; the schema cannot tell the receiver (CC-226).
             throw reject(InternalJwtRejection.INVALID_CLAIMS);
         }
         if (!settings.issuer().equals(claims.get("iss").asString())) {
@@ -182,6 +206,19 @@ public final class InternalJwtVerifier {
         if (binding.kind() == RequestBinding.Kind.TOOL_CALL && !Objects.equals(tool, binding.toolName())) {
             throw reject(InternalJwtRejection.TOOL_MISMATCH);
         }
+        if (settings.receiverMode() == ReceiverMode.ADAPTER && !service && binding.kind() == RequestBinding.Kind.TOOL_CALL) {
+            if (!classified) {
+                throw reject(InternalJwtRejection.CLASSIFICATION_MISSING);
+            }
+            String risk = claims.get("mcp_risk").asString();
+            if (!"READ_ONLY".equals(risk)) {
+                // The gateway sends only READ_ONLY to an adapter (CC-227); anything else is a gateway that does not match this build.
+                LOG.warn("event=adapter_classification_not_read_only risk={} tool={}", risk, tool);
+                if (meters != null) {
+                    meters.counter("mcp.adapter.classification.not_read_only", "risk", risk).increment();
+                }
+            }
+        }
         return caller(claims);
     }
 
@@ -228,7 +265,9 @@ public final class InternalJwtVerifier {
                 text(claims, "tool"),
                 claims.get("rid").asString(),
                 claims.get("prv").asString(),
-                mfa == null || !mfa.canConvertToLong() ? null : mfa.asLong());
+                mfa == null || !mfa.canConvertToLong() ? null : mfa.asLong(),
+                text(claims, "mcp_risk"),
+                text(claims, "mcp_action"));
     }
 
     private static InternalJwtRejectedException reject(InternalJwtRejection reason) {

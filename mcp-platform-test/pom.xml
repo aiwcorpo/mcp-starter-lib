@@ -20,7 +20,7 @@
 
     <groupId>pl.aiwcorpo.mcp</groupId>
     <artifactId>mcp-platform-test</artifactId>
-    <version>3.0.0-beta-14-SNAPSHOT</version>
+    <version>3.0.0-beta-14</version>
     <name>Aiwcorpo MCP Platform :: Test support</name>
 
     <url>https://github.com/aiwcorpo/mcp-starter-lib</url>
@@ -50,7 +50,7 @@
     <properties>
         <java.version>25</java.version>
         <spring-ai.version>2.0.0</spring-ai.version>
-        <mcp-contracts.version>6.2.1</mcp-contracts.version>
+        <mcp-contracts.version>6.3.2</mcp-contracts.version>
     </properties>
 
     <dependencyManagement>

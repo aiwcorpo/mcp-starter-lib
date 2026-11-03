@@ -308,6 +308,21 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
+## Z beta-13 na beta-14
+
+Przejście na kontrakty **6.3.2** (CHANGELOG kontraktów 6.3.0, 6.3.1, 6.3.2, sekcje ws-02, ws-03, ws-04, ws-13). Podbicie wersji: `<mcp-platform.version>3.0.0-beta-14</mcp-platform.version>` albo `<version>3.0.0-beta-14</version>` w imporcie `mcp-platform-bom`; BOM ustawia kontrakty na 6.3.2.
+API tylko przybywa (dodany składnik rekordu `CallerContext` ma konstruktor zastępczy ze starą sygnaturą).
+
+- **Zapytania CQL mają `AND type = page` (CC-219).** Serwer Confluence, który sam doklejał `type = page` do zapytania z `StructuredQuery`, ma je teraz dwa razy: usuń własne
+  (zostaw filtr typów po odpowiedzi jako obronę w głąb). Zapytania JQL bez zmian. Test, który porównuje tekst CQL, zmień: `... AND space in ("ENG") AND type = page ORDER BY ...`.
+- **Tryb odbiorcy JWT (CC-226).** Serwer natywny nie robi nic: token z `mcp_risk` albo `mcp_action` to `401 invalid_claims` (domyślne `receiver-mode: native`).
+  Sidecar adaptera ustawia `aiwcorpo.mcp.platform.internal-jwt.receiver-mode: adapter`; wtedy `tools/call` bez tych claimów to `401` z powodem `classification_missing`, a klasyfikacja jest w
+  `CallerContext.mcpRisk()` i `mcpAction()`. Wartość inna niż `READ_ONLY` jest logowana i liczona (`mcp_adapter_classification_not_read_only_total`). Nowy `InternalJwtRejection.CLASSIFICATION_MISSING` i
+  `InternalJwtVerifier.Settings` z siódmym składnikiem `receiverMode` (stare konstruktory zostają). Test sidecara z `TestGateway`: `Token.extraClaim("mcp_risk", "READ_ONLY")` i `extraClaim("mcp_action", "read")`.
+- **Regeneracja manifestu**: serwer natywny bez zmian w hashach (kontrakty 6.3.x nie ruszają definicji ani hasha dla manifestów bez `source`).
+- **Wektory:** `jwt/` 66 (było 59), `audit-events/` 128 (było 125), `query-rendering/` 27 (było 26). Test serwera, który liczy pliki katalogu, zaktualizuj.
+- **`decision` w zdarzeniu `authentication`** jest opcjonalne w schemacie (broker go nie zapisuje); starter je zapisuje jak dotąd, więc nic się nie zmienia po stronie serwera.
+
 ## Z beta-12 na beta-13
 
 Podbicie wersji: `<mcp-platform.version>3.0.0-beta-13</mcp-platform.version>` albo `<version>3.0.0-beta-13</version>` w imporcie `mcp-platform-bom`. Sygnatury `CursorCodec` bez zmian, kontrakty 6.2.1.

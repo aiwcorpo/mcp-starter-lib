@@ -38,8 +38,8 @@ class InternalJwtVectorsTest {
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final String ROOT = "mcp-contracts/test-vectors/";
 
-    /** Files in test-vectors/jwt of mcp-contracts 3.0.2. */
-    private static final int EXPECTED_VECTORS = 59;
+    /** Files in test-vectors/jwt of mcp-contracts 6.3.2. */
+    private static final int EXPECTED_VECTORS = 66;
 
     record Vector(String name, JsonNode data) {
         @Override
@@ -152,7 +152,8 @@ class InternalJwtVectorsTest {
                 Duration.ofSeconds(settings.get("clockSkewSeconds").asLong()),
                 Duration.ofSeconds(settings.get("maxLifetimeSeconds").asLong()),
                 settings.get("allowTestKeys").asBoolean(),
-                settings.path("devstackProfile").asBoolean(false)),
+                settings.path("devstackProfile").asBoolean(false),
+                "adapter".equals(settings.path("receiverMode").asString("")) ? ReceiverMode.ADAPTER : ReceiverMode.NATIVE),
                 JwksGatewayKeys.of(jwks), store, clock);
     }
 

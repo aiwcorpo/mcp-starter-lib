@@ -5,8 +5,8 @@ gateway'em: nie loguje użytkowników, nie decyduje o uprawnieniach do narzędzi
 robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadczenie do systemu docelowego,
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
-Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 6.2.1.
-Wersja: **3.0.0-beta-13** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 6.3.2.
+Wersja: **3.0.0-beta-14** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 Tag `v3.0.0-beta-11` jest lokalny i nie służy do publikacji przez GitHub Actions (jego workflow wydania jest starszy od przeglądu
 bezpieczeństwa); pierwsze publiczne wydanie to nowy tag, nie ten.
 
@@ -165,6 +165,7 @@ aiwcorpo.mcp.platform:
     clock-skew: 30s                                       # najwyżej 30 s
     max-lifetime: 60s                                     # najwyżej 60 s
     replay-store: redis                                   # redis | memory (tylko profil dev)
+    receiver-mode: native                                 # native | adapter (sidecar adaptera, CC-226)
     allow-test-keys: false                                # true tylko w profilu dev
     max-request-body: 4MB
     unauthenticated-paths: [/actuator/health, /actuator/health/liveness, /actuator/health/readiness]
@@ -334,7 +335,7 @@ poniżej `$JAVA_HOME/bin/java` (`JAVA_HOME` wskazuje JDK 25).
             <dependency>
                 <groupId>pl.aiwcorpo.mcp</groupId>
                 <artifactId>mcp-platform-bom</artifactId>
-                <version>3.0.0-beta-13</version>
+                <version>3.0.0-beta-14</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -744,7 +745,7 @@ String jql = scope.jql(Set.of("status", "assignee", "text"))   // pola warunków
 ```
 
 - **Listy pól i operatorów są normatywne** (kontrakt 4.0.0): warunki JQL `text`, `status`, `assignee`, `summary`; `ORDER BY` JQL `created`, `updated`, `priority`,
-  `key`; warunki CQL `text`, `title`, `label`; `ORDER BY` CQL `created`, `lastmodified`, `title`; operatory `EQUALS` (`=`), `CONTAINS` (`~`), `NOT_EQUALS` (`!=`).
+  `key`; warunki CQL `text`, `title`, `label`; `ORDER BY` CQL `created`, `lastmodified`, `title`; operatory `EQUALS` (`=`), `CONTAINS` (`~`), `NOT_EQUALS` (`!=`). Zapytanie CQL kończy się stałą klauzulą `AND type = page` (przed `ORDER BY`; CC-219): `content/search` bez niej zwraca też komentarze, załączniki i blogi.
   Serwer może dopuścić mniej (`scope.jql(fields)` z podzbiorem; `scope.jql(fields, orderFields)` zawęża też `ORDER BY`), nigdy więcej: pole spoza listy to
   `IllegalArgumentException` już przy tworzeniu buildera (stałe `StructuredQuery.JQL_CONDITION_FIELDS` itd.). Nowe pole wymaga zmiany kontraktu. Jedno `ORDER BY` na zapytanie;
 - wartość: 1 do 1000 znaków, bez znaków zakazanych przez higienę tekstu (CC-121) i bez znaków sterujących, do 30 warunków; naruszenie to
@@ -786,6 +787,19 @@ String jql = scope.jql(Set.of("status", "assignee", "text"))   // pola warunków
 Odmowa polityki to zdarzenie `policy_decision` (C8) z `decision: deny`, `reason` (`policy_forbid`: odmowa polityki, reguła `forbid` albo brak `permit`;
 `not_granted`: zasób nierozwiązany albo bez grantu, CC-141), typem i
 id zasobu, jeśli id jest bezpieczne w logu, `policyRevision` paczki serwera i `errorCode`; zwykłe wywołanie to `tool_call`.
+
+## Tryb odbiorcy wewnętrznego JWT: serwer natywny i sidecar adaptera (CC-226)
+
+`aiwcorpo.mcp.platform.internal-jwt.receiver-mode` mówi, kim jest odbiorca tokenu, bo schemat tego nie rozpozna.
+
+- `native` (domyślnie, każdy serwer napisany na starterze): token z `mcp_risk` albo `mcp_action` to `401 invalid_claims`. Gateway wysyła te claimy
+  tylko do `serverId` w trybie adaptera, więc zdarzenie na serwerze natywnym oznacza błąd konfiguracji gateway'a albo podrobiony token.
+- `adapter` (sidecar `mcp-server-adapter`, który stoi przed obcym serwerem): `tools/call` musi nieść `mcp_risk` i `mcp_action` (zawsze razem, z `tool`,
+  zgodna para, inaczej `invalid_claims`); bez nich odmowa `401` z powodem `classification_missing` (fail-closed: starszy gateway albo niezgodny tryb). Klasyfikacja
+  administratora jest w `CallerContext.mcpRisk()` i `mcpAction()` i zastępuje ryzyko zastępcze z podpowiedzi obcego serwera. Wartość inna niż `READ_ONLY`
+  jest logowana (`event=adapter_classification_not_read_only`) i liczona (`mcp_adapter_classification_not_read_only_total{risk}`): po CC-227 gateway jej nie wyśle.
+
+`CallerContext` ma dwa nowe składniki na końcu (`mcpRisk`, `mcpAction`, `null` poza sidecarem); konstruktor z ośmioma argumentami zostaje.
 
 ## Duże wyniki: strony, kursor, `truncated` i `omitted`
 
@@ -1121,7 +1135,7 @@ Testy, które zakładają maszynę programisty, same się pomijają na hoście z
 Liczba pominiętych jest w logu, a `release` odmawia, gdy cokolwiek pominięto albo ustawiono `MCP_CI_NO_DOCKER`. Sprawdzone: przebieg lokalny i w obrazie `maven:3.9.12-eclipse-temurin-25`; nie na prawdziwym runnerze GitLab, Jenkins ani GitHub.
 Przy Dockerze bez routingu do hosta ustaw `TESTCONTAINERS_HOST_OVERRIDE`. `MAVEN_REPO_LOCAL` to jedno repozytorium Maven dla budowy, instalacji i kontroli istniejącej wersji.
 
-Artefakty `mcp-contracts` 6.2.1 muszą być w `~/.m2` albo w rejestrze wskazanym przez `MCP_MAVEN_REPOSITORY_URL` (`_USER`, `_PASSWORD`; `.ci/settings.xml`).
+Artefakty `mcp-contracts` 6.3.2 muszą być w `~/.m2` albo w rejestrze wskazanym przez `MCP_MAVEN_REPOSITORY_URL` (`_USER`, `_PASSWORD`; `.ci/settings.xml`).
 `RedisJtiReplayStoreTest` uruchamia Redisa przez Testcontainers, więc potrzebny jest dostęp do środowiska kontenerów (gniazdo Dockera zamontowane w kontenerze CI albo `DOCKER_HOST`).
 
 Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera to
@@ -1130,7 +1144,7 @@ Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera t
 ```xml
 <dependency>
   <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-  <version>3.0.0-beta-13</version><type>pom</type><scope>import</scope>
+  <version>3.0.0-beta-14</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
 

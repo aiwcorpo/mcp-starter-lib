@@ -24,6 +24,8 @@ public enum InternalJwtRejection {
     TOOL_MISSING("tool_missing"),
     TOOL_NOT_ALLOWED("tool_not_allowed"),
     TOOL_MISMATCH("tool_mismatch"),
+    /** The sidecar of an adapter got a {@code tools/call} without {@code mcp_risk} and {@code mcp_action} (CC-226): fail-closed. */
+    CLASSIFICATION_MISSING("classification_missing"),
     /**
      * The header of a token whose {@code kid} resolved to a gateway key carries {@code crit} or a {@code typ} other than
      * {@code JWT}. Not a parse failure and never capped: it takes a token that got past the key lookup. Reported with the

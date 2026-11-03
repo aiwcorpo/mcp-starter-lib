@@ -146,7 +146,7 @@ class QueryScopeTest {
 
         assertThatThrownBy(() -> scope.narrowedTo(List.of("ENG\" OR space = \"HR"))).isInstanceOf(IllegalArgumentException.class);
         assertThat(scope.narrowedTo(List.of("ENG")).cql(Set.of("title")).where("title", StructuredQuery.Operator.EQUALS, "x").build())
-                .isEqualTo("(title = \"x\") AND space in (\"ENG\")");
+                .isEqualTo("(title = \"x\") AND space in (\"ENG\") AND type = page");
         assertThatThrownBy(() -> scope("OpenSearch::Index", null, Set.of("a")).narrowedTo(List.of("a")))
                 .isInstanceOf(IllegalStateException.class);
     }
@@ -185,7 +185,7 @@ class QueryScopeTest {
         assertThat(open.cqlSpaceClause(false)).isEmpty();
         assertThatThrownBy(() -> none.cqlSpaceClause(true)).isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(() -> pages.cqlSpaceClause(true)).isInstanceOf(IllegalStateException.class).hasMessageContaining("subtrees");
-        assertThat(open.cql(Set.of("title"), true).build()).isEqualTo("space in (\"OPS\")");
+        assertThat(open.cql(Set.of("title"), true).build()).isEqualTo("space in (\"OPS\") AND type = page");
     }
 
     @Test
