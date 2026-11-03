@@ -16,7 +16,7 @@ class ProductVersionTest {
 
     @Test
     void whatIsNotAVersionIsEmpty() {
-        for (String text : new String[] {null, "", "9", "abc", "<html>9.12</html>", "9.12345", "1.2.3.4x", ".5.1"}) {
+        for (String text : new String[] {null, "", "9", "abc", "<html>9.12</html>", "9.12345", "9.12.34567", "1.2.3.4x", ".5.1"}) {
             if ("1.2.3.4x".equals(text)) {
                 assertThat(ProductVersion.parse(text)).contains(new ProductVersion(1, 2, 3));
             } else {

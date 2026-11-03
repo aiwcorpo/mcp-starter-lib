@@ -7,8 +7,11 @@ package pl.aiwcorpo.mcp.platform.capability;
  * reports it in the log, the metric {@code mcp_backend_capability} and the {@code backendCapability} health detail.
  *
  * <p>The probe runs on a thread of its own, outside any request: there is no caller and no user credential. It reads
- * what the system says about itself without logging in ({@code /rest/api/2/serverInfo}, {@code /api/v4/version} with a
- * service token from the server's own configuration), never anything a user owns. It must be safe to repeat and should
+ * what the system says about itself at endpoints that need no login ({@code /rest/api/2/serverInfo}), never anything a
+ * user owns. A server keeps no secrets (the credentials come from the broker through the gateway), so a probe of a system
+ * whose version endpoint needs a login (GitLab {@code /api/v4/version}) cannot hold a token in the server's configuration:
+ * that needs a decision on a service credential delivered by the broker (a contract change) and until then such a system is
+ * probed through a public endpoint or not at all. It must be safe to repeat and should
  * finish well within {@code aiwcorpo.mcp.platform.capability.timeout}; an exception or a timeout is
  * {@link Capabilities.State#UNAVAILABLE}, not a failed start.
  */

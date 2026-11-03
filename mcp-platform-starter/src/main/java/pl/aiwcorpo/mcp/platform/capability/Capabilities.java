@@ -48,7 +48,11 @@ public record Capabilities(State state, @Nullable String backendVersion, Set<Str
         return new Capabilities(State.SUPPORTED, backendVersion, features, "");
     }
 
-    /** @param baseline the features that work on every version of the system, nothing the unknown version might lack */
+    /**
+     * @param baseline the features that work on every version of the system, nothing the unknown version might lack
+     * @param detail   a fixed text written by the server; never an exception message or a response body (those can carry
+     *                 a token, and cleaning keeps letters and digits)
+     */
     public static Capabilities degraded(@Nullable String backendVersion, Set<String> baseline, String detail) {
         return new Capabilities(State.DEGRADED, backendVersion, baseline, detail);
     }

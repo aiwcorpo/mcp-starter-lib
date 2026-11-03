@@ -7,8 +7,12 @@ import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import pl.aiwcorpo.mcp.platform.auth.CallerContext;
 import pl.aiwcorpo.mcp.platform.error.InvalidToolArgumentException;
 
@@ -26,6 +30,9 @@ import pl.aiwcorpo.mcp.platform.error.InvalidToolArgumentException;
  * computed again for the current request ({@code QueryScope}) and filtered again by the {@code ResultFilter}, so a
  * forged or replayed cursor cannot widen what a page contains. The payload is readable by the client (base64url, not
  * encrypted): put only the backend's position in it, never a credential or a value the client must not see.
+ *
+ * <p>The signature also covers the id of the server that issued the cursor ({@code server-id}), so a cursor of one server is
+ * refused by another even when an operator gave both the same key.
  *
  * <p>Instances of one server must share {@code aiwcorpo.mcp.platform.paging.cursor-key}; with a key generated at
  * startup a cursor issued by one instance is refused by another and by the same one after a restart. The gateway's
@@ -51,11 +58,33 @@ public final class CursorCodec {
     private static final Base64.Encoder ENCODER = Base64.getUrlEncoder().withoutPadding();
     private static final Base64.Decoder DECODER = Base64.getUrlDecoder();
 
+    private static final Logger LOG = LoggerFactory.getLogger(CursorCodec.class);
+
     private final SecretKeySpec key;
     private final Duration validity;
     private final Clock clock;
+    private final String serverId;
+    private final boolean generatedKey;
+    private final AtomicBoolean generatedKeyReported = new AtomicBoolean();
 
     public CursorCodec(byte[] key, Duration validity, Clock clock) {
+        this(key, validity, clock, "", false);
+    }
+
+    /** As the three argument constructor, with the id of the server in the signature. */
+    public CursorCodec(byte[] key, Duration validity, Clock clock, String serverId) {
+        this(key, validity, clock, serverId, false);
+    }
+
+    /**
+     * A codec with a key generated for this process: the first cursor it issues logs a warning, so a server without a
+     * paged tool does not warn at all.
+     */
+    public static CursorCodec withGeneratedKey(byte[] key, Duration validity, Clock clock, String serverId) {
+        return new CursorCodec(key, validity, clock, serverId, true);
+    }
+
+    private CursorCodec(byte[] key, Duration validity, Clock clock, String serverId, boolean generatedKey) {
         if (key == null || key.length < 32) {
             throw new IllegalArgumentException("The cursor key must be at least 32 bytes");
         }
@@ -65,6 +94,8 @@ public final class CursorCodec {
         this.key = new SecretKeySpec(key.clone(), MAC_ALGORITHM);
         this.validity = validity;
         this.clock = clock;
+        this.serverId = Objects.requireNonNull(serverId, "serverId");
+        this.generatedKey = generatedKey;
     }
 
     /**
@@ -80,6 +111,12 @@ public final class CursorCodec {
 
     /** As {@link #issue(String, String, String)} for an explicit {@code sub}. */
     public String issueFor(String subject, String tool, String fingerprint, String state) {
+        Objects.requireNonNull(subject, "subject");
+        Objects.requireNonNull(tool, "tool");
+        Objects.requireNonNull(fingerprint, "fingerprint");
+        if (generatedKey && generatedKeyReported.compareAndSet(false, true)) {
+            LOG.warn("aiwcorpo.mcp.platform.paging.cursor-key is not set: cursors are valid only on this instance until it restarts");
+        }
         byte[] position = state.getBytes(StandardCharsets.UTF_8);
         if (position.length > MAX_STATE_BYTES) {
             throw new IllegalArgumentException("The cursor position is longer than " + MAX_STATE_BYTES + " bytes");
@@ -104,6 +141,9 @@ public final class CursorCodec {
 
     /** As {@link #open(String, String, String)} for an explicit {@code sub}. */
     public String openFor(String subject, String cursor, String tool, String fingerprint) {
+        Objects.requireNonNull(subject, "subject");
+        Objects.requireNonNull(tool, "tool");
+        Objects.requireNonNull(fingerprint, "fingerprint");
         try {
             if (cursor == null || cursor.length() > MAX_CURSOR_LENGTH) {
                 throw refused();
@@ -112,8 +152,14 @@ public final class CursorCodec {
             if (dot <= 0 || dot != cursor.lastIndexOf('.') || dot == cursor.length() - 1) {
                 throw refused();
             }
-            byte[] payload = DECODER.decode(cursor.substring(0, dot));
-            byte[] signature = DECODER.decode(cursor.substring(dot + 1));
+            String payloadText = cursor.substring(0, dot);
+            String signatureText = cursor.substring(dot + 1);
+            byte[] payload = DECODER.decode(payloadText);
+            byte[] signature = DECODER.decode(signatureText);
+            // The decoder accepts padding and non-zero trailing bits, so one cursor would have several spellings.
+            if (!ENCODER.encodeToString(payload).equals(payloadText) || !ENCODER.encodeToString(signature).equals(signatureText)) {
+                throw refused();
+            }
             if (payload.length < Long.BYTES
                     || !MessageDigest.isEqual(signature, sign(subject, tool, fingerprint, payload))) {
                 throw refused();
@@ -160,7 +206,7 @@ public final class CursorCodec {
             Mac mac = Mac.getInstance(MAC_ALGORITHM);
             mac.init(key);
             mac.update(DOMAIN);
-            for (String part : new String[] {subject, tool, fingerprint}) {
+            for (String part : new String[] {serverId, subject, tool, fingerprint}) {
                 byte[] bytes = part.getBytes(StandardCharsets.UTF_8);
                 mac.update(ByteBuffer.allocate(Integer.BYTES).putInt(bytes.length).array());
                 mac.update(bytes);

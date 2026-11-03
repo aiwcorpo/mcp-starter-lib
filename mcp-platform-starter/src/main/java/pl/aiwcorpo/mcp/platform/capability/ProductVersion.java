@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
  */
 public record ProductVersion(int major, int minor, int patch) implements Comparable<ProductVersion> {
 
-    private static final Pattern NUMERIC = Pattern.compile("^v?(\\d{1,4})\\.(\\d{1,4})(?:\\.(\\d{1,4}))?(?![0-9])");
+    private static final Pattern NUMERIC = Pattern.compile("^v?(\\d{1,4})\\.(\\d{1,4})(?:\\.(\\d{1,4})(?!\\d)|(?!\\.\\d))(?!\\d)");
 
     public static Optional<ProductVersion> parse(String text) {
         if (text == null) {

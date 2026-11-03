@@ -4,6 +4,22 @@ Format: wersje SemVer; kolejność od najnowszej. Przed 3.0.0 wersje `alpha` i `
 `v3.0.0-beta-N`) nie gwarantują zgodności między sobą; kroki migracji każdej z nich są w `MIGRATION-3.0.md`.
 Linia `mcp-platform` 3.x nie ma związku z wersją `mcp-contracts` (BOM zarządza obiema).
 
+## 3.0.0-beta-12 - 2026-11-03
+
+Zmiany zgodne z beta-11 (podbicie wersji); poprawki po przeglądzie beta-11.
+
+- `PageFiller`: dopełnianie strony kolejnymi stronami systemu do żądanego rozmiaru (z limitem odczytów), żeby krótka strona z
+  `nextCursor` nie zdradzała ukrytych elementów; `Filled.exhausted()` mówi o wyczerpanym limicie.
+- `CursorCodec`: podpis obejmuje `server-id` (nowy konstruktor, stary zostaje), kodowanie kursora jednoznaczne (bez `=` i bez
+  niezerowych bitów dopełnienia), `NullPointerException` z komunikatem dla `null` w `tool`/`fingerprint`, ostrzeżenie o losowym kluczu
+  dopiero przy pierwszym wydanym kursorze.
+- `CapabilityProbeRunner`: sonda nie jest uruchamiana ponownie, dopóki poprzednie wywołanie trwa; po jednym wątku roboczym i
+  harmonogramu na sondę; `start()` jednokrotne.
+- `ProductVersion`: składnik powyżej 9999 nie jest wersją (`9.12.34567` jest puste, nie `9.12.0`).
+- Workflow wydania: job `verify` bez środowiska i bez prawa zapisu, `publish` z `packages: write` i środowiskiem `release`, `sbom` z
+  `contents: write` dołącza SBOM do wydania GitHub; limity czasu i `concurrency`; obraz CI po digeście; wersja pluginu help.
+  Tag `v3.0.0-beta-11` nie służy do publikacji przez Actions.
+
 ## 3.0.0-beta-11 - 2026-11-03
 
 - Kontrakty `mcp-contracts` 6.2.1 (6.0.0 ... 6.2.0 bez zmian w kodzie startera; 6.2.1 to pakowanie i licencja).

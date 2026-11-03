@@ -1,12 +1,21 @@
 # Publishes a tagged release to GitHub Packages (Maven, group pl.aiwcorpo.mcp: mcp-platform, mcp-platform-bom,
-# mcp-platform-starter, mcp-platform-test) and attaches a CycloneDX SBOM. Runs only on a v* tag; nothing is published from
-# branches. Not run yet: the repository and the organization packages do not exist at the time of writing.
+# mcp-platform-starter, mcp-platform-test) and attaches a CycloneDX SBOM to the GitHub Release. Runs only on a v* tag;
+# nothing is published from branches. Not run yet: the repository and the organization packages do not exist at the time of
+# writing. The local tag v3.0.0-beta-11 predates this file in its present form and must not be pushed alone: the first public
+# release is a new tag.
 #
-# Two jobs, so that code under test never sees a write token: verify runs tests and dependencies with contents: read and a
-# read-only credential; publish has packages: write, no build cache, and the write token only in the environment of the deploy step.
-# The mcp-contracts artifacts are read from the packages of aiwcorpo/mcp-contracts with the secret MCP_CONTRACTS_READ_TOKEN
-# (a token with read:packages only, in the environment "release"); GITHUB_TOKEN of this repository cannot read them unless the
-# package grants access to this repository.
+# Setup, once, in the repository settings:
+#   - Environment "release": required reviewers (at least one person other than the one who pushes the tag) and a deployment
+#     rule that allows only tags matching v*. The jobs publish and sbom wait for approval.
+#   - Repository secret MCP_CONTRACTS_READ_TOKEN: a token with read:packages only, and repository variable
+#     MCP_CONTRACTS_READ_USER: its login. They are repository-level on purpose, not environment-level: job verify has no
+#     environment (so tests never wait for or see anything that belongs to the reviewed environment) and still needs to read
+#     the mcp-contracts packages. The token can only read; a package of aiwcorpo/mcp-contracts must be readable by it.
+#
+# Three jobs: verify runs the tests and the dependencies with contents: read and the read-only token; publish has
+# packages: write, no build cache, and the write token only in the environment of the deploy step; sbom has contents: write
+# and uses it only in the step that creates the release. The deploy step still compiles with the write token in its
+# environment (Maven plugins and annotation processors run in it); that is accepted, and the reason the environment is reviewed.
 name: release
 
 on:
@@ -16,9 +25,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   verify:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     permissions:
       contents: read
     env:
@@ -39,13 +53,27 @@ jobs:
       - name: Tag matches the project version
         run: |
           version="${GITHUB_REF_NAME#v}"
-          test "$(./mvnw -q -B -N help:evaluate -Dexpression=project.version -DforceStdout)" = "$version"
+          test "$(./mvnw -q -B -N org.apache.maven.plugins:maven-help-plugin:3.5.1:evaluate -Dexpression=project.version -DforceStdout)" = "$version"
+      - name: Deployment signals on this runner (names only)
+        run: |
+          for name in INVOCATION_ID KUBERNETES_SERVICE_HOST KUBERNETES_SERVICE_PORT container; do
+            if [ -n "${!name:-}" ]; then echo "present: $name"; fi
+          done
+          for file in /.dockerenv /run/.containerenv; do
+            if [ -e "$file" ]; then echo "present: $file"; fi
+          done
+          true
+      # The hosted runner is a systemd service, so INVOCATION_ID is set in its steps and the tests that expect a developer's machine
+      # skip themselves; ci/run.sh release refuses a run with skipped tests. Only the variable of the runner service is removed for
+      # this one process, and only here: the starter reads the real environment of the server it protects, and a production
+      # server keeps its signal. A container or a pod signal would still make the run refuse, which is intended.
       - name: Verify (tests with the Redis container, no skipped test)
-        run: ci/run.sh release
+        run: env -u INVOCATION_ID ci/run.sh release
 
   publish:
     needs: verify
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     environment: release
     permissions:
       contents: read
@@ -68,14 +96,34 @@ jobs:
           MCP_MAVEN_REPOSITORY_URL: https://maven.pkg.github.com/aiwcorpo/mcp-contracts
           MCP_MAVEN_REPOSITORY_USER: ${{ vars.MCP_CONTRACTS_READ_USER }}
           MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.MCP_CONTRACTS_READ_TOKEN }}
+
+  sbom:
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      # actions/checkout v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      # actions/setup-java v4.7.1
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
+        with:
+          distribution: temurin
+          java-version: '25'
       - name: SBOM (CycloneDX)
         run: ./mvnw -B -s .ci/settings.xml org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom
         env:
           MCP_MAVEN_REPOSITORY_URL: https://maven.pkg.github.com/aiwcorpo/mcp-contracts
           MCP_MAVEN_REPOSITORY_USER: ${{ vars.MCP_CONTRACTS_READ_USER }}
           MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.MCP_CONTRACTS_READ_TOKEN }}
-      # actions/upload-artifact v4.6.2
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: sbom
-          path: target/bom.*
+      - name: Attach the SBOM to the GitHub Release
+        run: |
+          flags=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" "${flags[@]}" target/bom.json target/bom.xml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

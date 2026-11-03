@@ -88,7 +88,7 @@ mvnw() {
 }
 
 project_version() {
-  mvnw -q -N help:evaluate -Dexpression=project.version -DforceStdout 2>/dev/null | tail -n 1
+  mvnw -q -N org.apache.maven.plugins:maven-help-plugin:3.5.1:evaluate -Dexpression=project.version -DforceStdout 2>/dev/null | tail -n 1
 }
 
 # Tracked and untracked-but-not-ignored sources; .m2/ (a cache inside the workspace) is ignored by git and left out by name too.

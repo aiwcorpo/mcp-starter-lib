@@ -341,4 +341,45 @@ class ResourcePolicyTest {
             assertThat(text(call(client, "delete_issue", Map.of("issueKey", "DEF-7")))).contains("not_found_or_denied");
         }
     }
+
+    @Test
+    void aPagedResultLosesTheHiddenElementButKeepsTheCursorAndANextPageIsFetchedWithIt() throws Exception {
+        try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
+            McpSchema.CallToolResult first = call(client, "paged_issues", Map.of());
+
+            var body = JSON.readTree(text(first));
+            assertThat(body.path("items")).isEmpty();
+            assertThat(body.path("nextCursor").asString()).isNotBlank();
+            assertThat(text(first)).doesNotContain("HR-5");
+
+            McpSchema.CallToolResult second = call(client, "paged_issues", Map.of("cursor", body.path("nextCursor").asString()));
+            assertThat(text(second)).contains("ABC-1");
+        }
+    }
+
+    @Test
+    void aFilledPageDoesNotShowTheShortPageThatTheHiddenElementWouldLeave() throws Exception {
+        try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
+            McpSchema.CallToolResult first = call(client, "filled_issues", Map.of());
+
+            var body = JSON.readTree(text(first));
+            assertThat(body.path("items")).hasSize(1);
+            assertThat(text(first)).contains("ABC-1").doesNotContain("HR-5");
+            assertThat(body.path("nextCursor").asString()).isNotBlank();
+        }
+    }
+
+    @Test
+    void aCursorOfAnotherUserIsInvalidArgumentWithTheFixedText() throws Exception {
+        String cursor;
+        try (McpSyncClient alice = client(ResourcePolicyTest::reader)) {
+            cursor = JSON.readTree(text(call(alice, "paged_issues", Map.of()))).path("nextCursor").asString();
+        }
+        try (McpSyncClient other = client(user -> user.groups(List.of("mcp-jira-read")).subject("another-user"))) {
+            McpSchema.CallToolResult result = call(other, "paged_issues", Map.of("cursor", cursor));
+
+            assertThat(result.isError()).isTrue();
+            assertThat(text(result)).contains("invalid_argument").contains("Repeat the query without a cursor");
+        }
+    }
 }

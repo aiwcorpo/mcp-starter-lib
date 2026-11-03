@@ -11,6 +11,8 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
@@ -191,5 +193,55 @@ class CapabilityProbeRunnerTest {
         assertThat(health.getStatus().getCode()).isEqualTo("UNAVAILABLE");
         assertThat(health.getDetails()).containsKeys("jira", "gitlab");
         assertThat(new SimpleStatusAggregator().getAggregateStatus(health.getStatus(), Status.UP)).isEqualTo(Status.UP);
+    }
+
+    @Test
+    void aProbeThatIgnoresTheInterruptIsNotStartedAgainWhileItRuns() {
+        BackendCapabilities store = new BackendCapabilities();
+        AtomicInteger calls = new AtomicInteger();
+        AtomicBoolean release = new AtomicBoolean();
+        CapabilityProbe jira = probe("jira", () -> {
+            calls.incrementAndGet();
+            while (!release.get()) {
+                Thread.onSpinWait();
+            }
+            return Capabilities.supported("9.12.3", FULL);
+        });
+        CapabilityProbeRunner runner = runner(store, null, Duration.ofMillis(50), jira);
+
+        runner.runOnce(jira);
+        runner.runOnce(jira);
+        runner.runOnce(jira);
+
+        assertThat(calls).hasValue(1);
+        assertThat(store.of("jira").detail()).isEqualTo("the previous probe is still running");
+
+        release.set(true);
+        org.awaitility.Awaitility.await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+            runner.runOnce(jira);
+            assertThat(store.of("jira").state()).isEqualTo(Capabilities.State.SUPPORTED);
+        });
+        runner.destroy();
+    }
+
+    @Test
+    void theRunnerStartsOnceReschedulesAndStopsOnDestroy() throws Exception {
+        BackendCapabilities store = new BackendCapabilities();
+        AtomicInteger calls = new AtomicInteger();
+        CapabilityProbe jira = probe("jira", () -> {
+            calls.incrementAndGet();
+            return Capabilities.unavailable("down");
+        });
+        CapabilityProbeRunner runner = new CapabilityProbeRunner(List.of(jira), store, null, Duration.ofSeconds(1),
+                Duration.ofMinutes(5), Duration.ofMillis(50));
+
+        runner.start();
+        runner.start();
+        org.awaitility.Awaitility.await().atMost(Duration.ofSeconds(5)).until(() -> calls.get() >= 3);
+        runner.destroy();
+        int afterDestroy = calls.get();
+        Thread.sleep(250);
+
+        assertThat(calls.get()).isLessThanOrEqualTo(afterDestroy + 1);
     }
 }

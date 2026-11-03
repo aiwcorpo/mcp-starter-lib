@@ -6,7 +6,9 @@ robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadc
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
 Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 6.2.1.
-Wersja: **3.0.0-beta-11** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+Wersja: **3.0.0-beta-12** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+Tag `v3.0.0-beta-11` jest lokalny i nie służy do publikacji przez GitHub Actions (jego workflow wydania jest starszy od przeglądu
+bezpieczeństwa); pierwsze publiczne wydanie to nowy tag, nie ten.
 
 ## Dla kogo i jak zacząć
 
@@ -332,7 +334,7 @@ poniżej `$JAVA_HOME/bin/java` (`JAVA_HOME` wskazuje JDK 25).
             <dependency>
                 <groupId>pl.aiwcorpo.mcp</groupId>
                 <artifactId>mcp-platform-bom</artifactId>
-                <version>3.0.0-beta-11</version>
+                <version>3.0.0-beta-12</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -810,13 +812,21 @@ public PagedResult<IssueHit> searchIssues(
   `paging.cursor-validity`). Kursor innego użytkownika, innego narzędzia albo zmienionego zapytania, sfałszowany, ucięty i
   przeterminowany kończy się tym samym `invalid_argument` ze stałym tekstem, więc komunikat nie zdradza przyczyny. Podpis to
   HMAC-SHA256; wszystkie instancje serwera muszą mieć ten sam `paging.cursor-key`, inaczej kursor wydany przez jedną odrzuci
-  druga (bez klucza starter losuje go przy starcie i ostrzega w logu).
+  druga (bez klucza starter losuje go na proces i ostrzega przy pierwszym wydanym kursorze, więc serwer bez narzędzia stronicującego
+  nie ostrzega wcale). Podpis obejmuje też `server-id`, więc kursor jednego serwera odrzuci inny serwer nawet z tym samym kluczem.
 - **Kursor nie jest uprawnieniem.** Niesie wyłącznie pozycję w stronicowaniu systemu (offset, `nextPageToken`, wartość
   klucza); zakres wywołującego (`QueryScope`) liczy się od nowa dla każdej strony, a `ResultFilter` filtruje każdą stronę, więc
   podrobiony kursor niczego nie poszerza. Treść kursora da się odczytać (base64url, bez szyfrowania): nie wkładaj w nią
   poświadczenia ani niczego, czego klient nie może zobaczyć. Najwyżej 512 bajtów pozycji.
-- **Strona może być pusta albo krótsza i mieć `nextCursor`**: elementy usunięte przez `ResultFilter` nie zostawiają śladu, więc
-  o dalszych stronach mówi tylko kursor. Nie ma `total` (licznik systemu zawiera to, czego wywołujący nie widzi, a starter go nie poprawia).
+- **Strona może być pusta albo krótsza i mieć `nextCursor`**, jeśli `ResultFilter` usunął z niej elementy, a krótka strona z kursorem
+  zdradza, że w tym oknie coś było ukryte (seria pustych stron: że dalej są tylko niewidoczne). Dlatego narzędzie, które przyjmuje
+  rozmiar strony od klienta, dopełnia ją przez `PageFiller.fill(pozycja, rozmiar, maxOdczytow, pobierz, dozwolone)`: czyta kolejne
+  strony systemu, aż uzbiera żądaną liczbę dozwolonych elementów, ma ich koniec albo wyczerpie `maxOdczytow` (najwyżej 20). Strona
+  może wtedy mieć więcej elementów niż żądano (ostatnia strona systemu jest brana w całości, bo pozycja systemu to granica strony).
+  **Gdy limit odczytów się wyczerpie** (`Filled.exhausted()`), wynik jest krótki z kursorem, więc sygnał zostaje, ale ograniczony
+  liczbą odczytów, na które serwer sobie pozwala; nie zwracaj wtedy żadnej liczby ani komunikatu o ukrytych elementach. Najlepiej
+  zawężać zapytanie przed odczytem (`QueryScope`), żeby `ResultFilter` usuwał tylko wyjątki (na przykład zgłoszenie z linku do innego
+  projektu). Nie ma `total` (licznik systemu zawiera to, czego wywołujący nie widzi, a starter go nie poprawia).
 - **`truncated`** znaczy, że serwer sam uciął treść na swoim limicie (log, diff, treść strony), nie że jest następna strona.
 - **`omitted`** to stałe kody snake case (do 10, do 40 znaków: `binary_attachment`, `unsupported_macro`) rodzajów treści,
   których serwer nie umie bezpiecznie oddać. Nigdy nie liczy ani nie nazywa elementów usuniętych przez politykę: liczba
@@ -850,6 +860,11 @@ CapabilityProbe jiraProbe(JiraClient jira) {
 }
 ```
 
+Sonda czyta tylko endpointy bez logowania: serwer nie trzyma sekretów (poświadczenia przychodzą z brokera przez gateway), więc
+system, którego endpoint wersji wymaga logowania (GitLab `/api/v4/version`), potrzebuje decyzji o poświadczeniu serwisowym od brokera
+(zmiana kontraktu); do tego czasu sonda tego systemu używa publicznego endpointu albo jej nie ma. `detail` w `Capabilities` to stały tekst serwera,
+nigdy komunikat wyjątku ani treść odpowiedzi (czyszczenie zostawia litery i cyfry, więc nie usuwa tokenu).
+
 Stan to `SUPPORTED` (znana wersja, pełny zestaw cech), `DEGRADED` (system odpowiada, ale wersja jest nieznana: za stara albo
 nowsza niż testowana; zestaw cech to tylko bazowe, które działają na każdej wersji) albo `UNAVAILABLE` (brak odpowiedzi,
 błąd, wartość niebędąca wersją; żadnej cechy się nie zakłada). Serwer **wstaje w każdym z nich**; narzędzie pyta
@@ -860,7 +875,9 @@ Stan widać w trzech miejscach: linia logu przy każdej zmianie stanu lub wersji
 wersja i opis z systemu są oczyszczone ze znaków spoza `A-Za-z0-9._+ -` i ucięte do 120, z wyjątku trafia tylko nazwa klasy,
 bo komunikat klienta HTTP bywa z adresem i tokenem), metryka `mcp_backend_capability{probe,state}` (1 dla bieżącego stanu) oraz
 szczegół `backendCapability` w `/actuator/health` (jak każdy szczegół zdrowia: tylko z `management.endpoint.health.show-details`
-i z wewnętrznym JWT). Statusy `DEGRADED` i `UNAVAILABLE` nie wchodzą do agregacji Springa, więc nie zdejmują serwera z
+i z wewnętrznym JWT). Nie włączaj `management.endpoint.health.show-details=always`: `/actuator/health` jest poza wewnętrznym JWT, a szczegóły niosą wersję
+systemu i listę cech. Sonda, która nie reaguje na przerwanie, nie jest uruchamiana ponownie, dopóki poprzednie wywołanie trwa (stan
+`UNAVAILABLE`, "the previous probe is still running"); każda sonda ma własny wątek. Statusy `DEGRADED` i `UNAVAILABLE` nie wchodzą do agregacji Springa, więc nie zdejmują serwera z
 balancera: system nieznany albo wyłączony to odpowiedź `upstream_unavailable`, nie niezdrowa instancja.
 Zdarzenia audytu (C8) nie mają typu na zmianę zdolności backendu; to propozycja kontraktu (`CC-208`), do czasu decyzji linia logu i metryka.
 
@@ -1110,7 +1127,7 @@ Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera t
 ```xml
 <dependency>
   <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-  <version>3.0.0-beta-11</version><type>pom</type><scope>import</scope>
+  <version>3.0.0-beta-12</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
 

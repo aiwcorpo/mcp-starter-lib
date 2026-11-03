@@ -5,7 +5,9 @@ import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
@@ -13,6 +15,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
@@ -34,10 +37,10 @@ public final class CapabilityProbeRunner implements ApplicationListener<Applicat
     private final Duration timeout;
     private final Duration interval;
     private final Duration retryInterval;
-    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(
-            Thread.ofPlatform().name("capability-probe-scheduler").daemon().factory());
-    private final ExecutorService workers = Executors.newCachedThreadPool(
-            Thread.ofPlatform().name("capability-probe-", 0).daemon().factory());
+    private final ScheduledExecutorService scheduler;
+    private final ExecutorService workers;
+    private final Map<String, AtomicBoolean> running = new ConcurrentHashMap<>();
+    private final AtomicBoolean started = new AtomicBoolean();
 
     public CapabilityProbeRunner(List<CapabilityProbe> probes, BackendCapabilities capabilities, MeterRegistry meters,
                                  Duration timeout, Duration interval, Duration retryInterval) {
@@ -50,6 +53,12 @@ public final class CapabilityProbeRunner implements ApplicationListener<Applicat
         if (distinct != probes.size()) {
             throw new IllegalStateException("Two capability probes have the same name");
         }
+        // One thread per probe on both pools: a probe that ignores interruption occupies its own thread and no other.
+        int threads = Math.max(1, probes.size());
+        this.scheduler = Executors.newScheduledThreadPool(threads,
+                Thread.ofPlatform().name("capability-probe-scheduler-", 0).daemon().factory());
+        this.workers = Executors.newFixedThreadPool(threads,
+                Thread.ofPlatform().name("capability-probe-", 0).daemon().factory());
         if (meters != null) {
             for (CapabilityProbe probe : probes) {
                 for (Capabilities.State state : Capabilities.State.values()) {
@@ -67,8 +76,15 @@ public final class CapabilityProbeRunner implements ApplicationListener<Applicat
         start();
     }
 
-    /** Schedules the first run of every probe at once; public so a test can start the runner without an application. */
+    /**
+     * Schedules the first run of every probe; each probe has a scheduler thread of its own, so a slow one does not delay
+     * another. Calling it again does nothing (a parent and a child context both publish the event). Public so a test can
+     * start the runner without an application.
+     */
     public void start() {
+        if (!started.compareAndSet(false, true)) {
+            return;
+        }
         for (CapabilityProbe probe : probes) {
             scheduler.execute(() -> runAndReschedule(probe));
         }
@@ -84,7 +100,18 @@ public final class CapabilityProbeRunner implements ApplicationListener<Applicat
 
     /** One probe now, on a worker thread with the timeout; the answer is stored and returned. */
     Capabilities runOnce(CapabilityProbe probe) {
-        Future<Capabilities> pending = workers.submit(probe::probe);
+        AtomicBoolean busy = running.computeIfAbsent(probe.name(), name -> new AtomicBoolean());
+        // The flag is cleared by the worker itself: a cancelled future is "done" while its thread may still be stuck.
+        if (!busy.compareAndSet(false, true)) {
+            return store(probe, Capabilities.unavailable("the previous probe is still running"));
+        }
+        Future<Capabilities> pending = workers.submit(() -> {
+            try {
+                return probe.probe();
+            } finally {
+                busy.set(false);
+            }
+        });
         Capabilities result;
         try {
             result = pending.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
@@ -93,7 +120,7 @@ public final class CapabilityProbeRunner implements ApplicationListener<Applicat
             }
         } catch (TimeoutException ex) {
             pending.cancel(true);
-            result = Capabilities.unavailable("no answer within " + timeout.toSeconds() + " s");
+            result = Capabilities.unavailable("no answer within " + timeout.toMillis() + " ms");
         } catch (InterruptedException ex) {
             pending.cancel(true);
             Thread.currentThread().interrupt();
@@ -102,6 +129,10 @@ public final class CapabilityProbeRunner implements ApplicationListener<Applicat
             // Only the class: a message from an HTTP client may carry a URL with a token or a response body.
             result = Capabilities.unavailable("probe failed with " + ex.getCause().getClass().getSimpleName());
         }
+        return store(probe, result);
+    }
+
+    private Capabilities store(CapabilityProbe probe, Capabilities result) {
         Capabilities before = capabilities.of(probe.name());
         capabilities.update(probe.name(), result);
         if (before.state() != result.state() || !Objects.equals(before.backendVersion(), result.backendVersion())) {

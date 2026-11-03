@@ -9,12 +9,16 @@ on:
   pull_request:
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   verify-change:
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     container:
-      image: maven:3.9.12-eclipse-temurin-25
+      image: maven:3.9.12-eclipse-temurin-25@sha256:4f82a03a7d6679281952d628131299b1be88d7030a49c6a2b7d2ba2642e44e3e
     env:
       MCP_CI_NO_DOCKER: "true"
       MCP_MAVEN_REPOSITORY_URL: ${{ vars.MCP_MAVEN_REPOSITORY_URL }}
@@ -29,10 +33,11 @@ jobs:
       - run: ci/run.sh verify
   verify-main:
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     environment: ci-main
     container:
-      image: maven:3.9.12-eclipse-temurin-25
+      image: maven:3.9.12-eclipse-temurin-25@sha256:4f82a03a7d6679281952d628131299b1be88d7030a49c6a2b7d2ba2642e44e3e
       volumes:
         - /var/run/docker.sock:/var/run/docker.sock
     env:

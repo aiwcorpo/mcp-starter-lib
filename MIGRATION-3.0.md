@@ -308,6 +308,20 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
+## Z beta-11 na beta-12
+
+Samo podbicie wersji: `<mcp-platform.version>3.0.0-beta-12</mcp-platform.version>` w szablonie albo `<version>3.0.0-beta-12</version>` w imporcie `mcp-platform-bom`. Kontrakty zostają 6.2.1,
+API tylko przybywa (żadnej sygnatury nie usunięto ani nie zmieniono), manifest i `definitionHash` bez zmian. Co się zmienia w zachowaniu:
+
+- **Kursor jest związany z `server-id`.** Kursor wydany przez beta-11 nie przejdzie w beta-12 (kursory żyją 15 minut, nikt ich nie trzyma). Nowy konstruktor
+  `CursorCodec(key, validity, clock, serverId)`; stary zostaje, z pustym `serverId`. Bean startera podaje `server-id` sam.
+- **Odrzucane są kursory z `=` i z niezerowymi bitami dopełnienia**; kursory wydane przez `CursorCodec` takie nie są.
+- **Ostrzeżenie o braku `paging.cursor-key` pojawia się przy pierwszym wydanym kursorze**, nie przy starcie.
+- **Nowe, opcjonalne: `PageFiller.fill(...)`** dla narzędzi z rozmiarem strony od klienta (README, "Duże wyniki"). Narzędzie, które po `ResultFilter` zwraca krótką stronę z `nextCursor`, zdradza, że coś ukryto; dopełnianie to ogranicza.
+- **Sonda wersji**: wywołanie, które przekracza czas i ignoruje przerwanie, blokuje kolejne uruchomienia tej sondy (stan `UNAVAILABLE`), zamiast mnożyć wątki.
+  `ProductVersion.parse("9.12.34567")` jest teraz puste. Sonda nie powinna trzymać sekretu serwera (README, "Wersje systemu").
+- **`ci/run.sh`**: `project_version` woła `maven-help-plugin:3.5.1`; wersja musi być w `~/.m2` albo w rejestrze.
+
 ## Z beta-10 na beta-11
 
 Przejście na kontrakty **6.2.1** (M6, etap 3; CHANGELOG kontraktów 6.0.0, 6.1.0, 6.2.0, sekcje "Migracja" dla ws-02, ws-03, ws-04). 6.2.1 to wyłącznie pakowanie i licencja, kontrakty

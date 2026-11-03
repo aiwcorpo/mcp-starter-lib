@@ -1,5 +1,21 @@
 # STATUS - mcp-starter-lib (ws-02)
 
+## Poprawki po przeglądzie beta-11 i wydanie 3.0.0-beta-12
+
+Źródło: `review-starter-beta11.md`. Zgodność: tylko dodatki w API, przejście beta-11 -> beta-12 to podbicie wersji (`MIGRATION-3.0.md`, "Z beta-11 na beta-12").
+
+| Punkt | Co zrobione |
+| --- | --- |
+| W-0 | tag `v3.0.0-beta-11` jest lokalny i nie jest do publikacji przez Actions (jego `release.yml` jest sprzed przeglądu: akcje bez SHA, token zapisu w `env` całego joba, cache w jobie publikacji); pierwsze publiczne wydanie to nowy tag. Zapisane w README i nagłówku `release.yml`; w środowisku `release` wymagani recenzenci i reguła tylko dla tagów `v*` (opis w nagłówku workflow) |
+| W-1 | sekret odczytu kontraktów jako sekret i zmienna repozytorium (job `verify` nie ma środowiska); komentarz zgodny |
+| W-2 | runner GitHub działa jako usługa systemd, więc `INVOCATION_ID` bywa ustawione i testy zakładające maszynę programisty się pomijają, a `release` odmawia. Job `verify` wypisuje (same nazwy) obecne sygnały i woła `env -u INVOCATION_ID ci/run.sh release`: zmienna usługi runnera jest zdejmowana tylko dla tego procesu, w kodzie nie ma obejścia (sygnał kontenera lub poda nadal zatrzymuje wydanie). Nie sprawdzone na prawdziwym runnerze |
+| Workflow | `timeout-minutes`, `concurrency` (release bez anulowania, CI anuluje tylko pull requesty), obraz CI po digeście (`sha256:4f82a03a...`, z lokalnego obrazu), `maven-help-plugin:3.5.1`, SBOM w osobnym jobie `sbom` (`contents: write`) jako załącznik wydania GitHub |
+| S-1 | `PageFiller` (dopełnianie z limitem odczytów 1..20, `exhausted`), README opisuje sygnał, który zostaje po wyczerpaniu limitu; test przez transport (`paged_issues`, `filled_issues`) |
+| S-2 | brak ponownego uruchomienia sondy, dopóki poprzednie wywołanie trwa; pula = liczba sond; test sondy ignorującej przerwanie |
+| S-3 | Javadoc i README: serwer nie trzyma sekretów, sonda tylko endpointy bez logowania, GitLab wymaga decyzji o poświadczeniu od brokera |
+| N-1 ... N-8 | N-1 `server-id` w podpisie; N-2 ostrzeżenie leniwie (przy pierwszym kursorze), bez zatrzymania startu, żeby przejście było zgodne; N-3 jednoznaczne kodowanie; N-4 `requireNonNull`; N-5 `ProductVersion`; N-6 uwaga o `show-details` w README; N-7 `start()` jednokrotne, Javadoc; N-8 Javadoc `detail` |
+| T-1 ... T-3 | test przez transport z `PagedResult` i `@ResourceRef` (element usunięty, kursor zostaje), kursor innego użytkownika, zmieniony bajt podpisu i inne zapisy, test ponownego planowania i `destroy()` |
+
 ## M6 etap 3: kontrakty 6.2.1, elementy pod pełne serwery, porządki do wydania 3.0.0-beta-11
 
 Kontrakty: `pl.aiwcorpo.mcp:mcp-contracts:6.2.1` (polecenie mówiło 6.2.0; 6.2.1 to to samo bajt w bajt plus licencja, 6.2.0 nie jest wydane do GitHub Packages (workflow wydania kontraktów powstał w 6.2.1), więc publiczne wydanie startera nie miałoby czego rozwiązać).

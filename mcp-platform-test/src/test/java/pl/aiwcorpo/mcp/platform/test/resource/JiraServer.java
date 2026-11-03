@@ -77,8 +77,8 @@ public class JiraServer {
     }
 
     @Bean
-    ToolCallbackProvider tools(ResourcePolicy policy) {
-        return SchemaLimitedToolCallbacks.of(new Tools(policy));
+    ToolCallbackProvider tools(ResourcePolicy policy, pl.aiwcorpo.mcp.platform.paging.CursorCodec codec) {
+        return SchemaLimitedToolCallbacks.of(new Tools(policy, codec));
     }
 
     /** Resolves an issue key by asking Jira, as a real adapter would with the caller's credential. */
@@ -216,9 +216,49 @@ public class JiraServer {
     public static final class Tools {
 
         private final ResourcePolicy policy;
+        private final pl.aiwcorpo.mcp.platform.paging.CursorCodec codec;
 
         Tools(ResourcePolicy policy) {
+            this(policy, null);
+        }
+
+        Tools(ResourcePolicy policy, pl.aiwcorpo.mcp.platform.paging.CursorCodec codec) {
             this.policy = policy;
+            this.codec = codec;
+        }
+
+        /** The pages of the fake backend, by position; the first holds only an element the reader may not see. */
+        private static final Map<String, pl.aiwcorpo.mcp.platform.paging.PageFiller.BackendPage<IssueView>> BACKEND = Map.of(
+                "", new pl.aiwcorpo.mcp.platform.paging.PageFiller.BackendPage<>(List.of(new IssueView("HR-5", "HR")), "1"),
+                "1", new pl.aiwcorpo.mcp.platform.paging.PageFiller.BackendPage<>(List.of(new IssueView("ABC-1", "ABC")), "2"),
+                "2", new pl.aiwcorpo.mcp.platform.paging.PageFiller.BackendPage<>(List.of(new IssueView("DEF-7", "DEF")), null));
+
+        @Tool(name = "paged_issues", description = "One backend page per call, filtered by the platform only.")
+        @ToolRisk(RiskLevel.READ_ONLY)
+        @ToolTitle("Paged issues")
+        public pl.aiwcorpo.mcp.platform.paging.PagedResult<IssueView> pagedIssues(
+                @Nullable @ArgumentLimits(maxLength = pl.aiwcorpo.mcp.platform.paging.CursorCodec.MAX_CURSOR_LENGTH,
+                        pattern = pl.aiwcorpo.mcp.platform.paging.CursorCodec.ARGUMENT_PATTERN) String cursor) {
+            String finger = pl.aiwcorpo.mcp.platform.paging.CursorCodec.fingerprint("paged_issues");
+            String position = cursor == null ? "" : codec.open(cursor, "paged_issues", finger);
+            var page = BACKEND.get(position);
+            return pl.aiwcorpo.mcp.platform.paging.PagedResult.of(page.items(),
+                    page.next() == null ? null : codec.issue("paged_issues", finger, page.next()));
+        }
+
+        @Tool(name = "filled_issues", description = "Fills the page from further backend pages.")
+        @ToolRisk(RiskLevel.READ_ONLY)
+        @ToolTitle("Filled issues")
+        public pl.aiwcorpo.mcp.platform.paging.PagedResult<IssueView> filledIssues(
+                @Nullable @ArgumentLimits(maxLength = pl.aiwcorpo.mcp.platform.paging.CursorCodec.MAX_CURSOR_LENGTH,
+                        pattern = pl.aiwcorpo.mcp.platform.paging.CursorCodec.ARGUMENT_PATTERN) String cursor) {
+            String finger = pl.aiwcorpo.mcp.platform.paging.CursorCodec.fingerprint("filled_issues");
+            String position = cursor == null ? null : codec.open(cursor, "filled_issues", finger);
+            var page = pl.aiwcorpo.mcp.platform.paging.PageFiller.fill(position, 1, 5,
+                    at -> BACKEND.get(at == null ? "" : at),
+                    items -> policy.retainAllowedById("Jira::Issue", items, IssueView::key));
+            return pl.aiwcorpo.mcp.platform.paging.PagedResult.of(page.items(),
+                    page.next() == null ? null : codec.issue("filled_issues", finger, page.next()));
         }
 
         @Tool(name = "get_issue", description = "Returns an issue by key.")

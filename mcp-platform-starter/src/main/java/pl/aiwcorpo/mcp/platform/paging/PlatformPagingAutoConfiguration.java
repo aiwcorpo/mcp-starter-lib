@@ -3,8 +3,6 @@ package pl.aiwcorpo.mcp.platform.paging;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.util.Base64;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -16,8 +14,6 @@ import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 @EnableConfigurationProperties(McpPlatformProperties.class)
 public class PlatformPagingAutoConfiguration {
 
-    private static final Logger LOG = LoggerFactory.getLogger(PlatformPagingAutoConfiguration.class);
-
     @Bean
     @ConditionalOnMissingBean
     CursorCodec cursorCodec(McpPlatformProperties props) {
@@ -26,7 +22,7 @@ public class PlatformPagingAutoConfiguration {
         if (paging.getCursorKey() == null || paging.getCursorKey().isBlank()) {
             key = new byte[32];
             new SecureRandom().nextBytes(key);
-            LOG.warn("aiwcorpo.mcp.platform.paging.cursor-key is not set: cursors are valid only on this instance until it restarts");
+            return CursorCodec.withGeneratedKey(key, paging.getCursorValidity(), Clock.systemUTC(), serverIdOf(props));
         } else {
             try {
                 key = Base64.getDecoder().decode(paging.getCursorKey().strip());
@@ -37,6 +33,10 @@ public class PlatformPagingAutoConfiguration {
                 throw new IllegalStateException("aiwcorpo.mcp.platform.paging.cursor-key must decode to at least 32 bytes");
             }
         }
-        return new CursorCodec(key, paging.getCursorValidity(), Clock.systemUTC());
+        return new CursorCodec(key, paging.getCursorValidity(), Clock.systemUTC(), serverIdOf(props));
+    }
+
+    private static String serverIdOf(McpPlatformProperties props) {
+        return props.getServerId() == null ? "" : props.getServerId();
     }
 }
