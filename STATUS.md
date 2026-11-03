@@ -15,7 +15,7 @@ Zgłoszenie z przeglądu serwera OpenSearch: kursor był podpisany, ale czytelny
 | Punkt | Co zrobione |
 | --- | --- |
 | W-0 | tag `v3.0.0-beta-11` jest lokalny i nie jest do publikacji przez Actions (jego `release.yml` jest sprzed przeglądu: akcje bez SHA, token zapisu w `env` całego joba, cache w jobie publikacji); pierwsze publiczne wydanie to nowy tag. Zapisane w README i nagłówku `release.yml`; w środowisku `release` wymagani recenzenci i reguła tylko dla tagów `v*` (opis w nagłówku workflow) |
-| W-1 | sekret odczytu kontraktów jako sekret i zmienna repozytorium (job `verify` nie ma środowiska); komentarz zgodny |
+| W-1 | kontrakty czytane `GITHUB_TOKEN` przebiegu z `packages: read` (bez PAT-a w sekretach), dostęp przyznany w "Manage Actions access" każdego pakietu mcp-contracts; opis w nagłówku `release.yml` |
 | W-2 | runner GitHub działa jako usługa systemd, więc `INVOCATION_ID` bywa ustawione i testy zakładające maszynę programisty się pomijają, a `release` odmawia. Job `verify` wypisuje (same nazwy) obecne sygnały i woła `env -u INVOCATION_ID ci/run.sh release`: zmienna usługi runnera jest zdejmowana tylko dla tego procesu, w kodzie nie ma obejścia (sygnał kontenera lub poda nadal zatrzymuje wydanie). Nie sprawdzone na prawdziwym runnerze |
 | Workflow | `timeout-minutes`, `concurrency` (release bez anulowania, CI anuluje tylko pull requesty), obraz CI po digeście (`sha256:4f82a03a...`, z lokalnego obrazu), `maven-help-plugin:3.5.1`, SBOM w osobnym jobie `sbom` (`contents: write`) jako załącznik wydania GitHub |
 | S-1 | `PageFiller` (dopełnianie z limitem odczytów 1..20, `exhausted`), README opisuje sygnał, który zostaje po wyczerpaniu limitu; test przez transport (`paged_issues`, `filled_issues`) |

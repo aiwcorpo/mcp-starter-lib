@@ -7,12 +7,12 @@
 # Setup, once, in the repository settings:
 #   - Environment "release": required reviewers (at least one person other than the one who pushes the tag) and a deployment
 #     rule that allows only tags matching v*. The jobs publish and sbom wait for approval.
-#   - Repository secret MCP_CONTRACTS_READ_TOKEN: a token with read:packages only, and repository variable
-#     MCP_CONTRACTS_READ_USER: its login. They are repository-level on purpose, not environment-level: job verify has no
-#     environment (so tests never wait for or see anything that belongs to the reviewed environment) and still needs to read
-#     the mcp-contracts packages. The token can only read; a package of aiwcorpo/mcp-contracts must be readable by it.
+#   - Package access: the mcp-contracts packages are read with the GITHUB_TOKEN of the run (permissions: packages: read), not
+#     with a personal access token kept as a secret. In the settings of each package of aiwcorpo/mcp-contracts (mcp-contracts,
+#     mcp-cedar-entities, mcp-policy-bundle, mcp-manifest, mcp-contracts-parent): Package settings, "Manage Actions access", add
+#     this repository (aiwcorpo/mcp-starter-lib) with the role Read. Without it the run cannot resolve the dependencies.
 #
-# Three jobs: verify runs the tests and the dependencies with contents: read and the read-only token; publish has
+# Three jobs: verify runs the tests and the dependencies with contents: read and packages: read; publish has
 # packages: write, no build cache, and the write token only in the environment of the deploy step; sbom has contents: write
 # and uses it only in the step that creates the release. The deploy step still compiles with the write token in its
 # environment (Maven plugins and annotation processors run in it); that is accepted, and the reason the environment is reviewed.
@@ -35,10 +35,11 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
+      packages: read
     env:
       MCP_MAVEN_REPOSITORY_URL: https://maven.pkg.github.com/aiwcorpo/mcp-contracts
-      MCP_MAVEN_REPOSITORY_USER: ${{ vars.MCP_CONTRACTS_READ_USER }}
-      MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.MCP_CONTRACTS_READ_TOKEN }}
+      MCP_MAVEN_REPOSITORY_USER: ${{ github.actor }}
+      MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -94,8 +95,8 @@ jobs:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MCP_MAVEN_REPOSITORY_URL: https://maven.pkg.github.com/aiwcorpo/mcp-contracts
-          MCP_MAVEN_REPOSITORY_USER: ${{ vars.MCP_CONTRACTS_READ_USER }}
-          MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.MCP_CONTRACTS_READ_TOKEN }}
+          MCP_MAVEN_REPOSITORY_USER: ${{ github.actor }}
+          MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
 
   sbom:
     needs: publish
@@ -104,6 +105,7 @@ jobs:
     environment: release
     permissions:
       contents: write
+      packages: read
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -118,8 +120,8 @@ jobs:
         run: ./mvnw -B -s .ci/settings.xml org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom
         env:
           MCP_MAVEN_REPOSITORY_URL: https://maven.pkg.github.com/aiwcorpo/mcp-contracts
-          MCP_MAVEN_REPOSITORY_USER: ${{ vars.MCP_CONTRACTS_READ_USER }}
-          MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.MCP_CONTRACTS_READ_TOKEN }}
+          MCP_MAVEN_REPOSITORY_USER: ${{ github.actor }}
+          MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
       - name: Attach the SBOM to the GitHub Release
         run: |
           flags=()
