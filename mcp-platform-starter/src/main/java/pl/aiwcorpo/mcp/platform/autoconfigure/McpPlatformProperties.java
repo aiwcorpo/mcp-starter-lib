@@ -63,6 +63,8 @@ public class McpPlatformProperties {
     private final Tools tools = new Tools();
     private final Policy policy = new Policy();
     private final Manifest manifest = new Manifest();
+    private final Paging paging = new Paging();
+    private final Capability capability = new Capability();
 
     /** The backend system this server serves: {@code server-id} without the {@code mcp-} prefix. */
     public String system() {
@@ -587,6 +589,81 @@ public class McpPlatformProperties {
         public void setMaxResultSize(DataSize maxResultSize) {
             this.maxResultSize = maxResultSize;
         }
+    }
+
+    /** {@code aiwcorpo.mcp.platform.paging.*}: cursors of paged tools ({@code CursorCodec}). */
+    public static class Paging {
+
+        /**
+         * Base64 of the HMAC key of cursors, at least 32 bytes. All instances of one server must have the same key,
+         * otherwise a cursor issued by one is refused by another. Unset: a random key per process (cursors then do not
+         * survive a restart and are not valid across instances; logged at startup).
+         */
+        private String cursorKey;
+
+        /** How long a cursor can be used; the gateway's list cursors live as long. */
+        private Duration cursorValidity = Duration.ofMinutes(15);
+
+        public String getCursorKey() {
+            return cursorKey;
+        }
+
+        public void setCursorKey(String cursorKey) {
+            this.cursorKey = cursorKey;
+        }
+
+        public Duration getCursorValidity() {
+            return cursorValidity;
+        }
+
+        public void setCursorValidity(Duration cursorValidity) {
+            this.cursorValidity = cursorValidity;
+        }
+    }
+
+    /** {@code aiwcorpo.mcp.platform.capability.*}: the {@code CapabilityProbe} beans of the server. */
+    public static class Capability {
+
+        /** How long one probe may take; a slower one counts as no answer. */
+        private Duration timeout = Duration.ofSeconds(10);
+
+        /** Time between two probes of a backend that answered. */
+        private Duration interval = Duration.ofMinutes(5);
+
+        /** Time between two probes of a backend that did not answer. */
+        private Duration retryInterval = Duration.ofSeconds(30);
+
+        public Duration getTimeout() {
+            return timeout;
+        }
+
+        public void setTimeout(Duration timeout) {
+            this.timeout = timeout;
+        }
+
+        public Duration getInterval() {
+            return interval;
+        }
+
+        public void setInterval(Duration interval) {
+            this.interval = interval;
+        }
+
+        public Duration getRetryInterval() {
+            return retryInterval;
+        }
+
+        public void setRetryInterval(Duration retryInterval) {
+            this.retryInterval = retryInterval;
+        }
+    }
+
+    public Paging getPaging() {
+        return paging;
+    }
+
+    public Capability getCapability() {
+        return capability;
     }
 
     public String getServerId() {

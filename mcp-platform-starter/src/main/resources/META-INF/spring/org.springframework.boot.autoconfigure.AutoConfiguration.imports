@@ -5,3 +5,5 @@ pl.aiwcorpo.mcp.platform.error.PlatformErrorAutoConfiguration
 pl.aiwcorpo.mcp.platform.server.PlatformMcpServerAutoConfiguration
 pl.aiwcorpo.mcp.platform.policy.PlatformPolicyAutoConfiguration
 pl.aiwcorpo.mcp.platform.manifest.PlatformManifestAutoConfiguration
+pl.aiwcorpo.mcp.platform.paging.PlatformPagingAutoConfiguration
+pl.aiwcorpo.mcp.platform.capability.PlatformCapabilityAutoConfiguration

@@ -162,6 +162,13 @@ aiwcorpo.mcp.platform:
   tools.unclassified: fail                                # fail | destructive
   tools.max-filtered-elements: 200                        # najdłuższa lista w wyniku sprawdzana politycznie (dłuższa = internal_error)
   tools.max-result-size: 1MB                              # większy wynik narzędzia = internal_error
+  paging:                                                 # kursory narzędzi stronicujących (CursorCodec)
+    cursor-key: ${MCP_CURSOR_KEY}                         # Base64, co najmniej 32 bajty; ten sam w każdej instancji serwera
+    cursor-validity: 15m
+  capability:                                             # CapabilityProbe serwera (opcjonalny)
+    timeout: 10s
+    interval: 5m                                          # odstęp między sondami działającego systemu
+    retry-interval: 30s                                   # odstęp, gdy system nie odpowiada
 spring.ai.mcp.server.name: mcp-jira                      # protocol/type/endpoint ustawia starter
 spring.data.redis:                                        # magazyn jti
   host: redis
@@ -740,6 +747,85 @@ String jql = scope.jql(Set.of("status", "assignee", "text"))   // pola warunków
 Odmowa polityki to zdarzenie `policy_decision` (C8) z `decision: deny`, `reason` (`policy_forbid`: odmowa polityki, reguła `forbid` albo brak `permit`;
 `not_granted`: zasób nierozwiązany albo bez grantu, CC-141), typem i
 id zasobu, jeśli id jest bezpieczne w logu, `policyRevision` paczki serwera i `errorCode`; zwykłe wywołanie to `tool_call`.
+
+## Duże wyniki: strony, kursor, `truncated` i `omitted`
+
+Narzędzie, którego wynik może być dłuższy niż jedno wywołanie (wyszukiwanie, lista, treść strony, log), zwraca
+`PagedResult<T>` (`pl.aiwcorpo.mcp.platform.paging`) i przyjmuje kursor z `CursorCodec`, zamiast wymyślać własny format:
+
+```java
+@Tool(description = "Search issues. Pass nextCursor from the previous result to get the next page.")
+@ToolRisk(RiskLevel.READ_ONLY)
+@ToolTitle("Search issues")
+public PagedResult<IssueHit> searchIssues(
+        @ArgumentLimits(maxLength = 500) String text,
+        @ArgumentLimits(maxLength = CursorCodec.MAX_CURSOR_LENGTH, pattern = CursorCodec.ARGUMENT_PATTERN) @Nullable String cursor) {
+    String query = CursorCodec.fingerprint("search_issues", text);
+    String position = cursor == null ? null : codec.open(cursor, "search_issues", query);   // zły kursor: invalid_argument
+    JiraPage page = jira.search(scope.jql(text), position, PAGE_SIZE);
+    String next = page.nextPageToken() == null ? null : codec.issue("search_issues", query, page.nextPageToken());
+    return PagedResult.of(page.issues(), next);
+}
+```
+
+- **Kursor jest nieprzezroczysty dla klienta i związany**: z `sub` wywołującego, nazwą narzędzia, odciskiem zapytania
+  (`CursorCodec.fingerprint(...)`: tekst, filtry, sortowanie, rozmiar strony, bez samego kursora) i czasem (domyślnie 15 min,
+  `paging.cursor-validity`). Kursor innego użytkownika, innego narzędzia albo zmienionego zapytania, sfałszowany, ucięty i
+  przeterminowany kończy się tym samym `invalid_argument` ze stałym tekstem, więc komunikat nie zdradza przyczyny. Podpis to
+  HMAC-SHA256; wszystkie instancje serwera muszą mieć ten sam `paging.cursor-key`, inaczej kursor wydany przez jedną odrzuci
+  druga (bez klucza starter losuje go przy starcie i ostrzega w logu).
+- **Kursor nie jest uprawnieniem.** Niesie wyłącznie pozycję w stronicowaniu systemu (offset, `nextPageToken`, wartość
+  klucza); zakres wywołującego (`QueryScope`) liczy się od nowa dla każdej strony, a `ResultFilter` filtruje każdą stronę, więc
+  podrobiony kursor niczego nie poszerza. Treść kursora da się odczytać (base64url, bez szyfrowania): nie wkładaj w nią
+  poświadczenia ani niczego, czego klient nie może zobaczyć. Najwyżej 512 bajtów pozycji.
+- **Strona może być pusta albo krótsza i mieć `nextCursor`**: elementy usunięte przez `ResultFilter` nie zostawiają śladu, więc
+  o dalszych stronach mówi tylko kursor. Nie ma `total` (licznik systemu zawiera to, czego wywołujący nie widzi, a starter go nie poprawia).
+- **`truncated`** znaczy, że serwer sam uciął treść na swoim limicie (log, diff, treść strony), nie że jest następna strona.
+- **`omitted`** to stałe kody snake case (do 10, do 40 znaków: `binary_attachment`, `unsupported_macro`) rodzajów treści,
+  których serwer nie umie bezpiecznie oddać. Nigdy nie liczy ani nie nazywa elementów usuniętych przez politykę: liczba
+  ukrytych elementów zdradzałaby, że istnieją.
+
+`PagedResult` jest rekordem generycznym: `ResultFilter` śledzi jego `items` jak każdą listę, a `outputSchema` (gdy element ma
+`UntrustedText`) powstaje z typu zwracanego, z podstawionym typem elementu. Kształt (`PageCursor`, `PagedResultFields`, `maxResultBytes`
+w manifeście) nie jest jeszcze w kontrakcie: propozycja `CC-209`.
+
+## Wersje systemu: `CapabilityProbe` i tryb `degraded`
+
+Serwer, który obsługuje więcej niż jedną wersję systemu (Jira Data Center od 9.12, GitLab z polami, które przychodzą i znikają),
+deklaruje bean `CapabilityProbe` (`pl.aiwcorpo.mcp.platform.capability`). Starter uruchamia go po starcie aplikacji i potem
+co `capability.interval`, na własnych wątkach (powolny system nie opóźnia startu ani żądań), bez wywołującego i bez
+poświadczenia użytkownika: sonda czyta tylko to, co system mówi o sobie (`/rest/api/2/serverInfo`, `/api/v4/version`).
+
+```java
+@Bean
+CapabilityProbe jiraProbe(JiraClient jira) {
+    return new CapabilityProbe() {
+        public String name() { return "jira"; }
+        public Capabilities probe() {
+            ProductVersion version = ProductVersion.parse(jira.serverInfo().version()).orElse(null);
+            if (version == null) return Capabilities.unavailable("serverInfo has no version");
+            if (version.before(9, 12)) {
+                return Capabilities.degraded(version.toString(), Set.of("issue_read"), "older than 9.12");
+            }
+            return Capabilities.supported(version.toString(), Set.of("issue_read", "search_v3", "attachments"));
+        }
+    };
+}
+```
+
+Stan to `SUPPORTED` (znana wersja, pełny zestaw cech), `DEGRADED` (system odpowiada, ale wersja jest nieznana: za stara albo
+nowsza niż testowana; zestaw cech to tylko bazowe, które działają na każdej wersji) albo `UNAVAILABLE` (brak odpowiedzi,
+błąd, wartość niebędąca wersją; żadnej cechy się nie zakłada). Serwer **wstaje w każdym z nich**; narzędzie pyta
+`BackendCapabilities` (`of("jira").supports("search_v3")`, `isDegraded("jira")`) i w razie braku cechy wybiera ścieżkę
+zachowawczą albo kończy się `upstream_unavailable`, a nie zgaduje. Przed pierwszą odpowiedzią system jest `UNAVAILABLE`.
+
+Stan widać w trzech miejscach: linia logu przy każdej zmianie stanu lub wersji (`backend capability: probe=jira state=degraded ...`;
+wersja i opis z systemu są oczyszczone ze znaków spoza `A-Za-z0-9._+ -` i ucięte do 120, z wyjątku trafia tylko nazwa klasy,
+bo komunikat klienta HTTP bywa z adresem i tokenem), metryka `mcp_backend_capability{probe,state}` (1 dla bieżącego stanu) oraz
+szczegół `backendCapability` w `/actuator/health` (jak każdy szczegół zdrowia: tylko z `management.endpoint.health.show-details`
+i z wewnętrznym JWT). Statusy `DEGRADED` i `UNAVAILABLE` nie wchodzą do agregacji Springa, więc nie zdejmują serwera z
+balancera: system nieznany albo wyłączony to odpowiedź `upstream_unavailable`, nie niezdrowa instancja.
+Zdarzenia audytu (C8) nie mają typu na zmianę zdolności backendu; to propozycja kontraktu (`CC-208`), do czasu decyzji linia logu i metryka.
 
 ## Manifest C6 i narzędzia DESTRUCTIVE
 
