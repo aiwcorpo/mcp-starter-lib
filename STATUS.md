@@ -761,3 +761,5 @@ bezpieczeństwa, smoke od README, dokumentacja końcowa. Usunięcia z briefu zro
 M5: w toku - kod produkcyjny na kontraktach 5.1.0 wydany jako 3.0.0-beta-10; brakuje przebiegu `ci/run.sh` na prawdziwym runnerze (dowód do linii "osiągnięty").
 
 3.0.0-beta-11: wydane - `pl.aiwcorpo.mcp:mcp-platform|mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-11`, tag `v3.0.0-beta-11` (po wydaniu `3.0.0-beta-12-SNAPSHOT`). Kontrakty 6.2.1, `ci/run.sh release` z 976 przypadkami testowymi i 0 pominiętych. Instrukcja: `MIGRATION-3.0.md`, "Z beta-10 na beta-11". Zakres: tabela "M6 etap 3" na górze.
+
+3.0.0-beta-12: wydane - `pl.aiwcorpo.mcp:mcp-platform|mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-12`, tag `v3.0.0-beta-12` (po wydaniu `3.0.0-beta-13-SNAPSHOT`). Kontrakty 6.2.1, 989 przypadków testowych, 0 pominiętych. Instrukcja: `MIGRATION-3.0.md`, "Z beta-11 na beta-12" (podbicie wersji). Zakres: tabela "Poprawki po przeglądzie beta-11" na górze.
