@@ -6,19 +6,19 @@
 #
 # Setup, once, in the repository settings:
 #   - Environment "release": required reviewers (at least one person other than the one who pushes the tag) and a deployment
-#     rule that allows only tags matching v*. The jobs publish and sbom wait for approval.
+#     rule that allows only tags matching v*. The jobs publish and github-release wait for approval.
 #   - Package access: the mcp-contracts packages are read with the GITHUB_TOKEN of the run (permissions: packages: read), not
 #     with a personal access token kept as a secret. In the settings of each package of aiwcorpo/mcp-contracts (mcp-contracts,
 #     mcp-cedar-entities, mcp-policy-bundle, mcp-manifest, mcp-contracts-parent): Package settings, "Manage Actions access", add
 #     this repository (aiwcorpo/mcp-starter-lib) with the role Read. Without it the run cannot resolve the dependencies.
 #
-# Four jobs, each with the least it needs:
+# Five jobs, each with the least it needs:
 #   verify          contents: read, packages: read. Tests and dependencies run here.
-#   publish         packages: write, no build cache, the write token only in the environment of the deploy step. The deploy still
-#                   compiles with that token in its environment (Maven plugins and annotation processors run in it); that is
-#                   accepted, and the reason the environment "release" is reviewed.
+#   build           contents: read, packages: read, no build cache. Builds the jars and uploads them with the poms as an artifact.
+#   publish         packages: write, no checkout and no build: downloads that artifact and runs deploy-file, so no plugin, test or
+#                   annotation processor of the repository ever sees the write token. The environment "release" is reviewed.
 #   sbom            contents: read, packages: read. Builds the CycloneDX SBOM and uploads bom.json and bom.xml as an artifact.
-#   github-release  contents: write, no checkout and no build tool: downloads the artifact and runs gh release create.
+#   github-release  contents: write, no checkout and no build tool: downloads the SBOM and runs gh release create.
 name: release
 
 on:
@@ -74,32 +74,86 @@ jobs:
       - name: Verify (tests with the Redis container, no skipped test)
         run: env -u INVOCATION_ID ci/run.sh release
 
-  publish:
+  build:
     needs: verify
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    environment: release
     permissions:
       contents: read
-      packages: write
+      packages: read
+    env:
+      MCP_MAVEN_REPOSITORY_URL: https://maven.pkg.github.com/aiwcorpo/mcp-contracts
+      MCP_MAVEN_REPOSITORY_USER: ${{ github.actor }}
+      MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
     steps:
       # actions/checkout v4.2.2
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      # actions/setup-java v4.7.1
+      # actions/setup-java v4.7.1; no build cache: what this job produces is published
       - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
         with:
           distribution: temurin
           java-version: '25'
-      - name: Publish Maven artifacts
-        run: ./mvnw -B -s .ci/settings.xml deploy -DskipTests
+      - name: Build the jars (the tests ran in verify)
+        run: ./mvnw -B -s .ci/settings.xml package -DskipTests
+      - name: Stage the files to publish
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p stage/mcp-platform stage/mcp-platform-bom stage/mcp-platform-starter stage/mcp-platform-test
+          cp pom.xml stage/mcp-platform/pom.xml
+          cp mcp-platform-bom/pom.xml stage/mcp-platform-bom/pom.xml
+          for module in mcp-platform-starter mcp-platform-test; do
+            cp "$module/pom.xml" "stage/$module/pom.xml"
+            cp "$module/target/$module-$version.jar" "stage/$module/$module-$version.jar"
+          done
+      # actions/upload-artifact v4.6.2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: maven-artifacts
+          path: stage
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      # actions/setup-java v4.7.1; only for the settings.xml with the server "github" (credentials from the environment of the step)
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
+        with:
+          distribution: temurin
+          java-version: '25'
+          server-id: github
+          server-username: GITHUB_ACTOR
+          server-password: GITHUB_TOKEN
+      # actions/download-artifact v4.3.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: maven-artifacts
+          path: stage
+      # Only uploads the files built in the read-only job: no project is built here, so no plugin, test or annotation
+      # processor of the repository runs with the write token. deploy-file reads the pom and uploads the pom, the jar and
+      # their checksums.
+      - name: Upload the artifacts to GitHub Packages
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MCP_MAVEN_REPOSITORY_URL: https://maven.pkg.github.com/aiwcorpo/mcp-contracts
-          MCP_MAVEN_REPOSITORY_USER: ${{ github.actor }}
-          MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          url="https://maven.pkg.github.com/${GITHUB_REPOSITORY}"
+          deploy="org.apache.maven.plugins:maven-deploy-plugin:3.1.4:deploy-file"
+          cd stage
+          for module in mcp-platform mcp-platform-bom; do
+            mvn -B "$deploy" -Durl="$url" -DrepositoryId=github -Dfile="$module/pom.xml" -DpomFile="$module/pom.xml" -Dpackaging=pom
+          done
+          for module in mcp-platform-starter mcp-platform-test; do
+            mvn -B "$deploy" -Durl="$url" -DrepositoryId=github -Dfile="$module/$module-$version.jar" -DpomFile="$module/pom.xml"
+          done
 
   sbom:
     needs: publish
