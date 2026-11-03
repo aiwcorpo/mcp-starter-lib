@@ -5,7 +5,7 @@ gateway'em: nie loguje użytkowników, nie decyduje o uprawnieniach do narzędzi
 robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadczenie do systemu docelowego,
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
-Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 5.1.0.
+Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 6.2.0.
 Wersja: **3.0.0-beta-10** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Moduły
@@ -764,6 +764,24 @@ deklaracja trafiła wszędzie tak samo: `risk` w manifeście, `destructiveHint: 
 `destroy`, `wipe`, `erase` nie przejdzie jako `READ_ONLY` ani `UPDATE`. Przy generowaniu manifestu `risk` i podpowiedzi
 `tools/list` są porównywane i rozjazd zatrzymuje serwer.
 
+### Powtarzalność narzędzi `UPDATE` (CC-204)
+
+Wywołanie `UPDATE` jest dostarczane co najmniej raz. Gdy instancja gateway'a padnie w trakcie `tools/call`, balancer
+odpowiada `502` ze stałym tekstem o nieznanym wyniku, a klient (albo użytkownik) może wywołanie powtórzyć; gateway sam
+nie ponawia `UPDATE` ani `DESTRUCTIVE`. Platforma nie ma klucza idempotencji, więc narzędzie `UPDATE` projektuje się tak,
+żeby powtórzenie było nieszkodliwe, tam gdzie system docelowy na to pozwala:
+
+- stan docelowy zamiast przyrostu: `set_assignee`, `transition_issue(to)` zamiast "przesuń o jeden krok";
+- komentarz, worklog czy link tworzone z kluczem, który serwer może sprawdzić (znacznik w treści, istniejący link), a nie
+  ślepe dopisanie; gdy systemu nie da się o to zapytać, opisz w `@ToolTitle`/opisie narzędzia, że powtórzenie dubluje wpis;
+- edycja z wersją oczekiwaną (`expectedVersion`) tam, gdzie API ją przyjmuje: drugie wywołanie kończy się konfliktem,
+  nie nadpisaniem;
+- przy błędzie `upstream_unavailable` po stronie systemu docelowego nie zgaduj wyniku: komunikat błędu ma mówić, że
+  operacja mogła się wykonać.
+
+Starter tego nie wymusza ani nie sprawdza. `DESTRUCTIVE` nie wymaga takiego projektu: powtórzenie potrzebuje nowego
+kodu potwierdzenia (jednorazowy, C11).
+
 ## Testy serwera bez gateway'a
 
 Testy z `TestGateway` uruchamiaj w profilu `dev` (`@ActiveProfiles("dev")`). Kontrola "`dev` we wdrożeniu" (Kubernetes,
@@ -961,7 +979,7 @@ Testy, które zakładają maszynę programisty, same się pomijają na hoście z
 Liczba pominiętych jest w logu, a `release` odmawia, gdy cokolwiek pominięto albo ustawiono `MCP_CI_NO_DOCKER`. Sprawdzone: przebieg lokalny i w obrazie `maven:3.9.12-eclipse-temurin-25`; nie na prawdziwym runnerze GitLab, Jenkins ani GitHub.
 Przy Dockerze bez routingu do hosta ustaw `TESTCONTAINERS_HOST_OVERRIDE`. `MAVEN_REPO_LOCAL` to jedno repozytorium Maven dla budowy, instalacji i kontroli istniejącej wersji.
 
-Artefakty `mcp-contracts` 5.1.0 muszą być w `~/.m2` albo w rejestrze wskazanym przez `MCP_MAVEN_REPOSITORY_URL` (`_USER`, `_PASSWORD`; `.ci/settings.xml`).
+Artefakty `mcp-contracts` 6.2.0 muszą być w `~/.m2` albo w rejestrze wskazanym przez `MCP_MAVEN_REPOSITORY_URL` (`_USER`, `_PASSWORD`; `.ci/settings.xml`).
 `RedisJtiReplayStoreTest` uruchamia Redisa przez Testcontainers, więc potrzebny jest dostęp do środowiska kontenerów (gniazdo Dockera zamontowane w kontenerze CI albo `DOCKER_HOST`).
 
 Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera to
