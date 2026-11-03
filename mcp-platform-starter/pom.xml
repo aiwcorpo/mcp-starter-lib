@@ -25,7 +25,7 @@
 
     <groupId>pl.aiwcorpo.mcp</groupId>
     <artifactId>mcp-platform-starter</artifactId>
-    <version>3.0.0-beta-14</version>
+    <version>3.0.0-beta-15-SNAPSHOT</version>
     <name>Aiwcorpo MCP Platform :: Starter (auto-configuration)</name>
 
     <url>https://github.com/aiwcorpo/mcp-starter-lib</url>
