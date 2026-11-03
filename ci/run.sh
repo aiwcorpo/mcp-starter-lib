@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Single CI entry point (M5-5): every CI system, the container image and a developer's shell call this script and
-# nothing else. .gitlab-ci.yml, Jenkinsfile and .github/workflows/ci.yml are thin wrappers around it. Needs bash, git,
-# perl, JDK 25 and either a filled ~/.m2 with the mcp-contracts artifacts or MCP_MAVEN_REPOSITORY_URL (+ _USER, _PASSWORD)
+# nothing else. .gitlab-ci.yml, Jenkinsfile and .github/workflows/ci.yml are thin wrappers around it. Needs bash 3.2 or newer
+# (Linux, macOS; Windows through WSL2), git, perl, JDK 25 and either a filled ~/.m2 with the mcp-contracts artifacts or MCP_MAVEN_REPOSITORY_URL (+ _USER, _PASSWORD)
 # pointing at the registry that holds them.
 #
 #   ci/run.sh                 verify (default)
@@ -23,10 +23,59 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
-if [[ -z "${JAVA_HOME:-}" ]] && ! command -v java >/dev/null; then
-  echo "ci/run.sh: no JDK; set JAVA_HOME to a JDK 25 or use the maven:3.9.12-eclipse-temurin-25 image" >&2
-  exit 1
-fi
+java_major() {
+  "$1" -XshowSettings:properties -version 2>&1 | sed -n 's/.*java.specification.version = //p' | head -n 1
+}
+
+jdk_is_25() {
+  local major
+  [[ -x "$1/bin/java" ]] || return 1
+  major="$(java_major "$1/bin/java" 2>/dev/null || true)"
+  [[ -n "$major" ]] && [[ "${major%%.*}" -ge 25 ]] 2>/dev/null
+}
+
+# The build needs Java 25. Keeps the current JDK when it is new enough, otherwise looks in the usual places (macOS
+# java_home, Homebrew, /usr/lib/jvm, SDKMAN, IntelliJ); JAVA_HOME set to a JDK 25 skips the search.
+select_jdk() {
+  local candidate
+  if [[ -n "${JAVA_HOME:-}" ]] && jdk_is_25 "$JAVA_HOME"; then
+    return 0
+  fi
+  if command -v java >/dev/null 2>&1; then
+    candidate="$(dirname "$(dirname "$(command -v java)")")"
+    if jdk_is_25 "$candidate"; then
+      export JAVA_HOME="$candidate"
+      return 0
+    fi
+  fi
+  candidate=""
+  if [[ -x /usr/libexec/java_home ]]; then
+    candidate="$(/usr/libexec/java_home -v 25 2>/dev/null || true)"
+  fi
+  if [[ -n "$candidate" ]] && jdk_is_25 "$candidate"; then
+    export JAVA_HOME="$candidate"
+    return 0
+  fi
+  if command -v brew >/dev/null 2>&1; then
+    candidate="$(brew --prefix openjdk@25 2>/dev/null || true)"
+    for candidate in "$candidate/libexec/openjdk.jdk/Contents/Home" "$candidate/libexec"; do
+      if jdk_is_25 "$candidate"; then
+        export JAVA_HOME="$candidate"
+        return 0
+      fi
+    done
+  fi
+  for candidate in /usr/lib/jvm/*25* "$HOME"/.sdkman/candidates/java/25* "$HOME"/.jdks/*25*; do
+    if jdk_is_25 "$candidate"; then
+      export JAVA_HOME="$candidate"
+      return 0
+    fi
+  done
+  echo "ci/run.sh: JDK 25 not found; set JAVA_HOME to a JDK 25 or use the maven:3.9.12-eclipse-temurin-25 image" >&2
+  return 1
+}
+
+select_jdk
 
 repo="${MAVEN_REPO_LOCAL:-$HOME/.m2/repository}"
 

@@ -5,8 +5,45 @@ gateway'em: nie loguje użytkowników, nie decyduje o uprawnieniach do narzędzi
 robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadczenie do systemu docelowego,
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
-Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 6.2.0.
-Wersja: **3.0.0-beta-10** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 6.2.1.
+Wersja: **3.0.0-beta-11** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
+
+## Dla kogo i jak zacząć
+
+Biblioteka jest dla autora serwera MCP, który ma stać za gateway'em platformy (`mcp-gateway`) i wystawiać narzędzia do
+jednego systemu (Jira, Confluence, GitLab, ServiceDesk, OpenSearch). Nie jest produktem do uruchomienia: dodajesz jedną
+zależność i piszesz narzędzia jako metody `@Tool`; weryfikację wywołującego, poświadczenie, politykę zasobów, audyt i bezpieczne
+błędy robi starter. Wymagania: JDK 25, Maven (wrapper w repozytorium), Linux albo macOS (bash 3.2 lub nowszy); Windows tylko przez
+WSL2. Szkielet gotowego serwera jest w `mcp-server-template`.
+
+Drogi przez ten plik: napisanie pierwszego narzędzia to "Pierwszy serwer", uruchomienie bez gateway'a to "Uruchomienie lokalne",
+test to "Testy serwera bez gateway'a", ustawienia to "Konfiguracja", przejście z poprzedniej wersji to `MIGRATION-3.0.md`.
+
+### Instalacja
+
+Artefakty są w GitHub Packages organizacji `aiwcorpo` (`https://maven.pkg.github.com/aiwcorpo/mcp-starter-lib`), a ich zależność
+`mcp-contracts` w `https://maven.pkg.github.com/aiwcorpo/mcp-contracts`. GitHub Packages wymaga uwierzytelnienia także do odczytu:
+token z uprawnieniem `read:packages`, w `~/.m2/settings.xml` jako dwa serwery z tymi samymi danymi:
+
+```xml
+<settings>
+  <servers>
+    <server><id>github-starter</id><username>LOGIN_GITHUB</username><password>TOKEN_READ_PACKAGES</password></server>
+    <server><id>github-contracts</id><username>LOGIN_GITHUB</username><password>TOKEN_READ_PACKAGES</password></server>
+  </servers>
+</settings>
+```
+
+W `pom.xml` serwera:
+
+```xml
+<repositories>
+  <repository><id>github-starter</id><url>https://maven.pkg.github.com/aiwcorpo/mcp-starter-lib</url></repository>
+  <repository><id>github-contracts</id><url>https://maven.pkg.github.com/aiwcorpo/mcp-contracts</url></repository>
+</repositories>
+```
+
+Do pracy nad samą biblioteką: `./mvnw install` instaluje moduły w `~/.m2`. Wersje wydane są niezmienne; poprawka to nowy numer.
 
 ## Moduły
 
@@ -295,7 +332,7 @@ poniżej `$JAVA_HOME/bin/java` (`JAVA_HOME` wskazuje JDK 25).
             <dependency>
                 <groupId>pl.aiwcorpo.mcp</groupId>
                 <artifactId>mcp-platform-bom</artifactId>
-                <version>3.0.0-beta-10</version>
+                <version>3.0.0-beta-11</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -396,7 +433,7 @@ pobierane, dopóki nie przyjdzie żądanie z JWT.
 Start (zależności startera muszą być w `~/.m2`: `./mvnw install` w repozytorium startera, albo wydana wersja):
 
 ```bash
-export JAVA_HOME=/opt/homebrew/Cellar/openjdk@25/25.0.4.1/libexec/openjdk.jdk/Contents/Home   # dowolny JDK 25
+export JAVA_HOME=/sciezka/do/jdk-25   # dowolny JDK 25; ci/run.sh szuka go sam
 mvn spring-boot:run -Dspring-boot.run.profiles=dev -Dspring-boot.run.arguments=--server.port=18600
 # albo po mvn package (jar z finalName `mcp-jira`; Java 25, nie `java` z PATH, jeśli jest starsza):
 $JAVA_HOME/bin/java -jar target/mcp-jira.jar --spring.profiles.active=dev --server.port=18600
@@ -1043,8 +1080,7 @@ Przykładowe polityki wymagają w tokenie testowym grupy (`user.groups(List.of("
 ## Budowa
 
 ```bash
-export JAVA_HOME=/opt/homebrew/Cellar/openjdk@25/25.0.4.1/libexec/openjdk.jdk/Contents/Home
-./mvnw install          # wymaga Dockera (Testcontainers: Redis z ACL jak w mcp-platform-dev)
+./mvnw install          # JDK 25 w JAVA_HOME albo w PATH; ci/run.sh verify szuka go sam          # wymaga Dockera (Testcontainers: Redis z ACL jak w mcp-platform-dev)
 ```
 
 ### CI
@@ -1065,7 +1101,7 @@ Testy, które zakładają maszynę programisty, same się pomijają na hoście z
 Liczba pominiętych jest w logu, a `release` odmawia, gdy cokolwiek pominięto albo ustawiono `MCP_CI_NO_DOCKER`. Sprawdzone: przebieg lokalny i w obrazie `maven:3.9.12-eclipse-temurin-25`; nie na prawdziwym runnerze GitLab, Jenkins ani GitHub.
 Przy Dockerze bez routingu do hosta ustaw `TESTCONTAINERS_HOST_OVERRIDE`. `MAVEN_REPO_LOCAL` to jedno repozytorium Maven dla budowy, instalacji i kontroli istniejącej wersji.
 
-Artefakty `mcp-contracts` 6.2.0 muszą być w `~/.m2` albo w rejestrze wskazanym przez `MCP_MAVEN_REPOSITORY_URL` (`_USER`, `_PASSWORD`; `.ci/settings.xml`).
+Artefakty `mcp-contracts` 6.2.1 muszą być w `~/.m2` albo w rejestrze wskazanym przez `MCP_MAVEN_REPOSITORY_URL` (`_USER`, `_PASSWORD`; `.ci/settings.xml`).
 `RedisJtiReplayStoreTest` uruchamia Redisa przez Testcontainers, więc potrzebny jest dostęp do środowiska kontenerów (gniazdo Dockera zamontowane w kontenerze CI albo `DOCKER_HOST`).
 
 Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera to
@@ -1074,7 +1110,7 @@ Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera t
 ```xml
 <dependency>
   <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-  <version>3.0.0-beta-10</version><type>pom</type><scope>import</scope>
+  <version>3.0.0-beta-11</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
 

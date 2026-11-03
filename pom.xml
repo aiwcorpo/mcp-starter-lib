@@ -10,7 +10,7 @@
                              published test keys of mcp-contracts); test scope only
 
   Versioning: SemVer, one version for all modules. This line (mcp-platform 3.x) is independent of the
-  mcp-contracts version (2.x).
+  mcp-contracts version (6.x).
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -21,6 +21,30 @@
     <version>3.0.0-beta-11-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>Aiwcorpo MCP Platform :: Aggregator</name>
+
+    <url>https://github.com/aiwcorpo/mcp-starter-lib</url>
+
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <scm>
+        <url>https://github.com/aiwcorpo/mcp-starter-lib</url>
+        <connection>scm:git:https://github.com/aiwcorpo/mcp-starter-lib.git</connection>
+    </scm>
+
+    <!-- Published from CI only (.github/workflows/release.yml); the server id "github" gets its credentials from .ci/settings.xml. -->
+    <distributionManagement>
+        <repository>
+            <id>github</id>
+            <name>GitHub Packages (aiwcorpo/mcp-starter-lib)</name>
+            <url>https://maven.pkg.github.com/aiwcorpo/mcp-starter-lib</url>
+        </repository>
+    </distributionManagement>
 
     <modules>
         <module>mcp-platform-bom</module>

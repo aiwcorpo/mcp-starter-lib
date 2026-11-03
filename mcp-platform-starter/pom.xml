@@ -28,10 +28,34 @@
     <version>3.0.0-beta-11-SNAPSHOT</version>
     <name>Aiwcorpo MCP Platform :: Starter (auto-configuration)</name>
 
+    <url>https://github.com/aiwcorpo/mcp-starter-lib</url>
+
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <scm>
+        <url>https://github.com/aiwcorpo/mcp-starter-lib</url>
+        <connection>scm:git:https://github.com/aiwcorpo/mcp-starter-lib.git</connection>
+    </scm>
+
+    <!-- Published from CI only (.github/workflows/release.yml); the server id "github" gets its credentials from .ci/settings.xml. -->
+    <distributionManagement>
+        <repository>
+            <id>github</id>
+            <name>GitHub Packages (aiwcorpo/mcp-starter-lib)</name>
+            <url>https://maven.pkg.github.com/aiwcorpo/mcp-starter-lib</url>
+        </repository>
+    </distributionManagement>
+
     <properties>
         <java.version>25</java.version>
         <spring-ai.version>2.0.0</spring-ai.version>
-        <mcp-contracts.version>6.2.0</mcp-contracts.version>
+        <mcp-contracts.version>6.2.1</mcp-contracts.version>
         <!-- Same version Spring Security 7.1.0 (Boot 4.1.0) brings; Boot does not manage it. -->
         <nimbus-jose-jwt.version>10.9</nimbus-jose-jwt.version>
         <json-schema-validator.version>3.0.8</json-schema-validator.version>
@@ -127,4 +151,32 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
+    <build>
+        <plugins>
+            <!-- Apache-2.0 asks for LICENSE and NOTICE inside every distributed jar. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>license-files</id>
+                        <phase>process-resources</phase>
+                        <goals><goal>copy-resources</goal></goals>
+                        <configuration>
+                            <outputDirectory>${project.build.outputDirectory}/META-INF</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${maven.multiModuleProjectDirectory}</directory>
+                                    <includes>
+                                        <include>LICENSE</include>
+                                        <include>NOTICE</include>
+                                    </includes>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 </project>

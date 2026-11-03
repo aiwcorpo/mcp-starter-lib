@@ -1,0 +1,51 @@
+# Publishes a tagged release to GitHub Packages (Maven, group pl.aiwcorpo.mcp: mcp-platform, mcp-platform-bom,
+# mcp-platform-starter, mcp-platform-test) and attaches a CycloneDX SBOM. Runs only on a v* tag; nothing is published from
+# branches. Not run yet: the repository and the organization packages do not exist at the time of writing.
+#
+# The mcp-contracts artifacts are read from the packages of aiwcorpo/mcp-contracts. The package there must grant read access
+# to this repository (Package settings, "Manage Actions access"), otherwise GITHUB_TOKEN cannot resolve them.
+name: release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: read
+      packages: write
+    env:
+      GITHUB_ACTOR: ${{ github.actor }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      MCP_MAVEN_REPOSITORY_URL: https://maven.pkg.github.com/aiwcorpo/mcp-contracts
+      MCP_MAVEN_REPOSITORY_USER: ${{ github.actor }}
+      MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Tag matches the project version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          test "$(./mvnw -q -B -N help:evaluate -Dexpression=project.version -DforceStdout)" = "$version"
+      - name: Verify (tests with the Redis container, no skipped test)
+        run: ci/run.sh release
+      - name: Publish Maven artifacts
+        run: ./mvnw -B -s .ci/settings.xml deploy -DskipTests
+      - name: SBOM (CycloneDX)
+        run: ./mvnw -B org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: target/bom.*

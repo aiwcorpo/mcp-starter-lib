@@ -1,7 +1,24 @@
 # STATUS - mcp-starter-lib (ws-02)
 
+## M6 etap 3: kontrakty 6.2.1, elementy pod pełne serwery, porządki do wydania 3.0.0-beta-11
+
+Kontrakty: `pl.aiwcorpo.mcp:mcp-contracts:6.2.1` (polecenie mówiło 6.2.0; 6.2.1 to to samo bajt w bajt plus licencja, 6.2.0 nie jest wydane do GitHub Packages (workflow wydania kontraktów powstał w 6.2.1), więc publiczne wydanie startera nie miałoby czego rozwiązać).
+
+| Kamień | Zakres | Stan |
+| --- | --- | --- |
+| K1 | BOM, starter i mcp-platform-test na kontraktach 6.x; README: powtarzalne `UPDATE` (CC-204); liczba wektorów `audit-events/` 115 -> 125; bez zmian w kodzie (`ManifestExport` nie ustawia `source`, nazwy `jwks_unavailable` i `replay_store_unavailable` zgodne) | zrobione |
+| K2 | `CursorCodec` (kursor HMAC związany z `sub`, narzędziem i zapytaniem), `PagedResult<T>` (`truncated` / `omitted` bez liczników filtru), `ToolOutputSchemas` dla rekordów generycznych; `CapabilityProbe` z trybem `degraded`, logiem, metryką i szczegółem zdrowia | zrobione |
+| K3 | Apache-2.0 (`LICENSE`, `NOTICE`, także w `META-INF` jarów), `distributionManagement` na GitHub Packages, `release.yml` (niewykonany), `SECURITY.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, README dla autora serwera (instalacja), `ci/run.sh` szuka JDK 25 bez ścieżek Homebrew, bash 3.2 | zrobione |
+| K4 | wydanie 3.0.0-beta-11 (tag `v3.0.0-beta-11`, instalacja w `~/.m2`, potem `3.0.0-beta-12-SNAPSHOT`) | patrz niżej |
+
+Propozycje kontraktów (w `mcp-contracts/CONTRACT_CHANGES.md`, status `proposed`): CC-208 (zdarzenie audytu `backend_capability`), CC-209 (definicje `PageCursor`, `PagedResultFields`, `maxResultBytes` w manifeście).
+Z badania pełnych serwerów (pkt 5) w starterze nie ma: `Basic` w `user-secret` i metadanych `deployment` (broker i kontrakt), adaptera wyboru po profilu zdolności (jest `Capabilities.supports(cecha)`, wybór robi serwer), `AdfText` (decyzja badania: zostaje w serwerze Jira),
+nowych typów zasobów C7 (kontrakt) i poziomu ryzyka pośredniego (decyzja człowieka).
+
+Poza zakresem: przebieg `release.yml` i publikacja do GitHub Packages (repozytorium i pakiety nie istnieją), SBOM (wtyczka CycloneDX nie jest w `~/.m2`; krok jest w workflow), ścieżka Windows poza WSL2.
+
 Linia `pl.aiwcorpo.mcp:mcp-platform*` 3.x (niezależna od wersji kontraktów). Kontrakty:
-`pl.aiwcorpo.mcp:mcp-contracts:5.1.0` od beta-10 (4.1.0 od beta-7; 4.0.0 w beta-6; 3.1.0 w beta-1 ... beta-5, 2.2.5 w alpha-12 ... alpha-14, 2.1.1 od alpha-7, 2.0.2 do alpha-6).
+`pl.aiwcorpo.mcp:mcp-contracts:6.2.1` od beta-11 (5.1.0 w beta-10, 4.1.0 od beta-7; 4.0.0 w beta-6; 3.1.0 w beta-1 ... beta-5, 2.2.5 w alpha-12 ... alpha-14, 2.1.1 od alpha-7, 2.0.2 do alpha-6).
 
 ## M5: przejście na kontrakty 5.1.0 i wydanie 3.0.0-beta-10
 
@@ -343,7 +360,7 @@ sekcja "Zmiany w 3.0.0-alpha-9". Kamienie:
    `SpringApplication` (kopia w `mcp-platform-test/.../readme/JiraServer.java` też ma `main`), wskazanie, że konfiguracja to
    sekcja "Konfiguracja". Komenda z jarem: `$JAVA_HOME/bin/java -jar target/mcp-jira.jar ...` z uwagą, że `java` z PATH bywa
    starsza (17), a `mvn` zamiast `./mvnw` (nowy projekt nie ma wrappera). Sprawdzone według README w
-   `scratchpad/starter-a9-check/` (pom, klasa i yml wycięte z README skryptem): `mvn clean package` daje `target/mcp-jira.jar`,
+   katalogu roboczym (pom, klasa i yml wycięte z README skryptem): `mvn clean package` daje `target/mcp-jira.jar`,
    start na porcie 18600 w `dev`, health 200, `POST /mcp` bez JWT 401, z `INVOCATION_ID` start odmawia; proces zatrzymany.
    Linia `dev_profile_overrides` (WARN, lista nadpisanych kluczy) pisze `PlatformConfigurationGuard`, bo
    `EnvironmentPostProcessor` działa przed konfiguracją logowania i jego własny logger nic nie wypisywał (w alpha-8 INFO z tego

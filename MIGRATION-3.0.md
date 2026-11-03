@@ -308,6 +308,39 @@ alpha-9 zmienia się tylko tam, gdzie poniższe punkty mówią wprost.
 - **WARN `untrusted_text_not_normalized`** nie pojawia się dla `null` ani dla samej zmiany końców linii (CRLF, CR, U+2028,
   U+2029, U+0085 na `\n`).
 
+## Z beta-10 na beta-11
+
+Przejście na kontrakty **6.2.1** (M6, etap 3; CHANGELOG kontraktów 6.0.0, 6.1.0, 6.2.0, sekcje "Migracja" dla ws-02, ws-03, ws-04). 6.2.1 to wyłącznie pakowanie i licencja, kontrakty
+są bajt w bajt jak w 6.2.0. Kod startera nie wymagał zmian z powodu kontraktów; poniżej to, co robi serwer.
+
+### 1. Wersja i repozytoria
+
+`<mcp-platform.version>3.0.0-beta-11</mcp-platform.version>` w szablonie albo `<version>3.0.0-beta-11</version>` w imporcie `mcp-platform-bom`; BOM ustawia `mcp-contracts`, `mcp-cedar-entities`, `mcp-policy-bundle`
+i `mcp-manifest` na 6.2.1. Wydania są w GitHub Packages (README, "Instalacja"); lokalnie nadal wystarczy `~/.m2`.
+
+### 2. Regeneracja manifestu
+
+Zbuduj serwer i zarejestruj manifest z kroku budowy od nowa (`manifest.output-file`). `definitionHash` narzędzi się nie zmienia: kontrakty 6.x nie ruszają definicji ani reguł hasha dla manifestów bez `source`,
+a serwer na starterze nie ustawia `source`. Gdyby hash któregoś narzędzia się zmienił, to nie przez kontrakty: sprawdź, czy narzędzie nie zwraca rekordu generycznego z `UntrustedText` (punkt 4).
+
+### 3. Narzędzia `UPDATE` (CC-204)
+
+`UPDATE` jest dostarczane co najmniej raz: po `502` z balancera klient może powtórzyć wywołanie. Przejrzyj narzędzia `UPDATE` serwera i tam, gdzie system na to pozwala, zaprojektuj je tak, żeby powtórzenie było nieszkodliwe
+(stan docelowy zamiast przyrostu, klucz do sprawdzenia, wersja oczekiwana). README, "Powtarzalność narzędzi `UPDATE`". Nic nie jest wymuszane.
+
+### 4. Zmiany w bibliotece, bez obowiązku po stronie serwera
+
+- **`CursorCodec` i `PagedResult<T>`** (README, "Duże wyniki"): wspólny kursor i kształt wyniku dla narzędzi, które stronicują albo ucinają treść. Serwery z własnym kursorem mogą zostać przy nim; nowe narzędzia powinny używać wspólnego.
+  Wszystkie instancje serwera potrzebują tego samego `aiwcorpo.mcp.platform.paging.cursor-key` (Base64, co najmniej 32 bajty); bez klucza starter losuje go przy starcie i ostrzega.
+- **`CapabilityProbe`** (README, "Wersje systemu"): bean sondy wersji systemu; nieznana wersja daje tryb `degraded` zamiast zatrzymania serwera. Bez beana nic się nie zmienia.
+- **`ToolOutputSchemas`** podstawia argumenty typu rekordów generycznych (`Page<Issue>`). Narzędzie zwracające taki rekord z `UntrustedText` w elemencie dostaje teraz `outputSchema`, którego wcześniej
+  nie miało, więc zmienia się jego `definitionHash` i wynik jest sprawdzany względem schematu. Żaden serwer w tym repozytorium takiego rekordu nie ma.
+
+### 5. Testy i wektory
+
+Katalog `audit-events/` ma 125 wektorów (115 w 5.1.0; dochodzą zdarzenia brokera). Test serwera, który liczy pliki katalogu, zaktualizuj; schemat zgadza się ze wszystkimi. Pozostałe liczby bez zmian: `jwt/` 59, `result-filter/` 7,
+`query-rendering/` 26, `tool-errors/` 33.
+
 ## Z beta-9 na beta-10
 
 Przejście na kontrakty **5.1.0** (M5; CHANGELOG kontraktów, 5.0.0 i 5.1.0, sekcje "Migracja" dla ws-02, ws-03 i ws-04). Zapisane linki (`/v/<slug>/mcp`) i claimy `vs` / `vsc` przestały istnieć,
