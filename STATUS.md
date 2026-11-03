@@ -9,7 +9,7 @@ Kontrakty: `pl.aiwcorpo.mcp:mcp-contracts:6.2.1` (polecenie mówiło 6.2.0; 6.2.
 | K1 | BOM, starter i mcp-platform-test na kontraktach 6.x; README: powtarzalne `UPDATE` (CC-204); liczba wektorów `audit-events/` 115 -> 125; bez zmian w kodzie (`ManifestExport` nie ustawia `source`, nazwy `jwks_unavailable` i `replay_store_unavailable` zgodne) | zrobione |
 | K2 | `CursorCodec` (kursor HMAC związany z `sub`, narzędziem i zapytaniem), `PagedResult<T>` (`truncated` / `omitted` bez liczników filtru), `ToolOutputSchemas` dla rekordów generycznych; `CapabilityProbe` z trybem `degraded`, logiem, metryką i szczegółem zdrowia | zrobione |
 | K3 | Apache-2.0 (`LICENSE`, `NOTICE`, także w `META-INF` jarów), `distributionManagement` na GitHub Packages, `release.yml` (niewykonany), `SECURITY.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, README dla autora serwera (instalacja), `ci/run.sh` szuka JDK 25 bez ścieżek Homebrew, bash 3.2 | zrobione |
-| K4 | wydanie 3.0.0-beta-11 (tag `v3.0.0-beta-11`, instalacja w `~/.m2`, potem `3.0.0-beta-12-SNAPSHOT`) | patrz niżej |
+| K4 | wydanie 3.0.0-beta-11 (tag `v3.0.0-beta-11`, instalacja w `~/.m2`, potem `3.0.0-beta-12-SNAPSHOT`) | zrobione |
 
 Propozycje kontraktów (w `mcp-contracts/CONTRACT_CHANGES.md`, status `proposed`): CC-208 (zdarzenie audytu `backend_capability`), CC-209 (definicje `PageCursor`, `PagedResultFields`, `maxResultBytes` w manifeście).
 Z badania pełnych serwerów (pkt 5) w starterze nie ma: `Basic` w `user-secret` i metadanych `deployment` (broker i kontrakt), adaptera wyboru po profilu zdolności (jest `Capabilities.supports(cecha)`, wybór robi serwer), `AdfText` (decyzja badania: zostaje w serwerze Jira),
@@ -743,3 +743,5 @@ bezpieczeństwa, smoke od README, dokumentacja końcowa. Usunięcia z briefu zro
 - C6: nazwy `$defs` w `common.schema.json` jako stabilne API dla serwerów (`contractPattern`) (CC-???, alpha-6).
 
 M5: w toku - kod produkcyjny na kontraktach 5.1.0 wydany jako 3.0.0-beta-10; brakuje przebiegu `ci/run.sh` na prawdziwym runnerze (dowód do linii "osiągnięty").
+
+3.0.0-beta-11: wydane - `pl.aiwcorpo.mcp:mcp-platform|mcp-platform-bom|mcp-platform-starter|mcp-platform-test:3.0.0-beta-11`, tag `v3.0.0-beta-11` (po wydaniu `3.0.0-beta-12-SNAPSHOT`). Kontrakty 6.2.1, `ci/run.sh release` z 976 przypadkami testowymi i 0 pominiętych. Instrukcja: `MIGRATION-3.0.md`, "Z beta-10 na beta-11". Zakres: tabela "M6 etap 3" na górze.
