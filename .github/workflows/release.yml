@@ -136,23 +136,59 @@ jobs:
         with:
           name: maven-artifacts
           path: stage
-      # Only uploads the files built in the read-only job: no project is built here, so no plugin, test or annotation
-      # processor of the repository runs with the write token. deploy-file reads the pom and uploads the pom, the jar and
-      # their checksums.
+      # Only uploads the files built in the read-only job: no project is built here, so no plugin, test or annotation processor
+      # of the repository runs with the write token. The artifact is data, not a project: its file list must be exactly the
+      # expected one (a .mvn directory with extensions.xml, maven.config or jvm.config would run in Maven with the token), and
+      # Maven starts from an empty directory of its own with no .mvn, an empty MAVEN_OPTS and MAVEN_ARGS, and the project
+      # directory pointed at that empty directory.
       - name: Upload the artifacts to GitHub Packages
         env:
           GITHUB_ACTOR: ${{ github.actor }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
+          expected="$(printf '%s\n' \
+            mcp-platform/pom.xml \
+            mcp-platform-bom/pom.xml \
+            mcp-platform-starter/pom.xml \
+            "mcp-platform-starter/mcp-platform-starter-$version.jar" \
+            mcp-platform-test/pom.xml \
+            "mcp-platform-test/mcp-platform-test-$version.jar" | LC_ALL=C sort)"
+          # Refuse anything that is not a regular file or a plain directory, then compare the files with the expected list.
+          if [ -n "$(cd "$GITHUB_WORKSPACE/stage" && find . -mindepth 1 ! -type f ! -type d)" ]; then
+            echo "the artifact holds something that is not a regular file" >&2
+            exit 1
+          fi
+          actual_files="$(cd "$GITHUB_WORKSPACE/stage" && find . -type f | sed 's#^\./##' | LC_ALL=C sort)"
+          if [ "$actual_files" != "$expected" ]; then
+            echo "the artifact does not hold exactly the expected files:" >&2
+            printf '%s\n' "$actual_files" >&2
+            exit 1
+          fi
           url="https://maven.pkg.github.com/${GITHUB_REPOSITORY}"
           deploy="org.apache.maven.plugins:maven-deploy-plugin:3.1.4:deploy-file"
-          cd stage
+          stage="$GITHUB_WORKSPACE/stage"
+          work="$(mktemp -d "$RUNNER_TEMP/deploy.XXXXXX")"
+          cd "$work"
+          # The mvn script looks for .mvn in the working directory and every directory above it.
+          dir="$work"
+          while [ "$dir" != "/" ]; do
+            if [ -e "$dir/.mvn" ]; then
+              echo "$dir/.mvn exists: Maven would read it with the write token" >&2
+              exit 1
+            fi
+            dir="$(dirname "$dir")"
+          done
+          export MAVEN_OPTS="" MAVEN_ARGS=""
+          run_mvn() {
+            mvn -B -Dmaven.multiModuleProjectDirectory="$work" "$deploy" -Durl="$url" -DrepositoryId=github "$@"
+          }
           for module in mcp-platform mcp-platform-bom; do
-            mvn -B "$deploy" -Durl="$url" -DrepositoryId=github -Dfile="$module/pom.xml" -DpomFile="$module/pom.xml" -Dpackaging=pom
+            run_mvn -Dfile="$stage/$module/pom.xml" -DpomFile="$stage/$module/pom.xml" -Dpackaging=pom
           done
           for module in mcp-platform-starter mcp-platform-test; do
-            mvn -B "$deploy" -Durl="$url" -DrepositoryId=github -Dfile="$module/$module-$version.jar" -DpomFile="$module/pom.xml"
+            run_mvn -Dfile="$stage/$module/$module-$version.jar" -DpomFile="$stage/$module/pom.xml"
           done
 
   sbom:
