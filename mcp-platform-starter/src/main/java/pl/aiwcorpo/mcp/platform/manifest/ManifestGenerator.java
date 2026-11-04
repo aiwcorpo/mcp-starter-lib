@@ -182,7 +182,7 @@ public final class ManifestGenerator {
         }
         String problem = errors.isEmpty()
                 ? "The manifest of this server violates the manifest rules " + violations
-                        + " (README of mcp-contracts, 'Reguły semantyczne manifestu'): the gateway would reject it"
+                        + " (README of mcp-contracts, 'Manifest semantic rules'): the gateway would reject it"
                 : "The manifest of this server does not match server-manifest.schema.json: "
                         + errors.stream().map(Error::toString).limit(5).toList();
         if (strict) {

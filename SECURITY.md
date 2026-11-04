@@ -27,4 +27,4 @@ Out of scope:
 ## Supported versions
 
 Only the latest released version receives fixes. Published versions are immutable; a fix ships as a new release
-(see "Wersjonowanie" in the README).
+(see "Versioning" in the README).

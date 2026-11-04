@@ -25,7 +25,7 @@ import tools.jackson.databind.JsonNode;
  * Problems carry the path of declared property names (schema author text), never request data.
  *
  * <p>The rules are those of the manifest rules {@code input-schema-closed}, {@code input-schema-bounded} and
- * {@code input-schema-no-combinators} of mcp-manifest (README of mcp-contracts, "Reguły semantyczne manifestu"): a
+ * {@code input-schema-no-combinators} of mcp-manifest (README of mcp-contracts, "Manifest semantic rules"): a
  * schema this class accepts passes them, so the manifest the server publishes is accepted by the gateway.
  */
 final class InputSchemaBounds {

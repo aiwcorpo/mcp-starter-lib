@@ -145,7 +145,7 @@ final class DevProfileEnvironment {
             message += ". A devcontainer, Codespaces, Toolbox or Distrobox is a container too: run the server outside "
                     + "the container, run it from a test (TestGateway starts it in the test context, which is not "
                     + "checked), or use a profile other than 'dev' with TLS, mTLS and Redis configured as in a "
-                    + "deployment (see 'Uruchomienie lokalne' in the starter's README)";
+                    + "deployment (see 'Running locally' in the starter's README)";
         }
         return message;
     }

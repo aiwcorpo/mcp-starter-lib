@@ -241,7 +241,7 @@ zgłoszeniu z pustymi polami opcjonalnymi (wynik ok, `structuredContent` z `null
 W profilu `dev` (jedyny aktywny) starter wymusza powyżej `application*.yml` serwera `server.ssl.enabled=false`,
 `mtls.required=false`, `internal-jwt.replay-store=memory` i puste `internal-jwt.jwks-ssl-bundle`. Z `application-dev.yml`
 serwera można usunąć te cztery ustawienia (i obejścia z CLI); `allow-test-keys: true` zostaje tam, gdzie lokalny gateway
-podpisuje kluczami testowymi. Opis i komenda startu: README, "Uruchomienie lokalne".
+podpisuje kluczami testowymi. Opis i komenda startu: README, "Running locally".
 
 ### Pozostałe zmiany zachowania
 
@@ -344,9 +344,9 @@ API tylko przybywa (żadnej sygnatury nie usunięto ani nie zmieniono), manifest
   `CursorCodec(key, validity, clock, serverId)`; stary zostaje, z pustym `serverId`. Bean startera podaje `server-id` sam.
 - **Odrzucane są kursory z `=` i z niezerowymi bitami dopełnienia**; kursory wydane przez `CursorCodec` takie nie są.
 - **Ostrzeżenie o braku `paging.cursor-key` pojawia się przy pierwszym wydanym kursorze**, nie przy starcie.
-- **Nowe, opcjonalne: `PageFiller.fill(...)`** dla narzędzi z rozmiarem strony od klienta (README, "Duże wyniki"). Narzędzie, które po `ResultFilter` zwraca krótką stronę z `nextCursor`, zdradza, że coś ukryto; dopełnianie to ogranicza.
+- **Nowe, opcjonalne: `PageFiller.fill(...)`** dla narzędzi z rozmiarem strony od klienta (README, "Large results"). Narzędzie, które po `ResultFilter` zwraca krótką stronę z `nextCursor`, zdradza, że coś ukryto; dopełnianie to ogranicza.
 - **Sonda wersji**: wywołanie, które przekracza czas i ignoruje przerwanie, blokuje kolejne uruchomienia tej sondy (stan `UNAVAILABLE`), zamiast mnożyć wątki.
-  `ProductVersion.parse("9.12.34567")` jest teraz puste. Sonda nie powinna trzymać sekretu serwera (README, "Wersje systemu").
+  `ProductVersion.parse("9.12.34567")` jest teraz puste. Sonda nie powinna trzymać sekretu serwera (README, "System versions").
 - **`ci/run.sh`**: `project_version` woła `maven-help-plugin:3.5.1`; wersja musi być w `~/.m2` albo w rejestrze.
 
 ## Z beta-10 na beta-11
@@ -357,7 +357,7 @@ są bajt w bajt jak w 6.2.0. Kod startera nie wymagał zmian z powodu kontraktó
 ### 1. Wersja i repozytoria
 
 `<mcp-platform.version>3.0.0-beta-11</mcp-platform.version>` w szablonie albo `<version>3.0.0-beta-11</version>` w imporcie `mcp-platform-bom`; BOM ustawia `mcp-contracts`, `mcp-cedar-entities`, `mcp-policy-bundle`
-i `mcp-manifest` na 6.2.1. Wydania są w GitHub Packages (README, "Instalacja"); lokalnie nadal wystarczy `~/.m2`.
+i `mcp-manifest` na 6.2.1. Wydania są w GitHub Packages (README, "Using the artifacts"); lokalnie nadal wystarczy `~/.m2`.
 
 ### 2. Regeneracja manifestu
 
@@ -367,13 +367,13 @@ a serwer na starterze nie ustawia `source`. Gdyby hash któregoś narzędzia si�
 ### 3. Narzędzia `UPDATE` (CC-204)
 
 `UPDATE` jest dostarczane co najmniej raz: po `502` z balancera klient może powtórzyć wywołanie. Przejrzyj narzędzia `UPDATE` serwera i tam, gdzie system na to pozwala, zaprojektuj je tak, żeby powtórzenie było nieszkodliwe
-(stan docelowy zamiast przyrostu, klucz do sprawdzenia, wersja oczekiwana). README, "Powtarzalność narzędzi `UPDATE`". Nic nie jest wymuszane.
+(stan docelowy zamiast przyrostu, klucz do sprawdzenia, wersja oczekiwana). README, "Repeatability of `UPDATE` tools". Nic nie jest wymuszane.
 
 ### 4. Zmiany w bibliotece, bez obowiązku po stronie serwera
 
-- **`CursorCodec` i `PagedResult<T>`** (README, "Duże wyniki"): wspólny kursor i kształt wyniku dla narzędzi, które stronicują albo ucinają treść. Serwery z własnym kursorem mogą zostać przy nim; nowe narzędzia powinny używać wspólnego.
+- **`CursorCodec` i `PagedResult<T>`** (README, "Large results"): wspólny kursor i kształt wyniku dla narzędzi, które stronicują albo ucinają treść. Serwery z własnym kursorem mogą zostać przy nim; nowe narzędzia powinny używać wspólnego.
   Wszystkie instancje serwera potrzebują tego samego `aiwcorpo.mcp.platform.paging.cursor-key` (Base64, co najmniej 32 bajty); bez klucza starter losuje go przy starcie i ostrzega.
-- **`CapabilityProbe`** (README, "Wersje systemu"): bean sondy wersji systemu; nieznana wersja daje tryb `degraded` zamiast zatrzymania serwera. Bez beana nic się nie zmienia.
+- **`CapabilityProbe`** (README, "System versions"): bean sondy wersji systemu; nieznana wersja daje tryb `degraded` zamiast zatrzymania serwera. Bez beana nic się nie zmienia.
 - **`ToolOutputSchemas`** podstawia argumenty typu rekordów generycznych (`Page<Issue>`). Narzędzie zwracające taki rekord z `UntrustedText` w elemencie dostaje teraz `outputSchema`, którego wcześniej
   nie miało, więc zmienia się jego `definitionHash` i wynik jest sprawdzany względem schematu. Żaden serwer w tym repozytorium takiego rekordu nie ma.
 
@@ -566,7 +566,7 @@ klucze testowe, a `dev-` odrzuca. Stos z kluczami `dev-` ustawia więc `SPRING_P
   testy, które sprawdzały własny tekst (`"The issue does not exist or is not visible."`), porównują ze stałą `ToolErrorCode.NOT_FOUND_OR_DENIED_MESSAGE`. Zmień też mapowania serwera, które
   zwracały tekst własny, na tę stałą (nie jest już potrzebne podawać tekstu).
 - Kolejność: najpierw grant. Użytkownik bez grantu na zasób dostaje `not_found_or_denied` **przed** wywołaniem resolvera i budową encji z danych systemu; `internal_error` z powodu
-  brakującej klasyfikacji nie zdradza już istnienia zasobu osobie bez dostępu (opis w README, "Jedna odmowa dla zasobów i kolejność ocen"). Test serwera, który oczekiwał `internal_error` dla zasobu
+  brakującej klasyfikacji nie zdradza już istnienia zasobu osobie bez dostępu (opis w README, "One refusal for resources and the order of evaluation"). Test serwera, który oczekiwał `internal_error` dla zasobu
   bez klasyfikacji, musi wywołać go użytkownikiem z grantem. Kolejka Service Desku poza zakresem linku w argumencie to `not_found_or_denied`, nie `access_denied` (zmień test i mapowanie w adapterze).
 - Brak paczki polityk po restarcie (albo błąd silnika polityk przy ocenie narzędzia) to `upstream_unavailable` z tekstem `Policies are not available. Try again later.`, a w audycie `policy_decision`
   z powodem `policy_unavailable` albo `policy_error` (wcześniej błąd silnika kończył się `access_denied`).
@@ -945,7 +945,7 @@ aiwcorpo.mcp.platform:
 
 `state-dir` trzyma rewizję i skrót archiwum każdego kanału: bez niego restart przyjąłby ponownie starszą podpisaną paczkę
 (CC-066), więc poza `dev` jest wymagany. Serwer bez paczki w `policy.startup-timeout` (30 s) nie wstaje. Szczegóły i
-zachowanie przy błędach: README, "Zasoby i polityki". Testy serwera nie wymagają zmian w konfiguracji:
+zachowanie przy błędach: README, "Resources and policies". Testy serwera nie wymagają zmian w konfiguracji:
 `GATEWAY.serverProperties()` dokłada `policy.*` i `manifest.*` (paczka z przykładowymi politykami kontraktów, klucze testowe).
 
 ### 6. `@ResourceRef` i resolver zamiast własnego sprawdzania
@@ -1054,7 +1054,7 @@ public SearchResult searchIssues(IssueFilter filter) {
 }
 ```
 
-Dla Confluence `scope.cql(...)`, dla OpenSearch `scope.opensearchIndexExpression()` (patrz README, "`QueryScope` i `StructuredQuery`"). `total` i inne
+Dla Confluence `scope.cql(...)`, dla OpenSearch `scope.opensearchIndexExpression()` (patrz README, "`QueryScope` and `StructuredQuery`"). `total` i inne
 liczniki z systemu nie są poprawiane po filtrowaniu: nie pokazuj ich, jeśli mają być zgodne z widoczną listą. Wynik, który nie jest rekordem z
 oznaczonym komponentem, filtruj przez `policy.retainAllowedById("Jira::Issue", items, Item::key)` albo
 `policy.retainAllowed(items, item -> resolvedResource)`.
