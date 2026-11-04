@@ -1,7 +1,6 @@
-# Thin wrapper: all logic is in ci/run.sh. Code from a pull request gets no secrets and no Docker socket; only the push to main does.
-# Secrets MCP_MAVEN_REPOSITORY_URL, _USER and _PASSWORD belong to the environment ci-main (so a pull request cannot read them);
-# pull requests resolve the mcp-contracts artifacts from the repository variable MCP_MAVEN_REPOSITORY_URL with a read-only account in
-# the repository secrets MCP_MAVEN_REPOSITORY_RO_USER / _RO_PASSWORD (not available to pull requests from forks).
+# Thin wrapper: all logic is in ci/run.sh. Code from a pull request gets no secrets and no Docker socket; only the push to main gets
+# the socket (RedisJtiReplayStoreTest starts Redis with Testcontainers). No secrets are used at all: the mcp-contracts artifacts are
+# resolved from Maven Central, so a run needs no registry account.
 name: ci
 on:
   push:
@@ -21,12 +20,8 @@ jobs:
       image: maven:3.9.12-eclipse-temurin-25@sha256:4f82a03a7d6679281952d628131299b1be88d7030a49c6a2b7d2ba2642e44e3e
     env:
       MCP_CI_NO_DOCKER: "true"
-      MCP_MAVEN_REPOSITORY_URL: ${{ vars.MCP_MAVEN_REPOSITORY_URL }}
-      MCP_MAVEN_REPOSITORY_USER: ${{ secrets.MCP_MAVEN_REPOSITORY_RO_USER }}
-      MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.MCP_MAVEN_REPOSITORY_RO_PASSWORD }}
     steps:
-      # actions/checkout v4.2.2
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
@@ -35,18 +30,12 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    environment: ci-main
     container:
       image: maven:3.9.12-eclipse-temurin-25@sha256:4f82a03a7d6679281952d628131299b1be88d7030a49c6a2b7d2ba2642e44e3e
       volumes:
         - /var/run/docker.sock:/var/run/docker.sock
-    env:
-      MCP_MAVEN_REPOSITORY_URL: ${{ secrets.MCP_MAVEN_REPOSITORY_URL }}
-      MCP_MAVEN_REPOSITORY_USER: ${{ secrets.MCP_MAVEN_REPOSITORY_USER }}
-      MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.MCP_MAVEN_REPOSITORY_PASSWORD }}
     steps:
-      # actions/checkout v4.2.2
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"

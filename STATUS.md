@@ -1,5 +1,9 @@
 # STATUS - mcp-starter-lib (ws-02)
 
+## 3.0.0: publikacja na Maven Central (przygotowanie, 2026-11-04)
+
+Wersja 3.0.0 (z 3.0.0-beta-15-SNAPSHOT), zależność od kontraktów 6.3.2. Metadane POM i profil `release` (sources, javadoc, GPG z `MAVEN_GPG_PASSPHRASE`, `central-publishing-maven-plugin` 0.10.0, `autoPublish=false`); `./mvnw -Prelease -Dgpg.skip verify` przechodzi, javadoc bez błędów. `release.yml`: `publish` bez narzędzi budowania, podpis i wysyłka do Portalu (`USER_MANAGED`); `ci.yml` bez sekretów `MCP_MAVEN_REPOSITORY_*` i bez środowiska `ci-main`; akcje z komentarzem wersji przy SHA. Niesprawdzone bez konta: wysyłka do Portalu i walidacja metadanych bez e-maila programisty. Wydanie czeka na kontrakty 6.3.2 na Central i na kroki człowieka z README ("Releasing"). Tag `v3.0.0` jeszcze nie istnieje.
+
 ## 3.0.0-beta-14: kontrakty 6.3.2
 
 CQL z `AND type = page` (CC-219); tryb odbiorcy JWT `native` / `adapter` (CC-226, `classification_missing`, `CallerContext.mcpRisk/mcpAction`, log i licznik wartości innej niż `READ_ONLY`); `decision` opcjonalne w zdarzeniu `authentication` (starter zapisuje nadal). Wektory `jwt/` (66, z `receiverMode`), `audit-events/` (128), `query-rendering/` (27) przechodzą. Migracja: `MIGRATION-3.0.md`, "Z beta-13 na beta-14".

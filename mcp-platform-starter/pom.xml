@@ -25,10 +25,17 @@
 
     <groupId>pl.aiwcorpo.mcp</groupId>
     <artifactId>mcp-platform-starter</artifactId>
-    <version>3.0.0-beta-15-SNAPSHOT</version>
+    <version>3.0.0</version>
     <name>Aiwcorpo MCP Platform :: Starter (auto-configuration)</name>
+    <description>Spring Boot starter for MCP servers behind the MCP platform gateway: internal JWT verification, backend credential, resource policy, audit and safe tool errors.</description>
 
     <url>https://github.com/aiwcorpo/mcp-starter-lib</url>
+    <inceptionYear>2026</inceptionYear>
+
+    <organization>
+        <name>aiwcorpo</name>
+        <url>https://github.com/aiwcorpo</url>
+    </organization>
 
     <licenses>
         <license>
@@ -38,19 +45,27 @@
         </license>
     </licenses>
 
+    <!-- The organization stands in for a person: Central requires developer information but not an e-mail address,
+         and a published POM is public and permanent, so no private address goes into it. -->
+    <developers>
+        <developer>
+            <id>aiwcorpo</id>
+            <name>aiwcorpo</name>
+            <organization>aiwcorpo</organization>
+            <organizationUrl>https://github.com/aiwcorpo</organizationUrl>
+        </developer>
+    </developers>
+
     <scm>
         <url>https://github.com/aiwcorpo/mcp-starter-lib</url>
         <connection>scm:git:https://github.com/aiwcorpo/mcp-starter-lib.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/aiwcorpo/mcp-starter-lib.git</developerConnection>
     </scm>
 
-    <!-- Published from CI only (.github/workflows/release.yml); the server id "github" gets its credentials from .ci/settings.xml. -->
-    <distributionManagement>
-        <repository>
-            <id>github</id>
-            <name>GitHub Packages (aiwcorpo/mcp-starter-lib)</name>
-            <url>https://maven.pkg.github.com/aiwcorpo/mcp-starter-lib</url>
-        </repository>
-    </distributionManagement>
+    <issueManagement>
+        <system>GitHub Issues</system>
+        <url>https://github.com/aiwcorpo/mcp-starter-lib/issues</url>
+    </issueManagement>
 
     <properties>
         <java.version>25</java.version>
@@ -179,4 +194,78 @@
             </plugin>
         </plugins>
     </build>
+
+    <!-- Maven Central. Not part of the normal build: `./mvnw -Prelease -Dgpg.skip verify` checks that the sources and javadoc jars
+         build; the CI workflow signs and uploads the result itself (.github/workflows/release.yml). A manual release is
+         `./mvnw -Prelease deploy`: signed with gpg, uploaded to the Central Portal as one bundle and left there for a person to
+         publish (central.autoPublish=false: a failed validation or a wrong version never reaches the public repository, which is
+         immutable). Credentials: server id "central" in settings.xml (a Portal user token). The signing passphrase is read from
+         MAVEN_GPG_PASSPHRASE or gpg-agent, never from the command line. This profile is repeated in the three poms that do not
+         share a parent (aggregator, starter, test: the last two inherit from spring-boot-starter-parent); keep them in step. -->
+    <profiles>
+        <profile>
+            <id>release</id>
+            <properties>
+                <central.autoPublish>false</central.autoPublish>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <executions>
+                            <execution>
+                                <id>sources-jar</id>
+                                <phase>package</phase>
+                                <goals><goal>jar-no-fork</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.12.0</version>
+                        <configuration>
+                            <doclint>all,-missing</doclint>
+                            <quiet>true</quiet>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>javadoc-jar</id>
+                                <phase>package</phase>
+                                <goals><goal>jar</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.8</version>
+                        <configuration>
+                            <bestPractices>true</bestPractices>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals><goal>sign</goal></goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.10.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>${central.autoPublish}</autoPublish>
+                            <deploymentName>mcp-platform ${project.version}</deploymentName>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

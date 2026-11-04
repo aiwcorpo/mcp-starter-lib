@@ -1,23 +1,24 @@
-# Publishes a tagged release to GitHub Packages (Maven, group pl.aiwcorpo.mcp: mcp-platform, mcp-platform-bom,
-# mcp-platform-starter, mcp-platform-test) and attaches a CycloneDX SBOM to the GitHub Release. Runs only on a v* tag;
-# nothing is published from branches. Not run yet: the repository and the organization packages do not exist at the time of
-# writing. The local tag v3.0.0-beta-11 predates this file in its present form and must not be pushed alone: the first public
-# release is a new tag.
+# Publishes a tagged release to Maven Central (group pl.aiwcorpo.mcp: mcp-platform, mcp-platform-bom, mcp-platform-starter,
+# mcp-platform-test) and attaches a CycloneDX SBOM to the GitHub Release. Runs only on a v* tag; nothing is published from
+# branches. The first public release is a new tag (3.0.0); the local tags v3.0.0-beta-N are not pushed.
 #
-# Setup, once, in the repository settings:
-#   - Environment "release": required reviewers (at least one person other than the one who pushes the tag) and a deployment
-#     rule that allows only tags matching v*. The jobs publish and github-release wait for approval.
-#   - Package access: the mcp-contracts packages are read with the GITHUB_TOKEN of the run (permissions: packages: read), not
-#     with a personal access token kept as a secret. In the settings of each package of aiwcorpo/mcp-contracts (mcp-contracts,
-#     mcp-cedar-entities, mcp-policy-bundle, mcp-manifest, mcp-contracts-parent): Package settings, "Manage Actions access", add
-#     this repository (aiwcorpo/mcp-starter-lib) with the role Read. Without it the run cannot resolve the dependencies.
+# Order of releases: the starter depends on pl.aiwcorpo.mcp:mcp-contracts, mcp-cedar-entities, mcp-policy-bundle and
+# mcp-manifest 6.3.2, which Maven resolves from Central. Release mcp-contracts first and publish its deployment in the Central
+# Portal; until then this workflow cannot resolve its dependencies.
+#
+# Setup, once (README, "Releasing"):
+#   - Environment "release": required reviewers (at least one person other than the one who pushes the tag), a deployment rule that
+#     allows only tags matching v*, and the secrets MAVEN_CENTRAL_USERNAME, MAVEN_CENTRAL_TOKEN (Portal user token), GPG_PRIVATE_KEY
+#     and GPG_PASSPHRASE. The jobs publish and github-release wait for approval.
 #
 # Five jobs, each with the least it needs:
-#   verify          contents: read, packages: read. Tests and dependencies run here.
-#   build           contents: read, packages: read, no build cache. Builds the jars and uploads them with the poms as an artifact.
-#   publish         packages: write, no checkout and no build: downloads that artifact and runs deploy-file, so no plugin, test or
-#                   annotation processor of the repository ever sees the write token. The environment "release" is reviewed.
-#   sbom            contents: read, packages: read. Builds the CycloneDX SBOM and uploads bom.json and bom.xml as an artifact.
+#   verify          contents: read. Tests and dependencies run here.
+#   build           contents: read, no build cache. Builds the jars, sources and javadoc jars and uploads them with the poms as an artifact.
+#   publish         no GitHub permission at all, no checkout and no build tool: downloads that artifact, checks its exact file list, signs
+#                   the files with gpg and uploads one bundle to the Central Portal with curl (USER_MANAGED: a person presses Publish
+#                   in the Portal after the validation, because a published version is immutable). The signing key and the Portal
+#                   token are in the environment of that one step only.
+#   sbom            contents: read. Builds the CycloneDX SBOM and uploads bom.json and bom.xml as an artifact.
 #   github-release  contents: write, no checkout and no build tool: downloads the SBOM and runs gh release create.
 name: release
 
@@ -38,18 +39,11 @@ jobs:
     timeout-minutes: 45
     permissions:
       contents: read
-      packages: read
-    env:
-      MCP_MAVEN_REPOSITORY_URL: https://maven.pkg.github.com/aiwcorpo/mcp-contracts
-      MCP_MAVEN_REPOSITORY_USER: ${{ github.actor }}
-      MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      # actions/checkout v4.2.2
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      # actions/setup-java v4.7.1
-      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           distribution: temurin
           java-version: '25'
@@ -80,23 +74,17 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
-      packages: read
-    env:
-      MCP_MAVEN_REPOSITORY_URL: https://maven.pkg.github.com/aiwcorpo/mcp-contracts
-      MCP_MAVEN_REPOSITORY_USER: ${{ github.actor }}
-      MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      # actions/checkout v4.2.2
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      # actions/setup-java v4.7.1; no build cache: what this job produces is published
-      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
+      # no build cache: what this job produces is published
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           distribution: temurin
           java-version: '25'
-      - name: Build the jars (the tests ran in verify)
-        run: ./mvnw -B -s .ci/settings.xml package -DskipTests
+      - name: Build the jars with sources and javadoc (the tests ran in verify)
+        run: ./mvnw -B -Prelease -Dgpg.skip package -DskipTests
       - name: Stage the files to publish
         run: |
           version="${GITHUB_REF_NAME#v}"
@@ -105,10 +93,11 @@ jobs:
           cp mcp-platform-bom/pom.xml stage/mcp-platform-bom/pom.xml
           for module in mcp-platform-starter mcp-platform-test; do
             cp "$module/pom.xml" "stage/$module/pom.xml"
-            cp "$module/target/$module-$version.jar" "stage/$module/$module-$version.jar"
+            for suffix in '' -sources -javadoc; do
+              cp "$module/target/$module-$version$suffix.jar" "stage/$module/$module-$version$suffix.jar"
+            done
           done
-      # actions/upload-artifact v4.6.2
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: maven-artifacts
           path: stage
@@ -117,79 +106,104 @@ jobs:
   publish:
     needs: build
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     environment: release
-    permissions:
-      contents: read
-      packages: write
+    permissions: {}
     steps:
-      # actions/setup-java v4.7.1; only for the settings.xml with the server "github" (credentials from the environment of the step)
-      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
-        with:
-          distribution: temurin
-          java-version: '25'
-          server-id: github
-          server-username: GITHUB_ACTOR
-          server-password: GITHUB_TOKEN
-      # actions/download-artifact v4.3.0
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: maven-artifacts
           path: stage
-      # Only uploads the files built in the read-only job: no project is built here, so no plugin, test or annotation processor
-      # of the repository runs with the write token. The artifact is data, not a project: its file list must be exactly the
-      # expected one (a .mvn directory with extensions.xml, maven.config or jvm.config would run in Maven with the token), and
-      # Maven starts from an empty directory of its own with no .mvn, an empty MAVEN_OPTS and MAVEN_ARGS, and the project
-      # directory pointed at that empty directory.
-      - name: Upload the artifacts to GitHub Packages
+      # The artifact is data from a job that ran repository code, not a project: its file list must be exactly the expected one.
+      # Nothing in this job runs Maven or any tool of the repository; gpg, zip, curl and jq come with the runner image.
+      - name: Sign the files and upload them to the Central Portal
         env:
-          GITHUB_ACTOR: ${{ github.actor }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
+          MAVEN_CENTRAL_TOKEN: ${{ secrets.MAVEN_CENTRAL_TOKEN }}
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
+          stage="$GITHUB_WORKSPACE/stage"
           expected="$(printf '%s\n' \
             mcp-platform/pom.xml \
             mcp-platform-bom/pom.xml \
             mcp-platform-starter/pom.xml \
             "mcp-platform-starter/mcp-platform-starter-$version.jar" \
+            "mcp-platform-starter/mcp-platform-starter-$version-sources.jar" \
+            "mcp-platform-starter/mcp-platform-starter-$version-javadoc.jar" \
             mcp-platform-test/pom.xml \
-            "mcp-platform-test/mcp-platform-test-$version.jar" | LC_ALL=C sort)"
-          # Refuse anything that is not a regular file or a plain directory, then compare the files with the expected list.
-          if [ -n "$(cd "$GITHUB_WORKSPACE/stage" && find . -mindepth 1 ! -type f ! -type d)" ]; then
+            "mcp-platform-test/mcp-platform-test-$version.jar" \
+            "mcp-platform-test/mcp-platform-test-$version-sources.jar" \
+            "mcp-platform-test/mcp-platform-test-$version-javadoc.jar" | LC_ALL=C sort)"
+          if [ -n "$(cd "$stage" && find . -mindepth 1 ! -type f ! -type d)" ]; then
             echo "the artifact holds something that is not a regular file" >&2
             exit 1
           fi
-          actual_files="$(cd "$GITHUB_WORKSPACE/stage" && find . -type f | sed 's#^\./##' | LC_ALL=C sort)"
-          if [ "$actual_files" != "$expected" ]; then
+          actual="$(cd "$stage" && find . -type f | sed 's#^\./##' | LC_ALL=C sort)"
+          if [ "$actual" != "$expected" ]; then
             echo "the artifact does not hold exactly the expected files:" >&2
-            printf '%s\n' "$actual_files" >&2
+            printf '%s\n' "$actual" >&2
             exit 1
           fi
-          url="https://maven.pkg.github.com/${GITHUB_REPOSITORY}"
-          deploy="org.apache.maven.plugins:maven-deploy-plugin:3.1.4:deploy-file"
-          stage="$GITHUB_WORKSPACE/stage"
-          work="$(mktemp -d "$RUNNER_TEMP/deploy.XXXXXX")"
-          cd "$work"
-          # The mvn script looks for .mvn in the working directory and every directory above it.
-          dir="$work"
-          while [ "$dir" != "/" ]; do
-            if [ -e "$dir/.mvn" ]; then
-              echo "$dir/.mvn exists: Maven would read it with the write token" >&2
-              exit 1
-            fi
-            dir="$(dirname "$dir")"
-          done
-          export MAVEN_OPTS="" MAVEN_ARGS=""
-          run_mvn() {
-            mvn -B -Dmaven.multiModuleProjectDirectory="$work" "$deploy" -Durl="$url" -DrepositoryId=github "$@"
+
+          group_path=pl/aiwcorpo/mcp
+          bundle="$RUNNER_TEMP/bundle"
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"
+          mkdir -m 700 "$GNUPGHOME"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          # Imported into a private home of this job; the passphrase goes to gpg through a file, never through argv.
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
+          printf '%s' "$GPG_PASSPHRASE" > "$GNUPGHOME/passphrase"
+          chmod 600 "$GNUPGHOME/passphrase"
+          fingerprint="$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr:/ { print $10; exit }')"
+          test -n "$fingerprint"
+
+          # Central wants, for every file: .asc (signature), .md5 and .sha1 (hex digest only).
+          add() {
+            local source="$1" artifact="$2" name="$3" dir="$bundle/$group_path/$2/$version"
+            mkdir -p "$dir"
+            cp "$source" "$dir/$name"
+            gpg --batch --yes --pinentry-mode loopback --passphrase-file "$GNUPGHOME/passphrase" \
+              --local-user "$fingerprint" --armor --detach-sign --output "$dir/$name.asc" "$dir/$name"
+            md5sum "$dir/$name" | cut -d' ' -f1 > "$dir/$name.md5"
+            sha1sum "$dir/$name" | cut -d' ' -f1 > "$dir/$name.sha1"
+            sha256sum "$dir/$name" | cut -d' ' -f1 > "$dir/$name.sha256"
           }
-          for module in mcp-platform mcp-platform-bom; do
-            run_mvn -Dfile="$stage/$module/pom.xml" -DpomFile="$stage/$module/pom.xml" -Dpackaging=pom
+          for module in mcp-platform mcp-platform-bom mcp-platform-starter mcp-platform-test; do
+            add "$stage/$module/pom.xml" "$module" "$module-$version.pom"
           done
           for module in mcp-platform-starter mcp-platform-test; do
-            run_mvn -Dfile="$stage/$module/$module-$version.jar" -DpomFile="$stage/$module/pom.xml"
+            for suffix in '' -sources -javadoc; do
+              add "$stage/$module/$module-$version$suffix.jar" "$module" "$module-$version$suffix.jar"
+            done
           done
+          rm -f "$GNUPGHOME/passphrase"
+          (cd "$bundle" && zip -qr "$RUNNER_TEMP/central-bundle.zip" pl)
+
+          # The curl configuration comes from stdin, so the token is not in the argument list.
+          token="$(printf '%s:%s' "$MAVEN_CENTRAL_USERNAME" "$MAVEN_CENTRAL_TOKEN" | base64 -w0)"
+          echo "::add-mask::$token"
+          portal=https://central.sonatype.com/api/v1/publisher
+          id="$(printf 'header = "Authorization: Bearer %s"\n' "$token" \
+            | curl --fail-with-body -sS -K - -X POST -F "bundle=@$RUNNER_TEMP/central-bundle.zip" \
+                "$portal/upload?name=mcp-platform-$version&publishingType=USER_MANAGED")"
+          echo "Central deployment id: $id"
+          state=""
+          for attempt in $(seq 1 40); do
+            status="$(printf 'header = "Authorization: Bearer %s"\n' "$token" | curl --fail-with-body -sS -K - -X POST "$portal/status?id=$id")"
+            state="$(printf '%s' "$status" | jq -r '.deploymentState')"
+            echo "deployment state: $state"
+            case "$state" in
+              VALIDATED|PUBLISHING|PUBLISHED) break ;;
+              FAILED) printf '%s\n' "$status" | jq '.errors' >&2; exit 1 ;;
+            esac
+            sleep 15
+          done
+          if [ "$state" = VALIDATED ]; then
+            echo "Validated. Publish or drop the deployment at https://central.sonatype.com/publishing/deployments"
+          fi
 
   sbom:
     needs: publish
@@ -197,25 +211,17 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: read
-      packages: read
-    env:
-      MCP_MAVEN_REPOSITORY_URL: https://maven.pkg.github.com/aiwcorpo/mcp-contracts
-      MCP_MAVEN_REPOSITORY_USER: ${{ github.actor }}
-      MCP_MAVEN_REPOSITORY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      # actions/checkout v4.2.2
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      # actions/setup-java v4.7.1
-      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           distribution: temurin
           java-version: '25'
       - name: SBOM (CycloneDX)
         run: ./mvnw -B -s .ci/settings.xml org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom
-      # actions/upload-artifact v4.6.2
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sbom
           path: |
@@ -231,8 +237,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      # actions/download-artifact v4.3.0
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: sbom
       - name: Create the GitHub Release with the SBOM

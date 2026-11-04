@@ -6,9 +6,7 @@ robi gateway. Biblioteka weryfikuje wewnętrzny JWT gateway'a, odbiera poświadc
 audytuje każde wywołanie i pilnuje, żeby z narzędzia wychodziły tylko bezpieczne błędy.
 
 Stos: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), kontrakty `mcp-contracts` 6.3.2.
-Wersja: **3.0.0-beta-14** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
-Tag `v3.0.0-beta-11` jest lokalny i nie służy do publikacji przez GitHub Actions (jego workflow wydania jest starszy od przeglądu
-bezpieczeństwa); pierwsze publiczne wydanie to nowy tag, nie ten.
+Wersja: **3.0.0** (stan i plan w `STATUS.md`, zmiany względem 2.x w `MIGRATION-3.0.md`).
 
 ## Dla kogo i jak zacząć
 
@@ -21,29 +19,44 @@ WSL2. Szkielet gotowego serwera jest w `mcp-server-template`.
 Drogi przez ten plik: napisanie pierwszego narzędzia to "Pierwszy serwer", uruchomienie bez gateway'a to "Uruchomienie lokalne",
 test to "Testy serwera bez gateway'a", ustawienia to "Konfiguracja", przejście z poprzedniej wersji to `MIGRATION-3.0.md`.
 
-### Instalacja
+### Using the artifacts
 
-Artefakty są w GitHub Packages organizacji `aiwcorpo` (`https://maven.pkg.github.com/aiwcorpo/mcp-starter-lib`), a ich zależność
-`mcp-contracts` w `https://maven.pkg.github.com/aiwcorpo/mcp-contracts`. GitHub Packages wymaga uwierzytelnienia także do odczytu:
-token z uprawnieniem `read:packages`, w `~/.m2/settings.xml` jako dwa serwery z tymi samymi danymi:
-
-```xml
-<settings>
-  <servers>
-    <server><id>github-starter</id><username>LOGIN_GITHUB</username><password>TOKEN_READ_PACKAGES</password></server>
-    <server><id>github-contracts</id><username>LOGIN_GITHUB</username><password>TOKEN_READ_PACKAGES</password></server>
-  </servers>
-</settings>
-```
-
-W `pom.xml` serwera:
+Maven Central, group `pl.aiwcorpo.mcp`; no repository entry and no credentials needed. Import the BOM and add the starter (the
+BOM also manages `mcp-contracts` 6.3.2, `mcp-cedar-entities`, `mcp-policy-bundle`, `mcp-manifest` and Spring AI):
 
 ```xml
-<repositories>
-  <repository><id>github-starter</id><url>https://maven.pkg.github.com/aiwcorpo/mcp-starter-lib</url></repository>
-  <repository><id>github-contracts</id><url>https://maven.pkg.github.com/aiwcorpo/mcp-contracts</url></repository>
-</repositories>
+<dependencyManagement>
+  <dependencies>
+    <dependency>
+      <groupId>pl.aiwcorpo.mcp</groupId>
+      <artifactId>mcp-platform-bom</artifactId>
+      <version>3.0.0</version>
+      <type>pom</type>
+      <scope>import</scope>
+    </dependency>
+  </dependencies>
+</dependencyManagement>
+<dependencies>
+  <dependency>
+    <groupId>pl.aiwcorpo.mcp</groupId>
+    <artifactId>mcp-platform-starter</artifactId>
+  </dependency>
+  <dependency>
+    <groupId>pl.aiwcorpo.mcp</groupId>
+    <artifactId>mcp-platform-test</artifactId>
+    <scope>test</scope>
+  </dependency>
+</dependencies>
 ```
+
+| Coordinates | Packaging |
+| --- | --- |
+| `pl.aiwcorpo.mcp:mcp-platform-bom:3.0.0` | pom |
+| `pl.aiwcorpo.mcp:mcp-platform-starter:3.0.0` | jar (with sources and javadoc) |
+| `pl.aiwcorpo.mcp:mcp-platform-test:3.0.0` | jar (with sources and javadoc), test scope only |
+| `pl.aiwcorpo.mcp:mcp-platform:3.0.0` | pom, parent of the BOM |
+
+Every file on Central carries a GPG signature (`.asc`). A version is immutable once published; a fix is a new number.
 
 Do pracy nad samą biblioteką: `./mvnw install` instaluje moduły w `~/.m2`. Wersje wydane są niezmienne; poprawka to nowy numer.
 
@@ -335,7 +348,7 @@ poniżej `$JAVA_HOME/bin/java` (`JAVA_HOME` wskazuje JDK 25).
             <dependency>
                 <groupId>pl.aiwcorpo.mcp</groupId>
                 <artifactId>mcp-platform-bom</artifactId>
-                <version>3.0.0-beta-14</version>
+                <version>3.0.0</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -1130,12 +1143,12 @@ Jeden punkt wejścia: `ci/run.sh` (`make ci` woła `ci/run.sh verify`). Ten sam 
 
 Nakładki wołające tylko ten skrypt: `.gitlab-ci.yml`, `Jenkinsfile`, `.github/workflows/ci.yml`. `verify` robi `clean verify`, kończy się błędem przy niepowodzeniu Mavena i gdy nie uruchomiono żadnego testu;
 nieznane polecenie to kod 2. Kod ze zmiany (merge request, pull request) nie dostaje gniazda Dockera ani sekretów main: zadanie zmian ma `MCP_CI_NO_DOCKER=true` (bez `RedisJtiReplayStoreTest`) i konto tylko do odczytu rejestru,
-zadanie main działa na runnerze z gniazdem, w środowisku `ci-main`, a cache zmian ma osobny klucz i `policy: pull`.
+zadanie main działa na runnerze z gniazdem, a cache zmian ma osobny klucz i `policy: pull`.
 Testy, które zakładają maszynę programisty, same się pomijają na hoście z sygnałem wdrożenia (kontener, pod, systemd; ten sam detektor co w starterze); w kontenerze pomijanych jest 16 testów, pozostałe 915 działa.
 Liczba pominiętych jest w logu, a `release` odmawia, gdy cokolwiek pominięto albo ustawiono `MCP_CI_NO_DOCKER`. Sprawdzone: przebieg lokalny i w obrazie `maven:3.9.12-eclipse-temurin-25`; nie na prawdziwym runnerze GitLab, Jenkins ani GitHub.
 Przy Dockerze bez routingu do hosta ustaw `TESTCONTAINERS_HOST_OVERRIDE`. `MAVEN_REPO_LOCAL` to jedno repozytorium Maven dla budowy, instalacji i kontroli istniejącej wersji.
 
-Artefakty `mcp-contracts` 6.3.2 muszą być w `~/.m2` albo w rejestrze wskazanym przez `MCP_MAVEN_REPOSITORY_URL` (`_USER`, `_PASSWORD`; `.ci/settings.xml`).
+Artefakty `mcp-contracts` 6.3.2 pochodzą z Maven Central; do czasu ich wydania muszą być w `~/.m2` albo w rejestrze wskazanym przez `MCP_MAVEN_REPOSITORY_URL` (`_USER`, `_PASSWORD`; `.ci/settings.xml`, dla GitLab CI i Jenkinsa).
 `RedisJtiReplayStoreTest` uruchamia Redisa przez Testcontainers, więc potrzebny jest dostęp do środowiska kontenerów (gniazdo Dockera zamontowane w kontenerze CI albo `DOCKER_HOST`).
 
 Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera to
@@ -1144,9 +1157,42 @@ Serwer importuje BOM i dodaje starter (wersje pilnuje BOM); `<parent>` serwera t
 ```xml
 <dependency>
   <groupId>pl.aiwcorpo.mcp</groupId><artifactId>mcp-platform-bom</artifactId>
-  <version>3.0.0-beta-14</version><type>pom</type><scope>import</scope>
+  <version>3.0.0</version><type>pom</type><scope>import</scope>
 </dependency>
 ```
+
+## Releasing
+
+Per release (a maintainer):
+
+1. Release `mcp-contracts` first and publish its deployment in the Central Portal: this repository depends on its artifacts
+   (`mcp-contracts`, `mcp-cedar-entities`, `mcp-policy-bundle`, `mcp-manifest`), which Maven resolves from Central. Until then the
+   build works only with them in `~/.m2`.
+2. Version without `-SNAPSHOT` in all poms (`3.0.0`), `CHANGELOG.md` entry, `ci/run.sh verify` green, and
+   `./mvnw -Prelease -Dgpg.skip verify` (builds the sources and javadoc jars Central requires; javadoc must pass doclint).
+3. Commit, tag `vX.Y.Z`, push the tag. `.github/workflows/release.yml` runs `verify` (all tests, Redis container, no skipped test),
+   `build` (read-only: jars, sources, javadoc), `publish` (environment `release`, needs approval: checks the exact file list, signs
+   with GPG, uploads one bundle to the Central Portal as `USER_MANAGED`, waits for `VALIDATED`; no Maven runs there), then `sbom` and
+   `github-release` (SBOM attached to the GitHub Release).
+4. Open https://central.sonatype.com/publishing/deployments, check the deployment and press **Publish** (or **Drop**). This is the
+   step that cannot be undone, so it stays manual. The version shows up on Central within minutes to an hour.
+
+From a maintainer's machine, without CI: Portal user token in `~/.m2/settings.xml` as server `central`, `MAVEN_GPG_PASSPHRASE`
+exported (or gpg-agent), then `./mvnw -Prelease deploy`. `central.autoPublish` is `false` by default; `-Dcentral.autoPublish=true`
+publishes without the manual step.
+
+One-time setup (a human):
+
+1. Account on https://central.sonatype.com and the namespace `pl.aiwcorpo`: the Portal shows a verification key; add it as a DNS TXT
+   record on `aiwcorpo.pl` and press Verify. One verified namespace serves this repository and `mcp-contracts`.
+2. Portal user token: secrets `MAVEN_CENTRAL_USERNAME` and `MAVEN_CENTRAL_TOKEN`.
+3. GPG key dedicated to releases (`gpg --quick-generate-key "aiwcorpo releases" ed25519 sign 2y`, with a passphrase); publish the public
+   key (`gpg --keyserver keyserver.ubuntu.com --send-keys <fingerprint>` and https://keys.openpgp.org). Secrets `GPG_PRIVATE_KEY`
+   (`gpg --armor --export-secret-keys <fingerprint>`) and `GPG_PASSPHRASE`. The same key as for `mcp-contracts` is fine.
+4. The four secrets go to the GitHub environment `release` (not repository-wide) with required reviewers other than the person who
+   pushes the tag and a deployment rule that allows only tags `v*`.
+5. The old secrets `MCP_MAVEN_REPOSITORY_URL`, `_USER`, `_PASSWORD`, `_RO_USER`, `_RO_PASSWORD` and the environment `ci-main` are not
+   used any more; delete them. GitHub Packages is no longer a publishing target; the packages already there can be deleted.
 
 ## Wersjonowanie
 

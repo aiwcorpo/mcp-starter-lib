@@ -4,6 +4,14 @@ Format: wersje SemVer; kolejność od najnowszej. Przed 3.0.0 wersje `alpha` i `
 `v3.0.0-beta-N`) nie gwarantują zgodności między sobą; kroki migracji każdej z nich są w `MIGRATION-3.0.md`.
 Linia `mcp-platform` 3.x nie ma związku z wersją `mcp-contracts` (BOM zarządza obiema).
 
+## 3.0.0 - 2026-11-04
+
+Pierwsze wydanie stabilne; kod jak w 3.0.0-beta-14 (kontrakty `mcp-contracts` 6.3.2), zmieniona jest tylko publikacja.
+
+- Artefakty trafiają do Maven Central (grupa `pl.aiwcorpo.mcp`), nie do GitHub Packages; konsument nie potrzebuje wpisu repozytorium ani tokenu.
+- Metadane POM dla Central (opis, `developers`, `scm`, `issueManagement`), profil `release` (jary sources i javadoc, podpis GPG).
+- Workflow wydania podpisuje i wysyła pakiet do Portalu Central w jobie bez narzędzi budowania; `ci.yml` nie używa sekretów.
+
 ## 3.0.0-beta-14 - 2026-11-03
 
 - Kontrakty `mcp-contracts` 6.3.2 (CHANGELOG 6.3.0, 6.3.1, 6.3.2, sekcje ws-02).

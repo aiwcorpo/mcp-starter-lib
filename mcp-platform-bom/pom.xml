@@ -13,13 +13,20 @@
     <parent>
         <groupId>pl.aiwcorpo.mcp</groupId>
         <artifactId>mcp-platform</artifactId>
-        <version>3.0.0-beta-15-SNAPSHOT</version>
+        <version>3.0.0</version>
     </parent>
     <artifactId>mcp-platform-bom</artifactId>
     <packaging>pom</packaging>
     <name>Aiwcorpo MCP Platform :: BOM</name>
+    <description>Bill of materials for MCP servers: versions of the platform starter, test support, mcp-contracts and Spring AI.</description>
 
     <url>https://github.com/aiwcorpo/mcp-starter-lib</url>
+    <inceptionYear>2026</inceptionYear>
+
+    <organization>
+        <name>aiwcorpo</name>
+        <url>https://github.com/aiwcorpo</url>
+    </organization>
 
     <licenses>
         <license>
@@ -29,19 +36,27 @@
         </license>
     </licenses>
 
+    <!-- The organization stands in for a person: Central requires developer information but not an e-mail address,
+         and a published POM is public and permanent, so no private address goes into it. -->
+    <developers>
+        <developer>
+            <id>aiwcorpo</id>
+            <name>aiwcorpo</name>
+            <organization>aiwcorpo</organization>
+            <organizationUrl>https://github.com/aiwcorpo</organizationUrl>
+        </developer>
+    </developers>
+
     <scm>
         <url>https://github.com/aiwcorpo/mcp-starter-lib</url>
         <connection>scm:git:https://github.com/aiwcorpo/mcp-starter-lib.git</connection>
+        <developerConnection>scm:git:ssh://git@github.com/aiwcorpo/mcp-starter-lib.git</developerConnection>
     </scm>
 
-    <!-- Published from CI only (.github/workflows/release.yml); the server id "github" gets its credentials from .ci/settings.xml. -->
-    <distributionManagement>
-        <repository>
-            <id>github</id>
-            <name>GitHub Packages (aiwcorpo/mcp-starter-lib)</name>
-            <url>https://maven.pkg.github.com/aiwcorpo/mcp-starter-lib</url>
-        </repository>
-    </distributionManagement>
+    <issueManagement>
+        <system>GitHub Issues</system>
+        <url>https://github.com/aiwcorpo/mcp-starter-lib/issues</url>
+    </issueManagement>
 
     <properties>
         <spring-ai.version>2.0.0</spring-ai.version>
