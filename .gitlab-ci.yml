@@ -2,10 +2,8 @@
 #
 # Two jobs, because code from a merge request must not get the Docker socket or the main secrets:
 #   verify-change  merge requests; plain runner without the socket, MCP_CI_NO_DOCKER=true (Redis test left out).
-#                  Gets only a read-only registry token (CI/CD variables MCP_MAVEN_REPOSITORY_URL, _USER, _PASSWORD:
-#                  deploy token with read_package_registry, masked, not protected).
 #   verify-main    default branch; runner tagged docker-socket (the socket mounted, for Testcontainers), environment
-#                  ci-main (protected). Defines its own MCP_MAVEN_REPOSITORY_* values scoped to that environment.
+#                  ci-main (protected).
 # The cache of a merge request is a separate key and pull-only, so a merge request cannot plant files for the main job.
 stages:
   - verify

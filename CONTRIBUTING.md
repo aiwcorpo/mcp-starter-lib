@@ -7,8 +7,7 @@ before it is implemented here.
 ## Setup
 
 JDK 25 and a container runtime (one test starts Redis with Testcontainers). Linux and macOS with bash 3.2 or newer;
-Windows only through WSL2. The `mcp-contracts` artifacts come from Maven Central; before they are released they must be in `~/.m2` (or in the registry
-named by `MCP_MAVEN_REPOSITORY_URL`, see the README, "Using the artifacts").
+Windows only through WSL2. The `mcp-contracts` artifacts come from Maven Central; before they are released they must be in `~/.m2`.
 
 ```bash
 ci/run.sh verify     # text checks, then clean verify; the same script runs in CI

@@ -1105,8 +1105,8 @@ call only this script.
 
 Overlays that call only this script: `.gitlab-ci.yml`, `Jenkinsfile`, `.github/workflows/ci.yml`. `verify` does `clean verify`, fails
 when Maven fails and when no test ran; an unknown command is exit code 2. Code from a change (a merge request, a pull request) does not
-get the Docker socket or main's secrets: the change job has `MCP_CI_NO_DOCKER=true` (without `RedisJtiReplayStoreTest`) and a
-read-only registry account, the main job runs on a runner with the socket, and the change cache has a separate key and `policy: pull`.
+get the Docker socket or main's secrets: the change job has `MCP_CI_NO_DOCKER=true` (without `RedisJtiReplayStoreTest`),
+the main job runs on a runner with the socket, and the change cache has a separate key and `policy: pull`.
 Tests that assume a developer's machine skip themselves on a host with a deployment signal (container, pod, systemd; the same
 detector as in the starter); in a container 16 tests are skipped and the other 915 run. The number of skipped tests is in the log, and
 `release` refuses when anything was skipped or `MCP_CI_NO_DOCKER` is set. Verified: a local run and a run in the
@@ -1114,8 +1114,7 @@ detector as in the starter); in a container 16 tests are skipped and the other 9
 set `TESTCONTAINERS_HOST_OVERRIDE`. `MAVEN_REPO_LOCAL` is the one Maven repository for build, install and the check of an existing
 version.
 
-The `mcp-contracts` 6.3.2 artifacts come from Maven Central; until they are released they must be in `~/.m2` or in the registry given
-by `MCP_MAVEN_REPOSITORY_URL` (`_USER`, `_PASSWORD`; `.ci/settings.xml`, for GitLab CI and Jenkins). `RedisJtiReplayStoreTest` starts
+The `mcp-contracts` 6.3.2 artifacts come from Maven Central; until they are released they must be in `~/.m2`. `RedisJtiReplayStoreTest` starts
 Redis through Testcontainers, so access to a container environment is needed (the Docker socket mounted into the CI container, or
 `DOCKER_HOST`).
 

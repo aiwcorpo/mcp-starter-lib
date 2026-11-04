@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Single CI entry point (M5-5): every CI system, the container image and a developer's shell call this script and
 # nothing else. .gitlab-ci.yml, Jenkinsfile and .github/workflows/ci.yml are thin wrappers around it. Needs bash 3.2 or newer
-# (Linux, macOS; Windows through WSL2), git, perl, JDK 25 and either a filled ~/.m2 with the mcp-contracts artifacts or MCP_MAVEN_REPOSITORY_URL (+ _USER, _PASSWORD)
-# pointing at the registry that holds them.
+# (Linux, macOS; Windows through WSL2), git, perl, JDK 25 and the mcp-contracts artifacts from Maven Central or a filled ~/.m2.
 #
 #   ci/run.sh                 verify (default)
 #   ci/run.sh verify          hygiene checks, then clean verify (unit tests, tests with the contract vectors and the
@@ -80,11 +79,7 @@ select_jdk
 repo="${MAVEN_REPO_LOCAL:-$HOME/.m2/repository}"
 
 mvnw() {
-  local args=(-B -Dmaven.repo.local="$repo")
-  if [[ -n "${MCP_MAVEN_REPOSITORY_URL:-}" ]]; then
-    args+=(-s .ci/settings.xml)
-  fi
-  ./mvnw "${args[@]}" "$@"
+  ./mvnw -B -Dmaven.repo.local="$repo" "$@"
 }
 
 project_version() {
