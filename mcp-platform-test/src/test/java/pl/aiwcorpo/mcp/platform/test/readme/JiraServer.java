@@ -12,7 +12,7 @@ import pl.aiwcorpo.mcp.platform.input.ArgumentLimits;
 import pl.aiwcorpo.mcp.platform.input.SchemaLimitedToolCallbacks;
 import pl.aiwcorpo.mcp.platform.security.CredentialContext;
 
-/** The server of the README example ("Pierwszy serwer"); kept compiling and green by {@link JiraToolsTest}. */
+/** The server of the README example ("First server"); kept compiling and green by {@link JiraToolsTest}. */
 @SpringBootApplication
 public class JiraServer {
 
