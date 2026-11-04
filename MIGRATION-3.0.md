@@ -83,7 +83,7 @@ itself.
 ## Changes in 3.0.0-alpha-5
 
 - The `dev` profile listens on the loopback interface only: the starter sets `server.address=127.0.0.1` (lowest
-  priority), and another address in `dev` stops the start. Run servers in containers (`mcp-platform-dev`, profile `full`)
+  priority), and another address in `dev` stops the start. Run servers in containers (the dev stack, profile `full`)
   without the `dev` profile, with mTLS and the gateway key.
 - The log line `event=tool_failed` leaves out messages also for exceptions of the HTTP and Jackson converters (a 200 body
   that cannot be parsed).
@@ -767,7 +767,7 @@ One new capability and nothing mandatory for a server that works on beta-3. Vers
 the BOM import.
 
 **The `devstack` profile for a development stack in containers.** Up to beta-3 the `test-*` signing keys (the gateway's JWT,
-policy bundles) worked only in the `dev` profile, and `dev` is forbidden in a container, so the `mcp-platform-dev` stack had
+policy bundles) worked only in the `dev` profile, and `dev` is forbidden in a container, so the dev stack had
 to name the bundle key differently (`policies-main-dev`). That bypassed the safeguard by name: a copy of such a
 configuration passed in production. Now the stack starts servers with the `devstack` profile
 (`SPRING_PROFILES_ACTIVE=devstack`, the only active profile) and two consents:
@@ -1090,7 +1090,7 @@ aiwcorpo.mcp.platform:
     accepted-credential-types: [user-oauth, user-secret]      # the credential types the server accepts
 ```
 
-`dev` (the `mcp-platform-dev` stack, the bundle repository on `:18747`; the key from `mcp-policies/keys/dev/`):
+`dev` (the dev stack, the bundle repository on `:18747`; the key from `mcp-policies/keys/dev/`):
 
 ```yaml
 aiwcorpo.mcp.platform:

@@ -41,7 +41,7 @@ public class PlatformConfigurationGuard implements InitializingBean {
     public static final String DEV_PROFILE = "dev";
 
     /**
-     * The profile of a shared development stack (containers of mcp-platform-dev): everything is as in production (TLS, mTLS,
+     * The profile of a shared development stack (containers of the dev stack): everything is as in production (TLS, mTLS,
      * Redis, https, state directory) except that signing keys named {@code test-*} and the published test keys are accepted.
      * Allowed in a container, but only with the explicit acknowledgement below, and it is never combined with another profile.
      */

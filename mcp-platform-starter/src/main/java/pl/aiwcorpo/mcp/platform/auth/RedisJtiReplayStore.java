@@ -8,7 +8,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 /**
  * {@code jti} store in Redis: one {@code SET jti:<serverId>:<jti> 1 NX PX <ms>} per token.
  *
- * <p>A single command because the Redis user of a server in mcp-platform-dev may run only an explicit list
+ * <p>A single command because the Redis user of a server in the dev stack may run only an explicit list
  * of commands on its own prefix ({@code SET} yes; {@code EVAL}, {@code SCAN}, {@code KEYS} no), and because
  * {@code SET NX} is already atomic: no read-then-write window in which two copies of a token both pass.
  */

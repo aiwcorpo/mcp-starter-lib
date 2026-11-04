@@ -25,7 +25,7 @@ import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
  *         required: true                     # false only in the dev profile
  *         allowed-client-names: [mcp-gateway]
  *       credential:
- *         connect-url: http://localhost:18090/connections?system={system}   # portal in mcp-platform-dev
+ *         connect-url: http://localhost:18090/connections?system={system}   # portal in the dev stack
  *       policy:
  *         main:
  *           url: https://policies.internal/policies/main/latest.json   # C7, pulled with ETag

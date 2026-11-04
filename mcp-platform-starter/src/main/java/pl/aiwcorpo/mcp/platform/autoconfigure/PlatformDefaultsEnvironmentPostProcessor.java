@@ -16,7 +16,7 @@ import org.springframework.core.env.MapPropertySource;
  *
  * <ul>
  *   <li>{@code management.health.redis.enabled=false}: Boot's Redis health check runs {@code INFO}, which the
- *       per-server Redis user may not run (ACL with an explicit command list, see mcp-platform-dev), so the
+ *       per-server Redis user may not run (ACL with an explicit command list, see the dev stack), so the
  *       health endpoint would report DOWN while the jti store works.</li>
  *   <li>{@code spring.ai.mcp.server.protocol=STREAMABLE}, {@code type=SYNC},
  *       {@code streamable-http.mcp-endpoint=/mcp}: the transport the gateway speaks to (streamable HTTP) and the

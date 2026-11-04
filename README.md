@@ -287,11 +287,11 @@ The server does not start when:
   `server.port` (a separate management server does not pass through the JWT/mTLS filter).
 
 The starter's default values (lowest priority): `management.health.redis.enabled=false` (the Redis health check uses `INFO`, which
-the user `mcp-<system>` in `mcp-platform-dev` may not run), `spring.data.redis.timeout=2s` (a hung Redis quickly gives 503), the
+the user `mcp-<system>` in the dev stack may not run), `spring.data.redis.timeout=2s` (a hung Redis quickly gives 503), the
 MCP transport as in "First server", `spring.ai.mcp.server.annotation-scanner.enabled=false`.
 
-**The `devstack` profile (a shared development stack in containers).** `dev` is forbidden in a container, while the `mcp-platform-dev`
-stack runs servers in containers with `test-*` signing keys. The `devstack` profile is for it: it keeps **everything** from
+**The `devstack` profile (a shared development stack in containers).** `dev` is forbidden in a container, while the dev stack
+runs servers in containers with `test-*` signing keys. The `devstack` profile is for it: it keeps **everything** from
 production (TLS and mTLS, Redis, https, `state-dir`, no `dev-pat`, `replay-store: memory`, `mtls.required: false`) except that it
 accepts `test-*` keys and the published test keys (`internal-jwt.allow-test-keys` and `policy.allow-test-keys`). It needs two
 consents at once, so that a copied configuration does not reach production: the property
@@ -333,7 +333,7 @@ executable jar. `mcp-server-template` has the complete file.
 `internal-jwt.jwks-uri`, `credential.connect-url`, `policy.main.*` (the address, `key-id`, the public key; in `dev` with
 `policy.allow-test-keys: true`) and `manifest.*` (version, `internal-url`, credential types) are enough; the rest has defaults or is
 removed in `dev`. A server without a policy bundle does not start, so the first local start needs a bundle repository
-(`mcp-platform-dev`: `http://127.0.0.1:18747/policies/main/latest.json`, key `test-policies-main-dev` from
+(the dev stack: `http://127.0.0.1:18747/policies/main/latest.json`, key `test-policies-main-dev` from
 `mcp-policies/keys/dev/`); in tests `TestGateway` does this.
 
 `src/main/java/jira/JiraServer.java`. Tools are registered with a `ToolCallbackProvider` bean; a bean with `@Tool` methods alone is
@@ -399,7 +399,7 @@ the server's `application*.yml` (the command line, system properties and environ
 | `aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle` | empty | no internal CA bundle (the JWKS over plain https or http) |
 
 `internal-jwt.allow-test-keys` is not forced: set `true` in the server's `application-dev.yml` when the local gateway
-(`mcp-platform-dev` or `TestGateway`) signs with test keys. `jwks-uri` stays required but is not fetched until a request with a JWT
+(the dev stack or `TestGateway`) signs with test keys. `jwks-uri` stays required but is not fetched until a request with a JWT
 arrives.
 
 Start (the starter's dependencies must be in `~/.m2`: `./mvnw install` in the starter repository, or a released version):
@@ -1088,7 +1088,7 @@ require a group in the test token (`user.groups(List.of("mcp-jira-read"))`), and
 ## Build
 
 ```bash
-./mvnw install          # JDK 25 in JAVA_HOME or on PATH; ci/run.sh verify finds one itself; needs Docker (Testcontainers: Redis with an ACL as in mcp-platform-dev)
+./mvnw install          # JDK 25 in JAVA_HOME or on PATH; ci/run.sh verify finds one itself; needs Docker (Testcontainers: Redis with an ACL as in the dev stack)
 ```
 
 ### CI

@@ -23,7 +23,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
- * The Redis jti store against Redis with the ACL of mcp-platform-dev ({@code redis/start.sh}): user
+ * The Redis jti store against Redis with the ACL of the dev stack ({@code redis/start.sh}): user
  * {@code mcp-jira}, keys {@code jti:mcp-jira:*} only, an explicit command list without scripts or SCAN.
  */
 @Testcontainers
