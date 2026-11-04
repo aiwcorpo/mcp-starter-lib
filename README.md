@@ -59,7 +59,9 @@ BOM also manages `mcp-contracts` 6.3.2, `mcp-cedar-entities`, `mcp-policy-bundle
 | `pl.aiwcorpo.mcp:mcp-platform-test:3.0.0` | jar (with sources and javadoc), test scope only |
 | `pl.aiwcorpo.mcp:mcp-platform:3.0.0` | pom, parent of the BOM |
 
-Every file on Central carries a GPG signature (`.asc`). A version is immutable once published; a fix is a new number.
+Every file on Central carries a GPG signature (`.asc`). A version is immutable once published; a fix is a new number. If you built
+3.0.0 locally before it reached Central, delete `~/.m2/repository/pl/aiwcorpo/mcp/mcp-platform*/3.0.0` and let Maven fetch the
+published files; the local copies are not byte-identical.
 
 To work on the library itself, `./mvnw install` installs the modules into `~/.m2`.
 
@@ -1129,12 +1131,18 @@ Per release (a maintainer):
    build works only with them in `~/.m2`.
 2. Version without `-SNAPSHOT` in all poms (`3.0.0`), `CHANGELOG.md` entry, `ci/run.sh verify` green, and
    `./mvnw -Prelease -Dgpg.skip verify` (builds the sources and javadoc jars Central requires; javadoc must pass doclint).
-3. Commit, tag `vX.Y.Z`, push the tag. `.github/workflows/release.yml` runs `verify` (all tests, Redis container, no skipped test),
-   `build` (read-only: jars, sources, javadoc), `publish` (environment `release`, needs approval: checks the exact file list, signs
-   with GPG, uploads one bundle to the Central Portal as `USER_MANAGED`, waits for `VALIDATED`; no Maven runs there), then `sbom` and
-   `github-release` (SBOM attached to the GitHub Release).
+3. Commit, tag `vX.Y.Z`, and push only that one tag (`git push origin vX.Y.Z`, never `git push --tags`: the local
+   `v3.0.0-beta-N` tags are not meant to be published). The workflow reacts to `vX.Y.Z` only; pre-release tags do not start it.
+   `.github/workflows/release.yml` runs `verify` (all tests, Redis container, no skipped test), `build` (read-only, no cache: jars,
+   sources, javadoc), `publish-maven` (environment `release`, needs approval: checks the exact file list, signs with GPG and
+   verifies every signature against the fingerprint in the repository variable `GPG_FINGERPRINT`, uploads one bundle to the Central
+   Portal as `USER_MANAGED`, waits for `VALIDATED`; no Maven runs there; skipped when the version is already on Central), then
+   `sbom` and `github-release` (SBOM attached to the GitHub Release; an existing release is left alone).
 4. Open https://central.sonatype.com/publishing/deployments, check the deployment and press **Publish** (or **Drop**). This is the
-   step that cannot be undone, so it stays manual. The version shows up on Central within minutes to an hour.
+   step that cannot be undone, so it stays manual. The version shows up on Central within minutes to an hour. The jobs `sbom` and
+   `github-release` follow the upload, not the publication; approve `github-release` only after pressing Publish.
+5. Re-running a failed workflow is safe. One exception: a deployment that is `VALIDATED` but neither published nor dropped is not
+   visible to the workflow, so drop it in the Portal before re-running, or the upload creates a second one.
 
 From a maintainer's machine, without CI: Portal user token in `~/.m2/settings.xml` as server `central`, `MAVEN_GPG_PASSPHRASE`
 exported (or gpg-agent), then `./mvnw -Prelease deploy`. `central.autoPublish` is `false` by default; `-Dcentral.autoPublish=true`
@@ -1146,10 +1154,13 @@ One-time setup (a human):
    record on `aiwcorpo.pl` and press Verify. One verified namespace serves this repository and `mcp-contracts`.
 2. Portal user token: secrets `MAVEN_CENTRAL_USERNAME` and `MAVEN_CENTRAL_TOKEN`.
 3. GPG key dedicated to releases (`gpg --quick-generate-key "aiwcorpo releases" ed25519 sign 2y`, with a passphrase); publish the public
-   key (`gpg --keyserver keyserver.ubuntu.com --send-keys <fingerprint>` and https://keys.openpgp.org). Secrets `GPG_PRIVATE_KEY`
-   (`gpg --armor --export-secret-keys <fingerprint>`) and `GPG_PASSPHRASE`. The same key as for `mcp-contracts` is fine.
+   key with `gpg --keyserver keyserver.ubuntu.com --send-keys <fingerprint>`; keys.openpgp.org publishes a key only with a confirmed
+   e-mail address of a user ID, so use it only if the key has an organisational address as its UID. Secrets `GPG_PRIVATE_KEY`
+   (`gpg --armor --export-secret-keys <fingerprint>`) and `GPG_PASSPHRASE`, and the repository variable `GPG_FINGERPRINT` (the
+   workflow refuses a key with another fingerprint). The same key as for `mcp-contracts` is fine.
 4. The four secrets go to the GitHub environment `release` (not repository-wide) with required reviewers other than the person who
-   pushes the tag and a deployment rule that allows only tags `v*`.
+   pushes the tag, the option **Prevent self-review**, and a deployment rule that allows only tags `v*`. In Settings, Rules, add a
+   tag ruleset for `v*` that blocks deletion and updates, so a released tag cannot be moved.
 5. The old secrets `MCP_MAVEN_REPOSITORY_URL`, `_USER`, `_PASSWORD`, `_RO_USER`, `_RO_PASSWORD` and the environment `ci-main` are not
    used any more; delete them. GitHub Packages is no longer a publishing target; the packages already there can be deleted.
 

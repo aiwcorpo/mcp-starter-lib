@@ -1,6 +1,6 @@
 # Publishes a tagged release to Maven Central (group pl.aiwcorpo.mcp: mcp-platform, mcp-platform-bom, mcp-platform-starter,
-# mcp-platform-test) and attaches a CycloneDX SBOM to the GitHub Release. Runs only on a v* tag; nothing is published from
-# branches. The first public release is a new tag (3.0.0); the local tags v3.0.0-beta-N are not pushed.
+# mcp-platform-test) and attaches a CycloneDX SBOM to the GitHub Release. Runs only on a vX.Y.Z tag (pre-release tags do not
+# match); nothing is published from branches. The first public release is a new tag (3.0.0); the local tags v3.0.0-beta-N are not pushed.
 #
 # Order of releases: the starter depends on pl.aiwcorpo.mcp:mcp-contracts, mcp-cedar-entities, mcp-policy-bundle and
 # mcp-manifest 6.3.2, which Maven resolves from Central. Release mcp-contracts first and publish its deployment in the Central
@@ -9,22 +9,24 @@
 # Setup, once (README, "Releasing"):
 #   - Environment "release": required reviewers (at least one person other than the one who pushes the tag), a deployment rule that
 #     allows only tags matching v*, and the secrets MAVEN_CENTRAL_USERNAME, MAVEN_CENTRAL_TOKEN (Portal user token), GPG_PRIVATE_KEY
-#     and GPG_PASSPHRASE. The jobs publish and github-release wait for approval.
+#     and GPG_PASSPHRASE. The jobs publish-maven and github-release wait for approval.
 #
 # Five jobs, each with the least it needs:
 #   verify          contents: read. Tests and dependencies run here.
 #   build           contents: read, no build cache. Builds the jars, sources and javadoc jars and uploads them with the poms as an artifact.
-#   publish         no GitHub permission at all, no checkout and no build tool: downloads that artifact, checks its exact file list, signs
+#   publish-maven   no GitHub permission at all, no checkout and no build tool: downloads that artifact, checks its exact file list, signs
 #                   the files with gpg and uploads one bundle to the Central Portal with curl (USER_MANAGED: a person presses Publish
 #                   in the Portal after the validation, because a published version is immutable). The signing key and the Portal
-#                   token are in the environment of that one step only.
+#                   token are in the environment of that one step only. A re-run skips the upload when the version is already on
+#                   Central; a deployment that is VALIDATED but not yet published is invisible to that check, so drop it in the
+#                   Portal before re-running.
 #   sbom            contents: read. Builds the CycloneDX SBOM and uploads bom.json and bom.xml as an artifact.
 #   github-release  contents: write, no checkout and no build tool: downloads the SBOM and runs gh release create.
 name: release
 
 on:
   push:
-    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
 
 permissions:
   contents: read
@@ -43,11 +45,10 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: '25'
-          cache: maven
       - name: Tag matches the project version
         run: |
           version="${GITHUB_REF_NAME#v}"
@@ -79,7 +80,7 @@ jobs:
         with:
           persist-credentials: false
       # no build cache: what this job produces is published
-      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: '25'
@@ -103,7 +104,7 @@ jobs:
           path: stage
           if-no-files-found: error
 
-  publish:
+  publish-maven:
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -114,12 +115,27 @@ jobs:
         with:
           name: maven-artifacts
           path: stage
+      # The Portal API has no lookup by coordinates, so a re-run asks Central itself.
+      - name: Is this version already on Central
+        id: central
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          url="https://repo1.maven.org/maven2/pl/aiwcorpo/mcp/mcp-platform/$version/mcp-platform-$version.pom"
+          code="$(curl -sS -o /dev/null -w '%{http_code}' --retry 3 "$url")"
+          case "$code" in
+            200) echo "published=true" >> "$GITHUB_OUTPUT"; echo "$version is already on Central, the upload is skipped" ;;
+            404) echo "published=false" >> "$GITHUB_OUTPUT" ;;
+            *) echo "unexpected HTTP $code from $url" >&2; exit 1 ;;
+          esac
       # The artifact is data from a job that ran repository code, not a project: its file list must be exactly the expected one.
       # Nothing in this job runs Maven or any tool of the repository; gpg, zip, curl and jq come with the runner image.
       - name: Sign the files and upload them to the Central Portal
+        if: steps.central.outputs.published != 'true'
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_FINGERPRINT: ${{ vars.GPG_FINGERPRINT }}
           MAVEN_CENTRAL_USERNAME: ${{ secrets.MAVEN_CENTRAL_USERNAME }}
           MAVEN_CENTRAL_TOKEN: ${{ secrets.MAVEN_CENTRAL_TOKEN }}
         run: |
@@ -152,13 +168,19 @@ jobs:
           bundle="$RUNNER_TEMP/bundle"
           export GNUPGHOME="$RUNNER_TEMP/gnupg"
           mkdir -m 700 "$GNUPGHOME"
-          trap 'rm -rf "$GNUPGHOME"' EXIT
+          trap 'gpgconf --kill gpg-agent || true; rm -rf "$GNUPGHOME"' EXIT
           # Imported into a private home of this job; the passphrase goes to gpg through a file, never through argv.
           printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --quiet --import
           printf '%s' "$GPG_PASSPHRASE" > "$GNUPGHOME/passphrase"
           chmod 600 "$GNUPGHOME/passphrase"
+          # The key that signs must be the one whose fingerprint is published in SECURITY.md and kept in the repository variable.
+          expected="$(printf '%s' "$GPG_FINGERPRINT" | tr -d ' ' | tr '[:lower:]' '[:upper:]')"
+          test -n "$expected"
           fingerprint="$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^fpr:/ { print $10; exit }')"
-          test -n "$fingerprint"
+          if [ "$fingerprint" != "$expected" ]; then
+            echo "the imported signing key ($fingerprint) is not the key in vars.GPG_FINGERPRINT" >&2
+            exit 1
+          fi
 
           # Central wants, for every file: .asc (signature), .md5 and .sha1 (hex digest only).
           add() {
@@ -167,6 +189,9 @@ jobs:
             cp "$source" "$dir/$name"
             gpg --batch --yes --pinentry-mode loopback --passphrase-file "$GNUPGHOME/passphrase" \
               --local-user "$fingerprint" --armor --detach-sign --output "$dir/$name.asc" "$dir/$name"
+            gpg --batch --status-fd 1 --verify "$dir/$name.asc" "$dir/$name" 2>/dev/null \
+              | awk -v fp="$fingerprint" '$2 == "VALIDSIG" && ($3 == fp || $NF == fp) { ok = 1 } END { exit !ok }' \
+              || { echo "signature of $name does not verify against $fingerprint" >&2; exit 1; }
             md5sum "$dir/$name" | cut -d' ' -f1 > "$dir/$name.md5"
             sha1sum "$dir/$name" | cut -d' ' -f1 > "$dir/$name.sha1"
             sha256sum "$dir/$name" | cut -d' ' -f1 > "$dir/$name.sha256"
@@ -182,17 +207,26 @@ jobs:
           rm -f "$GNUPGHOME/passphrase"
           (cd "$bundle" && zip -qr "$RUNNER_TEMP/central-bundle.zip" pl)
 
-          # The curl configuration comes from stdin, so the token is not in the argument list.
           token="$(printf '%s:%s' "$MAVEN_CENTRAL_USERNAME" "$MAVEN_CENTRAL_TOKEN" | base64 -w0)"
           echo "::add-mask::$token"
+          # The curl configuration comes from stdin, so the token is not in the argument list. On an HTTP error the body of the
+          # answer is printed: it says what the Portal rejected and holds no credential.
+          portal_call() {
+            local code
+            code="$(printf 'header = "Authorization: Bearer %s"\n' "$token" \
+              | curl -sS -K - -o "$RUNNER_TEMP/portal.out" -w '%{http_code}' "$@")" || { echo "curl failed" >&2; return 1; }
+            case "$code" in
+              2??) cat "$RUNNER_TEMP/portal.out" ;;
+              *) echo "Central answered HTTP $code:" >&2; cat "$RUNNER_TEMP/portal.out" >&2; echo >&2; return 1 ;;
+            esac
+          }
           portal=https://central.sonatype.com/api/v1/publisher
-          id="$(printf 'header = "Authorization: Bearer %s"\n' "$token" \
-            | curl --fail-with-body -sS -K - -X POST -F "bundle=@$RUNNER_TEMP/central-bundle.zip" \
+          id="$(portal_call -X POST -F "bundle=@$RUNNER_TEMP/central-bundle.zip" \
                 "$portal/upload?name=mcp-platform-$version&publishingType=USER_MANAGED")"
           echo "Central deployment id: $id"
           state=""
           for attempt in $(seq 1 40); do
-            status="$(printf 'header = "Authorization: Bearer %s"\n' "$token" | curl --fail-with-body -sS -K - -X POST "$portal/status?id=$id")"
+            status="$(portal_call -X POST "$portal/status?id=$id")"
             state="$(printf '%s' "$status" | jq -r '.deploymentState')"
             echo "deployment state: $state"
             case "$state" in
@@ -201,12 +235,16 @@ jobs:
             esac
             sleep 15
           done
+          case "$state" in
+            VALIDATED|PUBLISHING|PUBLISHED) ;;
+            *) echo "deployment $id is still $state after waiting; check https://central.sonatype.com/publishing/deployments" >&2; exit 1 ;;
+          esac
           if [ "$state" = VALIDATED ]; then
             echo "Validated. Publish or drop the deployment at https://central.sonatype.com/publishing/deployments"
           fi
 
   sbom:
-    needs: publish
+    needs: publish-maven
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -215,12 +253,12 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
         with:
           distribution: temurin
           java-version: '25'
       - name: SBOM (CycloneDX)
-        run: ./mvnw -B -s .ci/settings.xml org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom
+        run: ./mvnw -B org.cyclonedx:cyclonedx-maven-plugin:2.9.1:makeAggregateBom
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: sbom
@@ -242,8 +280,10 @@ jobs:
           name: sbom
       - name: Create the GitHub Release with the SBOM
         run: |
-          flags=()
-          if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags+=(--prerelease); fi
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" "${flags[@]}" bom.json bom.xml
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "the release $GITHUB_REF_NAME exists already, nothing to create"
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$GITHUB_REF_NAME" bom.json bom.xml
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
