@@ -989,7 +989,7 @@ class DevProfileLoopbackTest extends ServerTestSupport {
 ```
 
 `ServerTestSupport` is the base class of the server tests (`@SpringBootTest`, `@ActiveProfiles("dev")`), in the same package. Moving
-from earlier versions step by step: `MIGRATION-3.0.md`, the section "Jak przejść z alpha-11".
+from earlier versions step by step: `MIGRATION-3.0.md`, the section "Moving from alpha-11 (or alpha-12) to 3.0.0-alpha-14".
 
 `assertServerIsGuarded(context)` requires that the server context contains all the beans from `PlatformPresenceCheck.REQUIRED_BEANS`
 (the guard, the verifier and the JWT filter, the audit post-processor, the MCP server customizer) and that `server.address` is a
