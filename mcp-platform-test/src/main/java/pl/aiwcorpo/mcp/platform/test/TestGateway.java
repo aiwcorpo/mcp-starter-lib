@@ -88,11 +88,19 @@ public final class TestGateway implements AutoCloseable {
 
     /** Starts the JWKS endpoint for a server with id {@code serverId} ({@code mcp-<system>}). */
     public static TestGateway start(String serverId) {
+        return start(serverId, 0);
+    }
+
+    /**
+     * As {@link #start(String)} on a fixed loopback port: {@link LocalGateway} keeps the JWKS address stable across its
+     * restarts, so a running server does not lose the keys. Port 0 picks a free one.
+     */
+    public static TestGateway start(String serverId, int port) {
         try {
             byte[] jwks = resource(KEYS + "test-gateway-jwks.json");
             ECKey key = ECKey.parse(new String(resource(KEYS + "test-gateway-jwt-a.NOT-FOR-PRODUCTION.private.jwk.json"),
                     StandardCharsets.UTF_8));
-            HttpServer server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+            HttpServer server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 0);
             server.createContext("/.well-known/jwks.json", exchange -> {
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 exchange.sendResponseHeaders(200, jwks.length);

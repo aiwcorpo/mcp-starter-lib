@@ -25,7 +25,7 @@
 
     <groupId>pl.aiwcorpo.mcp</groupId>
     <artifactId>mcp-platform-starter</artifactId>
-    <version>3.0.0</version>
+    <version>3.1.0-SNAPSHOT</version>
     <name>Aiwcorpo MCP Platform :: Starter (auto-configuration)</name>
     <description>Spring Boot starter for MCP servers behind the MCP platform gateway: internal JWT verification, backend credential, resource policy, audit and safe tool errors.</description>
 

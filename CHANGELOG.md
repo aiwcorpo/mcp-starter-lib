@@ -4,6 +4,12 @@ Format: wersje SemVer; kolejność od najnowszej. Przed 3.0.0 wersje `alpha` i `
 `v3.0.0-beta-N`) nie gwarantują zgodności między sobą; kroki migracji każdej z nich są w `MIGRATION-3.0.md`.
 Linia `mcp-platform` 3.x nie ma związku z wersją `mcp-contracts` (BOM zarządza obiema).
 
+## Unreleased (3.1.0)
+
+- `LocalGateway` w `mcp-platform-test` (jar z klasyfikatorem `local-gateway`): jeden serwer MCP uruchomiony bez platformy, z
+  własnym PAT użytkownika; testowe JWKS, przykładowy bundle polityk i przekazanie `/mcp` z wewnętrznym JWT. Tylko profil `dev`.
+- `TestGateway.start(serverId, port)`: stały port JWKS.
+
 ## 3.0.0 - 2026-11-04
 
 Pierwsze wydanie stabilne; kod jak w 3.0.0-beta-14 (kontrakty `mcp-contracts` 6.3.2), zmieniona jest tylko publikacja.

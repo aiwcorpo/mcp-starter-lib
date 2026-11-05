@@ -20,7 +20,7 @@
 
     <groupId>pl.aiwcorpo.mcp</groupId>
     <artifactId>mcp-platform-test</artifactId>
-    <version>3.0.0</version>
+    <version>3.1.0-SNAPSHOT</version>
     <name>Aiwcorpo MCP Platform :: Test support</name>
     <description>Test support for MCP servers built on mcp-platform-starter: a test gateway that serves a JWKS and mints internal JWTs from the published test keys. Test scope only.</description>
 
@@ -121,6 +121,22 @@
                                     </includes>
                                 </resource>
                             </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <!-- A runnable jar of LocalGateway next to the library jar (classifier local-gateway): one MCP server tested alone
+                 with the developer's own token. The library artifact stays a plain jar. -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>repackage</id>
+                        <goals><goal>repackage</goal></goals>
+                        <configuration>
+                            <classifier>local-gateway</classifier>
+                            <mainClass>pl.aiwcorpo.mcp.platform.test.LocalGateway</mainClass>
                         </configuration>
                     </execution>
                 </executions>

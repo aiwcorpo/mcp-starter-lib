@@ -429,6 +429,29 @@ curl -s -i -X POST http://127.0.0.1:18600/mcp -H 'Content-Type: application/json
 401 with `WWW-Authenticate: Bearer` and an `authentication` audit event, never an anonymous answer. Calling a tool needs the
 gateway's JWT (headers as in the test in "Server tests without the gateway").
 
+### One server with your own token: `LocalGateway`
+
+To call a server's tools against a real system without the platform, run the local gateway of `mcp-platform-test` in front of
+it. It serves the test JWKS and the example policy bundle, and forwards `/mcp` with an internal JWT for a local user and your
+`Authorization` header as the backend credential (C3).
+
+```bash
+# in this repository: ./mvnw -DskipTests package gives mcp-platform-test/target/mcp-platform-test-<version>-local-gateway.jar
+java -jar mcp-platform-test-<version>-local-gateway.jar --server mcp-jira      # writes local-gateway.env
+set -a; . ./local-gateway.env; set +a
+MCP_JIRA_URL=https://jira.example.internal java -jar mcp-jira.jar               # dev profile, 127.0.0.1:8080
+```
+
+The MCP client (MCP Inspector, Claude Code, curl) connects to `http://127.0.0.1:18500/mcp` with
+`Authorization: Bearer <your PAT>`; for a Basic credential send `Authorization: Basic <base64>`. The local user has the groups
+`mcp-<system>-read`, `-write` and `-destructive` (`--groups` changes them), and the credential type defaults to the first one of the
+system's gateway configuration (`--credential-type` changes it). A wrong argument prints all options.
+
+What it does not do: no login, no tool approval, no confirmation code for `DESTRUCTIVE` tools, no audit outside the server's log.
+A call reaches the system with every right of the token you send. Everything is signed with the published test keys, which only
+the `dev` profile accepts, and `dev` refuses to start in a container or under systemd, so this setup cannot leak into an
+installation.
+
 Outside `dev`, configuration errors appear one after another, because Spring checks them in different phases: first the HTTP server
 starts (a missing SSL bundle, certificate or CA), then `PlatformConfigurationGuard` (all violations at once in one message), and
 last the tools (a missing argument limit, `@ToolRisk`). A fixed SSL error can therefore expose the next one from a later phase (a
