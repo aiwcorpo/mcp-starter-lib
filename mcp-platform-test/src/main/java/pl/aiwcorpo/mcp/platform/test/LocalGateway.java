@@ -107,6 +107,14 @@ public final class LocalGateway {
 
     private void forward(HttpExchange exchange) throws IOException {
         try (exchange) {
+            // A web page reaching this port through DNS rebinding sends its own Host; a page on another site sends its Origin.
+            String host = exchange.getRequestHeaders().getFirst("Host");
+            String origin = exchange.getRequestHeaders().getFirst("Origin");
+            if (host == null || !host.matches("(127\\.0\\.0\\.1|localhost)(:\\d+)?")
+                    || origin != null && !origin.matches("https?://(127\\.0\\.0\\.1|localhost)(:\\d+)?")) {
+                reply(exchange, 403, "{\"error\":\"only local clients: Host and Origin must be 127.0.0.1 or localhost\"}");
+                return;
+            }
             String credential = exchange.getRequestHeaders().getFirst("Authorization");
             if (credential == null || !credential.matches("(Bearer|Basic|Token|ApiKey) \\S.*")) {
                 reply(exchange, 401, "{\"error\":\"send the token for the system as Authorization: Bearer <token> "
