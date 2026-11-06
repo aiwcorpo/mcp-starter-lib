@@ -52,4 +52,16 @@ class PolicyDataTest {
             assertThatThrownBy(() -> PolicyData.parse(json(bad))).as(bad).isInstanceOf(IllegalArgumentException.class);
         }
     }
+
+    @Test
+    void aMalformedDocumentWithAValidRevisionBecomesOneThatRefuses() {
+        PolicyData data = PolicyData.parseOrRefuse(json("{\"revision\":9,\"scopeMapping\":[],\"allowedClients\":[\"a\"],"
+                + "\"overrides\":[{\"id\":\"override-a\",\"text\":\"x\"},{\"id\":\"override-a\",\"text\":\"y\"}]}"));
+
+        assertThat(data.revision()).isEqualTo(9);
+        assertThat(data.problems()).isNotEmpty();
+        assertThat(data.allowedClients()).isEmpty();
+        assertThatThrownBy(() -> PolicyData.parseOrRefuse(json("{\"revision\":0}"))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> PolicyData.parseOrRefuse(json("not json"))).isInstanceOf(IllegalArgumentException.class);
+    }
 }

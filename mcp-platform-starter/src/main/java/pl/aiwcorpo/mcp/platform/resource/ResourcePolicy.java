@@ -27,7 +27,6 @@ import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
 import pl.aiwcorpo.mcp.platform.policy.PolicyEngine;
 import pl.aiwcorpo.mcp.platform.policy.PolicySnapshot;
-import pl.aiwcorpo.mcp.platform.policy.PolicyUnavailableException;
 import pl.aiwcorpo.mcp.platform.text.ToolResultRejectedException;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
@@ -39,14 +38,19 @@ import tools.jackson.databind.node.ObjectNode;
  * Where the server applies its own policies (the Cedar fragment of its jar, {@code mcp/policies/}) with the policy data of the gateway
  * (scope mapping, allowed clients, overrides) to what a call touches. The platform calls {@link #authorizeCall} before every tool
  * runs and {@link #filterResult} after it; a tool uses the rest ({@link ResultFilter}, {@link #require}, {@link #queryScope}) for
- * resources it finds itself. The gateway has decided {@code Action::"call"} on the tool with the platform policies; the server decides
- * on the resources of its system.
+ * resources it finds itself. The gateway has decided {@code Action::"call"} on the tool with the platform policies; the server repeats
+ * that decision (defence in depth) and decides on the resources of its system.
  *
  * <p>Before the tool runs, in this order:
  * <ol>
+ *   <li>The gate of the contracts lets the call through with one policy snapshot ({@link PolicyEngine#gate}): data loaded, own policies
+ *       approved, overrides valid; a {@code prv} newer than the data held is fetched first. Every decision of the call, the
+ *       per-element ones included, is made with that one snapshot.</li>
  *   <li>The AI client ({@code azp}) of the token must be one the policy data allows, checked in code: a client that is not is
- *       {@code access_denied}. The token's {@code prv} newer than the loaded revision asks the engine to refresh in the
- *       background; this call is decided with the data loaded now.</li>
+ *       {@code access_denied}.</li>
+ *   <li>{@code Action::"call"} on the tool with the platform policies of the contracts, the tool built from this server's own
+ *       manifest ({@code requiredGroup} {@code mcp-<system>-read}, {@code -write} or {@code -destructive}, {@code context.refs} from the
+ *       arguments of the types declared {@code earlyScopeCheck}): a deny is {@code access_denied}.</li>
  *   <li>For a tool with {@link ResourceRef} arguments: <b>every value of every such argument</b> (each element of a list;
  *       the source and the target of a transfer) is resolved by its {@link ResourceResolver} and evaluated with the
  *       tool's action ({@code <Namespace>::Action::"<action>"}) on the resource as the system reports it, with its parent. The first
@@ -157,6 +161,19 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         ToolDescriptor descriptor = descriptor(tool);
         pl.aiwcorpo.mcp.cedar.entities.ResultFilter.Authorizer authorizer = snapshot.authorizer();
 
+        boolean callAllowed;
+        try {
+            callAllowed = snapshot.evaluateCall(builder(snapshot).forToolCall(user, descriptor, context.arguments())).allowed();
+        } catch (EntityBuilderException ex) {
+            throw builderFailure(ex);
+        } catch (Exception ex) {
+            LOG.warn("event=policy_evaluation_failed tool=\"{}\" detail=\"{}\"", tool, ex.getClass().getName());
+            throw unavailable("policy_error");
+        }
+        if (!callAllowed) {
+            deny(caller, tool, null, null, null, "policy_forbid", snapshot, ToolErrorCode.ACCESS_DENIED,
+                    "You are not allowed to use this tool.");
+        }
         if (descriptor.resourceRefs().isEmpty()) {
             return;
         }
@@ -370,13 +387,11 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
 
     /** True when the caller may do the tool's action on the resource. Fail-closed on any error. */
     public boolean allows(ResolvedResource resource) {
+        ResourceContext context = ResourceContext.require();
+        PolicySnapshot snapshot = snapshot();
         try {
-            ResourceContext context = ResourceContext.require();
-            PolicySnapshot snapshot = snapshot();
             return snapshot.authorizer().isAllowed(builder(snapshot).forResource(user(context.caller()),
                     descriptor(context.tool()), context.arguments(), resource));
-        } catch (PolicyUnavailableException ex) {
-            throw unavailable("policy_unavailable");
         } catch (Exception ex) {
             return false;
         }
@@ -610,21 +625,24 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
     }
 
     /**
-     * The snapshot to decide with, when the gate of the contracts lets the call through: data is loaded, its approved hash is the hash of
-     * this server's own policies, and its overrides validate. The token's {@code prv} newer than the data held is fetched first.
-     * Otherwise {@code upstream_unavailable}, audited with the reason of the gate.
+     * The snapshot to decide with for the call in progress: the one the gate of the contracts let the call through with (data is loaded,
+     * its approved hash is the hash of this server's own policies, its overrides validate; a {@code prv} newer than the data held is
+     * fetched first). It is taken once per call and kept in the {@link ResourceContext}, so a swap of the data during the call changes
+     * nothing, and a gate refusal ends the call as {@code upstream_unavailable} (audited once, with the reason of the gate).
      */
     private PolicySnapshot snapshot() {
-        long prv = ResourceContext.current().map(context -> context.caller().policyRevision()).orElse(0L);
-        PolicyDataGate.Decision decision = engine.gate(prv > 0 ? java.util.OptionalLong.of(prv) : java.util.OptionalLong.empty());
-        if (!decision.allowed()) {
-            throw unavailable(decision.reason());
+        ResourceContext context = ResourceContext.require();
+        PolicySnapshot bound = context.snapshot();
+        if (bound != null) {
+            return bound;
         }
-        try {
-            return engine.snapshot();
-        } catch (PolicyUnavailableException ex) {
-            throw unavailable("policy_data_unavailable");
+        long prv = context.caller().policyRevision();
+        PolicyEngine.Gated gated = engine.gate(prv > 0 ? java.util.OptionalLong.of(prv) : java.util.OptionalLong.empty());
+        if (!gated.decision().allowed()) {
+            throw unavailable(gated.decision().reason());
         }
+        context.bind(gated.snapshot());
+        return gated.snapshot();
     }
 
     private ToolDescriptor descriptor(String tool) {
@@ -659,17 +677,17 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         return new SanitizedToolException(new McpErrorMapper.SafeError(ToolErrorCode.NOT_FOUND_OR_DENIED.code(), NOT_FOUND));
     }
 
-    /**
-     * {@code upstream_unavailable} when nothing can be decided (CC-141): no policy data is loaded, the policies are not approved or differ
-     * from the approved ones, an override is invalid (the reasons of {@link PolicyDataGate}) or the policy engine failed on this
-     * request ({@code policy_error}). The refusal is audited as a decision with that reason.
-     */
     /** Length in bytes of the arguments as the platform read them, for the audit events that have no raw input at hand. */
     private static long argsLength() {
         return ResourceContext.current().map(context -> (long) JSON.writeValueAsString(context.arguments())
                 .getBytes(java.nio.charset.StandardCharsets.UTF_8).length).orElse(0L);
     }
 
+    /**
+     * {@code upstream_unavailable} when nothing can be decided (CC-141): no policy data is loaded, the policies are not approved or differ
+     * from the approved ones, an override is invalid (the reasons of {@link PolicyDataGate}) or the policy engine failed on this
+     * request ({@code policy_error}). The refusal is audited as a decision with that reason.
+     */
     private SanitizedToolException unavailable(String reason) {
         ResourceContext.current().ifPresent(context -> audit.policyUnavailable(context.caller(), context.tool(),
                 registry.riskOf(context.tool()).orElse(null), reason, argsLength()));

@@ -107,33 +107,33 @@ class PolicyEngineTest {
             gateway.policyData().override("override-opens-everything", "permit (principal, action, resource);");
             engine.refresh();
 
-            assertThat(engine.gate(java.util.OptionalLong.empty())).extracting(d -> d.allowed(), d -> d.reason())
+            assertThat(engine.gate(java.util.OptionalLong.empty()).decision()).extracting(d -> d.allowed(), d -> d.reason())
                     .containsExactly(false, "overrides_invalid");
             assertThat(count("mcp_server_policy_data_rejected_total", "override_invalid")).isEqualTo(1.0);
 
             gateway.policyData().removeOverride("override-opens-everything");
             engine.refresh();
 
-            assertThat(engine.gate(java.util.OptionalLong.empty()).allowed()).isTrue();
+            assertThat(engine.gate(java.util.OptionalLong.empty()).decision().allowed()).isTrue();
         }
     }
 
     @Test
     void theCallsAreRefusedUnlessTheAdministratorApprovedTheHashOfTheOwnPolicies() {
         try (PolicyEngine engine = engine(config())) {
-            assertThat(engine.gate(java.util.OptionalLong.empty()).allowed()).isTrue();
+            assertThat(engine.gate(java.util.OptionalLong.empty()).decision().allowed()).isTrue();
 
             gateway.policyData().unapproved();
             engine.refresh();
-            assertThat(engine.gate(java.util.OptionalLong.empty()).reason()).isEqualTo("policies_not_approved");
+            assertThat(engine.gate(java.util.OptionalLong.empty()).decision().reason()).isEqualTo("policies_not_approved");
 
             gateway.policyData().approvedPoliciesHash("sha256:" + "0".repeat(64));
             engine.refresh();
-            assertThat(engine.gate(java.util.OptionalLong.empty()).reason()).isEqualTo("policies_differ");
+            assertThat(engine.gate(java.util.OptionalLong.empty()).decision().reason()).isEqualTo("policies_differ");
 
             gateway.policyData().approved();
             engine.refresh();
-            assertThat(engine.gate(java.util.OptionalLong.empty()).allowed()).isTrue();
+            assertThat(engine.gate(java.util.OptionalLong.empty()).decision().allowed()).isTrue();
         }
     }
 
@@ -233,9 +233,9 @@ class PolicyEngineTest {
             gateway.policyData().allowedClients("claude-ai");
             long newer = gateway.policyData().revision();
 
-            assertThat(engine.gate(java.util.OptionalLong.of(0)).allowed()).as("prv 0 (a gateway without data) forces nothing").isTrue();
+            assertThat(engine.gate(java.util.OptionalLong.of(0)).decision().allowed()).as("prv 0 (a gateway without data) forces nothing").isTrue();
             assertThat(engine.revision()).hasValue(held);
-            assertThat(engine.gate(java.util.OptionalLong.of(newer)).allowed()).isTrue();
+            assertThat(engine.gate(java.util.OptionalLong.of(newer)).decision().allowed()).isTrue();
 
             assertThat(engine.revision()).as("the data was asked for before the decision").hasValue(newer);
         }
@@ -246,7 +246,7 @@ class PolicyEngineTest {
         try (PolicyEngine engine = engine(config())) {
             long held = engine.snapshot().revision();
 
-            assertThat(engine.gate(java.util.OptionalLong.of(held + 5)).reason()).isEqualTo("policy_data_unavailable");
+            assertThat(engine.gate(java.util.OptionalLong.of(held + 5)).decision().reason()).isEqualTo("policy_data_unavailable");
             assertThat(engine.revision()).hasValue(held);
         }
     }
@@ -261,9 +261,127 @@ class PolicyEngineTest {
             long later = gateway.policyData().revision();
 
             long start = System.nanoTime();
-            assertThat(engine.gate(java.util.OptionalLong.of(later)).reason()).isEqualTo("policy_data_unavailable");
+            assertThat(engine.gate(java.util.OptionalLong.of(later)).decision().reason()).isEqualTo("policy_data_unavailable");
             assertThat(Duration.ofNanos(System.nanoTime() - start)).as("a stalled body ends at the limit").isLessThan(Duration.ofSeconds(3));
             assertThat(engine.revision()).hasValue(loaded);
+        } finally {
+            gateway.policyData().stall(false);
+        }
+    }
+
+    @Test
+    void aNewerDocumentThatIsMalformedRefusesEveryCallInsteadOfKeepingTheOlderData() {
+        try (PolicyEngine engine = engine(config())) {
+            long held = engine.snapshot().revision();
+            gateway.policyData().rawDocument(held + 1, "{\"revision\":" + (held + 1) + ",\"scopeMapping\":[],\"allowedClients\":[\"claude-code\"],"
+                    + "\"overrides\":[{\"id\":\"override-a\",\"text\":\"x\"},{\"id\":\"override-a\",\"text\":\"y\"}]}");
+
+            engine.refresh();
+
+            assertThat(engine.revision()).hasValue(held + 1);
+            assertThat(engine.gate(java.util.OptionalLong.empty()).decision().allowed()).isFalse();
+            assertThat(engine.gate(java.util.OptionalLong.empty()).snapshot()).isNull();
+        }
+    }
+
+    @Test
+    void theGateGivesTheSnapshotTheCallDecidesWithSoALaterSwapChangesNothingForIt() {
+        try (PolicyEngine engine = engine(config())) {
+            PolicyEngine.Gated gated = engine.gate(java.util.OptionalLong.empty());
+            long before = gated.snapshot().revision();
+
+            gateway.policyData().unapproved();
+            engine.refresh();
+
+            assertThat(gated.snapshot().revision()).isEqualTo(before);
+            assertThat(gated.snapshot().approvedPoliciesHash()).isPresent();
+            assertThat(engine.gate(java.util.OptionalLong.empty()).decision().reason()).isEqualTo("policies_not_approved");
+        }
+    }
+
+    @Test
+    void aCallDecidesWithTheSnapshotItWasLetThroughWithEvenWhenTheDataIsSwappedBetweenTheGateAndTheResolver() {
+        try (PolicyEngine engine = engine(config())) {
+            var registry = new pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry(pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry.Unclassified.FAIL);
+            registry.register(new RefTool("get_issue", "issueKey", "Jira::Issue"));
+            var resolver = new pl.aiwcorpo.mcp.platform.resource.ResourceResolver<pl.aiwcorpo.mcp.cedar.entities.ResolvedResource>() {
+                @Override
+                public String resourceType() {
+                    return "Jira::Issue";
+                }
+
+                @Override
+                public java.util.Optional<pl.aiwcorpo.mcp.cedar.entities.ResolvedResource> fetch(String key) {
+                    gateway.policyData().unapproved();
+                    engine.refresh();
+                    return java.util.Optional.of(pl.aiwcorpo.mcp.cedar.entities.ResolvedResource.of("Jira::Issue", key, Map.of("key", key))
+                            .withParent(pl.aiwcorpo.mcp.cedar.entities.ResolvedResource.of("Jira::Project", "ABC",
+                                    Map.of("key", "ABC", "category", "Software")).withScopes(List.of("Jira::Project/ABC")))
+                            .withScopes(List.of("Jira::Project/ABC")));
+                }
+
+                @Override
+                public pl.aiwcorpo.mcp.cedar.entities.ResolvedResource describe(pl.aiwcorpo.mcp.cedar.entities.ResolvedResource fetched) {
+                    return fetched;
+                }
+            };
+            var policy = new pl.aiwcorpo.mcp.platform.resource.ResourcePolicy(engine,
+                    new pl.aiwcorpo.mcp.platform.resource.ResourceResolvers(List.of(resolver)), registry,
+                    new pl.aiwcorpo.mcp.platform.observability.AuditLogger("test.policy.swap", "mcp-jira"), "mcp-jira", "jira",
+                    List.of("user-secret"), 200);
+            var claims = new pl.aiwcorpo.mcp.platform.auth.CallerContext("6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "jkowalski",
+                    List.of("mcp-jira-read"), "claude-code", "get_issue", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", 1L, null);
+            try (var context = pl.aiwcorpo.mcp.platform.resource.ResourceContext.open(claims, "get_issue", Map.of("issueKey", "ABC-1"))) {
+                policy.authorizeCall();
+                assertThat(policy.allows(pl.aiwcorpo.mcp.cedar.entities.ResolvedResource.of("Jira::Project", "ABC",
+                        Map.of("key", "ABC", "category", "Software")).withScopes(List.of("Jira::Project/ABC"))))
+                        .as("the per-element decision uses the same snapshot").isTrue();
+            }
+            try (var context = pl.aiwcorpo.mcp.platform.resource.ResourceContext.open(claims, "get_issue", Map.of("issueKey", "ABC-1"))) {
+                assertThatThrownBy(policy::authorizeCall).isInstanceOf(pl.aiwcorpo.mcp.platform.error.SanitizedToolException.class)
+                        .extracting(error -> ((pl.aiwcorpo.mcp.platform.error.SanitizedToolException) error).getCode())
+                        .isEqualTo("upstream_unavailable");
+                assertThatThrownBy(() -> policy.allows(pl.aiwcorpo.mcp.cedar.entities.ResolvedResource.of("Jira::Project", "ABC",
+                        Map.of("key", "ABC", "category", "")))).as("a gate refusal is not turned into false")
+                        .isInstanceOf(pl.aiwcorpo.mcp.platform.error.SanitizedToolException.class);
+            }
+        }
+    }
+
+    @Test
+    void manyCallsWithAnUnreachableRevisionShareOneRequestAndNoneWaitsLongerThanTheReadTimeout() throws Exception {
+        McpPlatformProperties.PolicyData config = config();
+        config.setReadTimeout(Duration.ofMillis(700));
+        try (PolicyEngine engine = engine(config)) {
+            long held = engine.snapshot().revision();
+            gateway.policyData().allowedClients("claude-ai").stall(true);
+            int before = gateway.policyData().requests();
+            int callers = 40;
+            var pool = java.util.concurrent.Executors.newFixedThreadPool(callers);
+            var ready = new java.util.concurrent.CountDownLatch(callers);
+            var go = new java.util.concurrent.CountDownLatch(1);
+            List<java.util.concurrent.Future<Long>> waits = new java.util.ArrayList<>();
+            for (int i = 0; i < callers; i++) {
+                waits.add(pool.submit(() -> {
+                    ready.countDown();
+                    go.await();
+                    long start = System.nanoTime();
+                    PolicyEngine.Gated gated = engine.gate(java.util.OptionalLong.of(held + 1));
+                    assertThat(gated.decision().reason()).isEqualTo("policy_data_unavailable");
+                    return Duration.ofNanos(System.nanoTime() - start).toMillis();
+                }));
+            }
+            ready.await();
+            go.countDown();
+            for (var wait : waits) {
+                assertThat(wait.get()).as("no caller waits much longer than read-timeout").isLessThan(2500);
+            }
+            pool.shutdownNow();
+
+            assertThat(gateway.policyData().requests() - before).as("one shared request, then the negative cache").isLessThanOrEqualTo(2);
+            PolicyEngine.Gated again = engine.gate(java.util.OptionalLong.of(held + 1));
+            assertThat(again.decision().allowed()).isFalse();
+            assertThat(gateway.policyData().requests() - before).isLessThanOrEqualTo(2);
         } finally {
             gateway.policyData().stall(false);
         }

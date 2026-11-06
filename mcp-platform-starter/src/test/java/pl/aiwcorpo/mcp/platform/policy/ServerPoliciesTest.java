@@ -78,4 +78,22 @@ class ServerPoliciesTest {
         assertThatThrownBy(() -> ServerPolicies.load(empty)).isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("src/main/resources/mcp/policies/schema.cedarschema is missing");
     }
+
+    @Test
+    void policyFilesFromAnotherPlaceOnTheClasspathStopTheStart(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path own = java.nio.file.Files.createDirectories(dir.resolve("own/mcp/policies"));
+        java.nio.file.Path library = java.nio.file.Files.createDirectories(dir.resolve("library/mcp/policies"));
+        java.nio.file.Files.writeString(own.resolve("schema.cedarschema"), SCHEMA);
+        java.nio.file.Files.writeString(own.resolve("resource-types.json"), TYPES);
+        java.nio.file.Files.writeString(own.resolve("read.cedar"), READ);
+        ClassLoader alone = new java.net.URLClassLoader(new java.net.URL[] {dir.resolve("own").toUri().toURL()}, null);
+        assertThat(ServerPolicies.load(alone).namespace()).isEqualTo("Notes");
+
+        java.nio.file.Files.writeString(library.resolve("extra.cedar"), READ.replace("notes-read", "notes-extra"));
+        ClassLoader both = new java.net.URLClassLoader(new java.net.URL[] {dir.resolve("own").toUri().toURL(),
+                dir.resolve("library").toUri().toURL()}, null);
+
+        assertThatThrownBy(() -> ServerPolicies.load(both)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("more than one place");
+    }
 }

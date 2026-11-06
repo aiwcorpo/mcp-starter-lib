@@ -15,6 +15,7 @@ import java.util.Set;
 import pl.aiwcorpo.mcp.cedar.entities.CedarRequest;
 import pl.aiwcorpo.mcp.cedar.entities.EntityBuilder;
 import pl.aiwcorpo.mcp.cedar.entities.EntityBuilderException;
+import pl.aiwcorpo.mcp.cedar.entities.McpCedarSchema;
 import pl.aiwcorpo.mcp.cedar.entities.PlatformServerPolicies;
 import pl.aiwcorpo.mcp.cedar.entities.PolicyFragments;
 import pl.aiwcorpo.mcp.cedar.entities.ResultFilter;
@@ -46,12 +47,13 @@ public final class PolicySnapshot {
     private final List<ScopeMapping.Ignored> ignored;
     private final EntityBuilder entityBuilder;
     private final PolicySet policySet;
+    private final PolicySet callPolicySet;
     private final Schema schema;
     private final AuthorizationEngine engine = new BasicAuthorizationEngine();
     private final Set<String> allowedClients;
 
     private PolicySnapshot(PolicyData data, boolean overridesValid, List<String> overrideProblems, List<ScopeMapping.Ignored> ignored,
-                           EntityBuilder entityBuilder, PolicySet policySet, Schema schema) {
+                           EntityBuilder entityBuilder, PolicySet policySet, PolicySet callPolicySet, Schema schema) {
         this.revision = data.revision();
         this.approvedPoliciesHash = data.approvedPoliciesHash();
         this.overridesValid = overridesValid;
@@ -60,6 +62,7 @@ public final class PolicySnapshot {
         this.allowedClients = Set.copyOf(data.allowedClients());
         this.entityBuilder = entityBuilder;
         this.policySet = policySet;
+        this.callPolicySet = callPolicySet;
         this.schema = schema;
     }
 
@@ -69,20 +72,22 @@ public final class PolicySnapshot {
      * type this server does not declare, a local part that does not match the {@code scopePattern}) are skipped and listed in
      * {@link #ignored()}.
      *
-     * <p>A snapshot with an override that does not validate against the composed schema, or whose policies cannot be merged (a
+     * <p>A document that could not be used (see {@link PolicyData#problems()}) gives a snapshot that grants nothing and refuses every call.
+     * A snapshot with an override that does not validate against the composed schema, or whose policies cannot be merged (a
      * duplicate policy id), is still made but {@link #overridesValid()} is false and the server refuses every call with it: a forbid
      * that cannot be applied must not be dropped silently.
      *
-     * @throws IllegalArgumentException when the scope mapping is not usable at all (not an array, not JSON)
      */
     public static PolicySnapshot of(ServerPolicies policies, PolicyData data) {
-        ScopeMapping mapping;
-        try {
-            mapping = ScopeMapping.fromJson(policies.resourceTypes(), data.scopeMapping(), true);
-        } catch (EntityBuilderException ex) {
-            throw new IllegalArgumentException("the scope mapping cannot be used: " + ex.getMessage(), ex);
+        List<String> problems = new ArrayList<>(data.problems());
+        ScopeMapping mapping = ScopeMapping.empty();
+        if (problems.isEmpty()) {
+            try {
+                mapping = ScopeMapping.fromJson(policies.resourceTypes(), data.scopeMapping(), true);
+            } catch (EntityBuilderException ex) {
+                problems.add("the scope mapping cannot be used: " + ex.getMessage());
+            }
         }
-        List<String> problems = new ArrayList<>();
         Set<Policy> accepted = new LinkedHashSet<>();
         for (PolicyData.Override override : data.overrides()) {
             PolicyFragments.Result result = PolicyFragments.validateOverride(override.id(), override.text(),
@@ -104,7 +109,7 @@ public final class PolicySnapshot {
             problems.add(ex.getMessage());
         }
         return new PolicySnapshot(data, problems.isEmpty(), List.copyOf(problems), mapping.ignored(),
-                new EntityBuilder(policies.resourceTypes(), mapping), all, policies.schema());
+                new EntityBuilder(policies.resourceTypes(), mapping), all, McpCedarSchema.platformPolicies(), policies.schema());
     }
 
     /** The revision of the policy data this snapshot was made from. */
@@ -153,7 +158,19 @@ public final class PolicySnapshot {
      * @throws Exception when Cedar cannot evaluate the request at all (the caller treats that as a refusal)
      */
     public Evaluation evaluate(CedarRequest request) throws Exception {
-        AuthorizationResponse response = engine.isAuthorized(request.toAuthorizationRequest(schema), policySet, request.cedarEntities());
+        return evaluate(request, policySet);
+    }
+
+    /**
+     * Evaluates {@code Action::"call"} on the tool with the platform policies of the contracts, the decision the gateway has made:
+     * the server repeats it as defence in depth. Overrides are not part of it; they apply to the resources.
+     */
+    public Evaluation evaluateCall(CedarRequest request) throws Exception {
+        return evaluate(request, callPolicySet);
+    }
+
+    private Evaluation evaluate(CedarRequest request, PolicySet policies) throws Exception {
+        AuthorizationResponse response = engine.isAuthorized(request.toAuthorizationRequest(schema), policies, request.cedarEntities());
         if (response.success.isEmpty()) {
             return new Evaluation(false, Set.of(), List.of("Cedar could not evaluate the request"));
         }

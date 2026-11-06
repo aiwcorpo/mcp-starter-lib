@@ -84,6 +84,13 @@ public final class PolicyDataEndpoint {
         return render();
     }
 
+    /** Serves {@code json} as the next revision, as it is (for a test of a document that is malformed). The document should carry its own {@code revision}. */
+    public synchronized PolicyDataEndpoint rawDocument(long revision, String json) {
+        this.revision = revision;
+        this.served = new Served(revision, json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return this;
+    }
+
     /** The next change goes out with revision {@code next}: for a test that the server never takes data that is not newer than what it holds. */
     public synchronized PolicyDataEndpoint nextRevision(long next) {
         this.revision = next - 1;

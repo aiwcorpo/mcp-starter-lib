@@ -8,6 +8,7 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.regex.Pattern;
@@ -72,20 +73,26 @@ public final class ServerPolicies {
      */
     public static ServerPolicies load(ClassLoader loader) {
         PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver(loader);
-        String schema = single(resolver, SCHEMA_FILE);
-        String types = single(resolver, RESOURCE_TYPES_FILE);
         Map<String, String> policyFiles = new TreeMap<>();
+        Set<String> roots = new TreeSet<>();
+        String schema = single(resolver, SCHEMA_FILE, roots);
+        String types = single(resolver, RESOURCE_TYPES_FILE, roots);
         try {
             for (Resource resource : resolver.getResources("classpath*:" + DIRECTORY + "/*.cedar")) {
                 String name = resource.getFilename();
-                String text = read(resource);
-                String previous = policyFiles.putIfAbsent(name, text);
-                if (previous != null && !previous.equals(text)) {
-                    throw new IllegalStateException(DIRECTORY + "/" + name + " exists twice on the classpath with different content");
+                roots.add(root(resource, name));
+                if (policyFiles.put(name, read(resource)) != null) {
+                    throw new IllegalStateException(DIRECTORY + "/" + name + " exists twice on the classpath");
                 }
             }
         } catch (IOException ex) {
             throw new UncheckedIOException("cannot list " + DIRECTORY, ex);
+        }
+        if (roots.size() > 1) {
+            // The policies are the application's own. A library on the classpath that ships files under mcp/policies would otherwise
+            // add or replace policies of the server without anyone having written them there.
+            throw new IllegalStateException("mcp/policies files come from more than one place on the classpath " + roots + ": only the "
+                    + "application's own code may hold them (src/main/resources/" + DIRECTORY + "/); remove the other, or the dependency that ships it");
         }
         return of(schema, policyFiles, types);
     }
@@ -143,26 +150,32 @@ public final class ServerPolicies {
                 + "the gateway would reject them:\n - " + String.join("\n - ", problems));
     }
 
-    private static String single(PathMatchingResourcePatternResolver resolver, String file) {
+    private static String single(PathMatchingResourcePatternResolver resolver, String file, Set<String> roots) {
         try {
             Resource[] found = resolver.getResources("classpath*:" + DIRECTORY + "/" + file);
-            String text = null;
-            for (Resource resource : found) {
-                String content = read(resource);
-                if (text != null && !text.equals(content)) {
-                    throw new IllegalStateException(DIRECTORY + "/" + file + " exists twice on the classpath with different content");
-                }
-                text = content;
-            }
-            if (text == null) {
+            if (found.length == 0) {
                 throw new IllegalStateException("src/main/resources/" + DIRECTORY + "/" + file + " is missing: a server built on the "
                         + "starter brings its own Cedar policies (schema.cedarschema, *.cedar and resource-types.json in "
                         + "src/main/resources/" + DIRECTORY + "/), see the README, 'Policies of the server'");
             }
-            return text;
+            for (Resource resource : found) {
+                roots.add(root(resource, file));
+            }
+            if (found.length > 1) {
+                throw new IllegalStateException(DIRECTORY + "/" + file + " exists " + found.length + " times on the classpath: only the "
+                        + "application's own code may hold it");
+            }
+            return read(found[0]);
         } catch (IOException ex) {
             throw new UncheckedIOException("cannot read " + DIRECTORY + "/" + file, ex);
         }
+    }
+
+    /** The classpath root (a jar or a directory) a policy file comes from. */
+    private static String root(Resource resource, String file) throws IOException {
+        String url = resource.getURL().toString();
+        int at = url.lastIndexOf(DIRECTORY + "/" + file);
+        return at < 0 ? url : url.substring(0, at);
     }
 
     private static String read(Resource resource) throws IOException {

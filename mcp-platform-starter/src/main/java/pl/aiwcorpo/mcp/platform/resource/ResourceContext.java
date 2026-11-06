@@ -28,6 +28,7 @@ public final class ResourceContext implements AutoCloseable {
     private final Map<String, Object> arguments;
     private final Map<String, Resolved> resolved = new HashMap<>();
     private final ResourceContext previous;
+    private pl.aiwcorpo.mcp.platform.policy.PolicySnapshot snapshot;
 
     private ResourceContext(CallerContext caller, String tool, Map<String, Object> arguments) {
         this.caller = caller;
@@ -98,6 +99,15 @@ public final class ResourceContext implements AutoCloseable {
     public <T> Optional<T> fetched(String type, String id, Class<T> as) {
         Resolved entry = resolved.get(type + "\u0000" + id);
         return entry == null || !as.isInstance(entry.fetched()) ? Optional.empty() : Optional.of(as.cast(entry.fetched()));
+    }
+
+    /** The policy snapshot the gate let this call through with; every decision of the call is made with this one object. */
+    pl.aiwcorpo.mcp.platform.policy.PolicySnapshot snapshot() {
+        return snapshot;
+    }
+
+    void bind(pl.aiwcorpo.mcp.platform.policy.PolicySnapshot snapshot) {
+        this.snapshot = snapshot;
     }
 
     Optional<Resolved> cached(String type, String id) {

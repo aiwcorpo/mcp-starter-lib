@@ -25,9 +25,11 @@ import tools.jackson.databind.node.ObjectNode;
  * @param scopeMapping   the {@code scopeMapping} array as JSON text: {@code [{"group": "...", "scopes": ["<Type>/<id>"]}]}
  * @param allowedClients the AI clients ({@code azp}) that may use the platform; checked in code before any policy
  * @param overrides      the emergency {@code forbid} policies that target this server or all servers
+ * @param problems       what is wrong with the document of a revision that could be ordered but not used; the server then refuses every call with
+ *                       it rather than keep deciding with older data (empty for a good document)
  */
 public record PolicyData(long revision, Optional<String> approvedPoliciesHash, String scopeMapping, List<String> allowedClients,
-                         List<Override> overrides) {
+                         List<Override> overrides, List<String> problems) {
 
     /** One emergency override: its id and the Cedar text of its single {@code forbid} policy. */
     public record Override(String id, String text) {
@@ -44,6 +46,13 @@ public record PolicyData(long revision, Optional<String> approvedPoliciesHash, S
     public PolicyData {
         allowedClients = List.copyOf(allowedClients);
         overrides = List.copyOf(overrides);
+        problems = List.copyOf(problems);
+    }
+
+    /** A good document. */
+    public PolicyData(long revision, Optional<String> approvedPoliciesHash, String scopeMapping, List<String> allowedClients,
+                      List<Override> overrides) {
+        this(revision, approvedPoliciesHash, scopeMapping, allowedClients, overrides, List.of());
     }
 
     /**
@@ -59,6 +68,31 @@ public record PolicyData(long revision, Optional<String> approvedPoliciesHash, S
             scopes.forEach(list::add);
         });
         return new PolicyData(revision, approvedPoliciesHash, mapping.toString(), allowedClients, overrides);
+    }
+
+    /**
+     * The document, or when it is malformed but names a valid revision, a document with that revision, nothing granted and the problem
+     * listed: a newer revision that cannot be used must refuse every call, not leave the older data in force.
+     *
+     * @throws IllegalArgumentException when not even the revision can be read (the document cannot be ordered, so it is ignored)
+     */
+    public static PolicyData parseOrRefuse(byte[] body) {
+        try {
+            return parse(body);
+        } catch (IllegalArgumentException ex) {
+            JsonNode root;
+            try {
+                root = JSON.readTree(body);
+            } catch (JacksonException unreadable) {
+                throw ex;
+            }
+            JsonNode revision = root == null ? null : root.path("revision");
+            if (revision == null || !revision.isIntegralNumber() || !revision.canConvertToLong() || revision.asLong() < 1
+                    || revision.asLong() > MAX_REVISION) {
+                throw ex;
+            }
+            return new PolicyData(revision.asLong(), Optional.empty(), "[]", List.of(), List.of(), List.of(ex.getMessage()));
+        }
     }
 
     /**

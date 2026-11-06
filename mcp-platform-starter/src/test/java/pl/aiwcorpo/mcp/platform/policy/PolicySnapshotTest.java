@@ -38,9 +38,12 @@ class PolicySnapshotTest {
     }
 
     @Test
-    void aMappingThatIsNotAnArrayCannotBeUsedAtAll() {
-        assertThatThrownBy(() -> PolicySnapshot.of(POLICIES, new PolicyData(REVISION, Optional.empty(), "{}", List.of(), List.of())))
-                .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("scope mapping");
+    void aMappingThatCannotBeUsedMakesASnapshotThatRefusesEverything() {
+        PolicySnapshot snapshot = PolicySnapshot.of(POLICIES, new PolicyData(REVISION, Optional.empty(), "{}", List.of(), List.of()));
+
+        assertThat(snapshot.overridesValid()).isFalse();
+        assertThat(snapshot.overrideProblems()).anyMatch(problem -> problem.contains("scope mapping"));
+        assertThat(snapshot.revision()).isEqualTo(REVISION);
     }
 
     @Test

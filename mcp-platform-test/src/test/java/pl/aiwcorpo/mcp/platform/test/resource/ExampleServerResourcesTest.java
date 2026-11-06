@@ -61,7 +61,7 @@ class ExampleServerResourcesTest {
 
     @Test
     void aReadIsAllowedARestrictedResourceIsRefusedAndASearchIsFiltered() {
-        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read")))) {
+        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-example-read", "mcp-jira-read")))) {
             assertThat(text(call(client, "get_issue", Map.of("issueKey", "ABC-1")))).contains("ABC-1");
             assertThat(text(call(client, "get_issue", Map.of("issueKey", "HR-5")))).contains("not_found_or_denied");
             assertThat(text(call(client, "get_issue", Map.of("issueKey", "ABC-123")))).contains("not_found_or_denied");
@@ -72,14 +72,14 @@ class ExampleServerResourcesTest {
 
     @Test
     void aCallerOfAnotherServersGroupsGetsNothing() {
-        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-confluence-read")))) {
-            assertThat(text(call(client, "get_issue", Map.of("issueKey", "ABC-1")))).contains("not_found_or_denied");
+        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read")))) {
+            assertThat(text(call(client, "get_issue", Map.of("issueKey", "ABC-1")))).contains("access_denied");
         }
     }
 
     @Test
     void anUpdateIsAllowedOnlyInsideTheGrantedScope() {
-        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-write", "mcp-jira-proj-ABC")))) {
+        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-example-write", "mcp-jira-write", "mcp-jira-proj-ABC")))) {
             assertThat(text(call(client, "transfer_issue", Map.of("issueKey", "ABC-1", "targetProject", "ABC")))).contains("ABC-1");
             assertThat(text(call(client, "transfer_issue", Map.of("issueKey", "DEF-7", "targetProject", "ABC"))))
                     .contains("not_found_or_denied");

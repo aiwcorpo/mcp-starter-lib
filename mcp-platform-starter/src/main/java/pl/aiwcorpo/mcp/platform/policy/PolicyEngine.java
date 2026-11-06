@@ -4,8 +4,11 @@ import io.micrometer.core.instrument.MeterRegistry;
 import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -36,6 +39,8 @@ import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 public final class PolicyEngine implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(PolicyEngine.class);
+    /** After a request for a revision failed, a request for the same or a newer one waits this long before it is made again. */
+    private static final long NEGATIVE_CACHE_NANOS = TimeUnit.SECONDS.toNanos(3);
 
     private final ServerPolicies policies;
     private final PolicyDataClient client;
@@ -43,21 +48,31 @@ public final class PolicyEngine implements AutoCloseable {
     private final Duration refreshInterval;
     private final Duration retryInterval;
     private final Duration startupTimeout;
+    private final Duration readTimeout;
     private final MeterRegistry meters;
     private final ReentrantLock pulling = new ReentrantLock();
     private volatile PolicySnapshot current;
     private String etag;
     private long rejectedRevision = -1;
     private volatile ScheduledExecutorService scheduler;
+    private final Map<Long, CompletableFuture<Void>> flights = new HashMap<>();
+    private final java.util.concurrent.ExecutorService requests = Executors.newCachedThreadPool(task -> {
+        Thread thread = new Thread(task, "policy-data-refresh");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private volatile long lastFailedNanos;
+    private volatile long lastFailedTarget;
 
     private PolicyEngine(ServerPolicies policies, PolicyDataClient client, URI uri, Duration refreshInterval, Duration retryInterval,
-                         Duration startupTimeout, MeterRegistry meters) {
+                         Duration startupTimeout, Duration readTimeout, MeterRegistry meters) {
         this.policies = policies;
         this.client = client;
         this.uri = uri;
         this.refreshInterval = refreshInterval;
         this.retryInterval = retryInterval;
         this.startupTimeout = startupTimeout;
+        this.readTimeout = readTimeout;
         this.meters = meters;
     }
 
@@ -70,7 +85,7 @@ public final class PolicyEngine implements AutoCloseable {
     public static PolicyEngine create(McpPlatformProperties.PolicyData config, ServerPolicies policies, SSLContext sslContext,
                                       MeterRegistry meters) {
         PolicyEngine engine = new PolicyEngine(policies, new PolicyDataClient(sslContext, config.getConnectTimeout(), config.getReadTimeout()),
-                URI.create(config.getUrl()), config.getRefreshInterval(), config.getRetryInterval(), config.getStartupTimeout(), meters);
+                URI.create(config.getUrl()), config.getRefreshInterval(), config.getRetryInterval(), config.getStartupTimeout(), config.getReadTimeout(), meters);
         engine.start();
         return engine;
     }
@@ -81,7 +96,7 @@ public final class PolicyEngine implements AutoCloseable {
      * @throws IllegalArgumentException when the data cannot be used for the policies
      */
     public static PolicyEngine fixed(ServerPolicies policies, PolicyData data) {
-        PolicyEngine engine = new PolicyEngine(policies, null, null, Duration.ofDays(1), Duration.ofDays(1), Duration.ZERO, null);
+        PolicyEngine engine = new PolicyEngine(policies, null, null, Duration.ofDays(1), Duration.ofDays(1), Duration.ZERO, Duration.ofSeconds(1), null);
         engine.current = PolicySnapshot.of(policies, data);
         return engine;
     }
@@ -241,29 +256,82 @@ public final class PolicyEngine implements AutoCloseable {
     }
 
     /**
+     * The outcome of {@link #gate}: the decision and the one snapshot a call that is let through must decide with, in every step, so a
+     * swap of the data after the gate cannot change what the call is judged by. The snapshot is {@code null} exactly when the decision refuses.
+     */
+    public record Gated(PolicyDataGate.Decision decision, PolicySnapshot snapshot) {
+    }
+
+    /**
      * Whether a call may be evaluated, by {@link PolicyDataGate#decide}: data is held, it approves the {@code policiesHash} of this server's
      * policies, and its overrides validate. When {@code prv} of the token is newer than the data held, the engine asks the gateway before
-     * it decides (the call waits for it, at most {@code read-timeout}) and decides with the answer, or refuses when the answer is not at
-     * least as new. The all-zero {@code prv} of a gateway without data forces nothing.
+     * it decides and decides with the answer, or refuses when the answer is not at least as new. The all-zero {@code prv} of a gateway without
+     * data forces nothing.
+     *
+     * <p>Callers that need the same revision share one request ({@link #refreshTo}), wait for it at most {@code read-timeout}, and a failed
+     * request is not repeated for a few seconds, so a flood of calls with an unreachable {@code prv} costs the gateway one request, not one per
+     * call.
      */
-    public PolicyDataGate.Decision gate(OptionalLong prv) {
+    public Gated gate(OptionalLong prv) {
         PolicySnapshot held = current;
         OptionalLong asked = prv.isPresent() && prv.getAsLong() > 0 ? prv : OptionalLong.empty();
-        PolicyDataGate.Data refreshed = null;
+        PolicySnapshot refreshed = null;
         if (asked.isPresent() && (held == null || asked.getAsLong() > held.revision()) && client != null) {
-            pulling.lock();
-            try {
-                PolicySnapshot now = current;
-                if (now == null || now.revision() < asked.getAsLong()) {
-                    pull();
-                    now = current;
-                }
-                refreshed = now == null ? null : now.gateData();
-            } finally {
-                pulling.unlock();
+            refreshed = refreshTo(asked.getAsLong());
+        }
+        boolean useRefreshed = asked.isPresent() && (held == null || asked.getAsLong() > held.revision());
+        PolicySnapshot used = useRefreshed ? refreshed : held;
+        PolicyDataGate.Decision decision = PolicyDataGate.decide(policies.policiesHash(), held == null ? null : held.gateData(), asked,
+                refreshed == null ? null : refreshed.gateData());
+        return new Gated(decision, decision.allowed() ? used : null);
+    }
+
+    /** Asks the gateway for data at least as new as {@code target} and returns the snapshot then in use (possibly still older, or null). */
+    private PolicySnapshot refreshTo(long target) {
+        PolicySnapshot now = current;
+        if (now != null && now.revision() >= target) {
+            return now;
+        }
+        long failedAt = lastFailedNanos;
+        if (failedAt != 0 && target >= lastFailedTarget && System.nanoTime() - failedAt < NEGATIVE_CACHE_NANOS) {
+            return now;
+        }
+        CompletableFuture<Void> flight;
+        boolean leader = false;
+        synchronized (flights) {
+            flight = flights.get(target);
+            if (flight == null) {
+                flight = new CompletableFuture<>();
+                flights.put(target, flight);
+                leader = true;
             }
         }
-        return PolicyDataGate.decide(policies.policiesHash(), held == null ? null : held.gateData(), asked, refreshed);
+        if (leader) {
+            CompletableFuture<Void> mine = flight;
+            requests.execute(() -> {
+                try {
+                    refresh();
+                } finally {
+                    synchronized (flights) {
+                        flights.remove(target);
+                    }
+                    mine.complete(null);
+                }
+            });
+        }
+        try {
+            flight.get(readTimeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException | java.util.concurrent.ExecutionException ex) {
+            // The caller decides with what is held: too old for this prv, so the gate refuses.
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        }
+        now = current;
+        if (now == null || now.revision() < target) {
+            lastFailedTarget = target;
+            lastFailedNanos = System.nanoTime();
+        }
+        return now;
     }
 
     @Override
@@ -272,5 +340,6 @@ public final class PolicyEngine implements AutoCloseable {
         if (pool != null) {
             pool.shutdownNow();
         }
+        requests.shutdownNow();
     }
 }

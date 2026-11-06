@@ -64,7 +64,20 @@ public class PlatformPolicyAutoConfiguration {
         if (bundleName != null && !bundleName.isBlank()) {
             sslContext = GatewayTls.sslContext(sslBundles.getObject().getBundle(bundleName), config.getTlsName());
         }
+        requireSslContext(sslContext, environment);
         return PolicyEngine.create(config, policies, sslContext, meters.getIfAvailable());
+    }
+
+    /**
+     * Outside the {@code dev} profile the connection to the gateway has the server's own certificate and the internal CA, or the start fails:
+     * never the JVM default trust and no client certificate (the gateway serves the policy data only to a server that proves who it is).
+     */
+    static void requireSslContext(SSLContext sslContext, Environment environment) {
+        if (sslContext == null && !java.util.List.of(environment.getActiveProfiles()).equals(java.util.List.of(PlatformConfigurationGuard.DEV_PROFILE))) {
+            throw new IllegalStateException("aiwcorpo.mcp.platform.policy-data: no SSL context for the connection to the gateway. Outside the 'dev' "
+                    + "profile the policy data is read over mTLS with the server's own certificate: set policy-data.ssl-bundle (or server.ssl.bundle, "
+                    + "with server.ssl.enabled not false) to a Spring SSL bundle that holds the key and certificate of this server and the internal CA");
+        }
     }
 
     @Bean

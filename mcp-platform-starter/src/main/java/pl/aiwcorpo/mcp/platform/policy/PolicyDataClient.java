@@ -61,7 +61,7 @@ public final class PolicyDataClient {
             throw new IOException("policy-data: HTTP " + response.statusCode());
         }
         try {
-            return Optional.of(new Fetched(PolicyData.parse(response.body()), response.headers().firstValue("ETag").orElse(null)));
+            return Optional.of(new Fetched(PolicyData.parseOrRefuse(response.body()), response.headers().firstValue("ETag").orElse(null)));
         } catch (IllegalArgumentException ex) {
             throw new IOException("policy-data: " + ex.getMessage(), ex);
         }
