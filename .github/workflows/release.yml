@@ -2,8 +2,8 @@
 # mcp-platform-test) and attaches a CycloneDX SBOM to the GitHub Release. Runs only on a vX.Y.Z tag (pre-release tags do not
 # match); nothing is published from branches. The first public release is a new tag (3.0.0); the local tags v3.0.0-beta-N are not pushed.
 #
-# Order of releases: the starter depends on pl.aiwcorpo.mcp:mcp-contracts, mcp-cedar-entities, mcp-policy-bundle and
-# mcp-manifest 6.3.2, which Maven resolves from Central. Release mcp-contracts first and publish its deployment in the Central
+# Order of releases: the starter depends on pl.aiwcorpo.mcp:mcp-contracts, mcp-cedar-entities and
+# mcp-manifest 7.0.0, which Maven resolves from Central. Release mcp-contracts first and publish its deployment in the Central
 # Portal; until then this workflow cannot resolve its dependencies.
 #
 # Setup, once (README, "Releasing"):

@@ -25,7 +25,7 @@
 
     <groupId>pl.aiwcorpo.mcp</groupId>
     <artifactId>mcp-platform-starter</artifactId>
-    <version>3.1.0-SNAPSHOT</version>
+    <version>4.0.0</version>
     <name>Aiwcorpo MCP Platform :: Starter (auto-configuration)</name>
     <description>Spring Boot starter for MCP servers behind the MCP platform gateway: internal JWT verification, backend credential, resource policy, audit and safe tool errors.</description>
 
@@ -70,7 +70,7 @@
     <properties>
         <java.version>25</java.version>
         <spring-ai.version>2.0.0</spring-ai.version>
-        <mcp-contracts.version>6.3.2</mcp-contracts.version>
+        <mcp-contracts.version>7.0.0</mcp-contracts.version>
         <!-- Same version Spring Security 7.1.0 (Boot 4.1.0) brings; Boot does not manage it. -->
         <nimbus-jose-jwt.version>10.9</nimbus-jose-jwt.version>
         <json-schema-validator.version>3.0.8</json-schema-validator.version>
@@ -115,20 +115,14 @@
             <artifactId>mcp-contracts</artifactId>
             <version>${mcp-contracts.version}</version>
         </dependency>
-        <!-- Cedar entity builder and result filter shared with the gateway (C7, C9). Brings cedar-java with its native
+        <!-- Cedar entity builder, result filter and fragment validation shared with the gateway (C7, C9). Brings cedar-java with its native
              libraries (glibc or macOS, no musl). -->
         <dependency>
             <groupId>pl.aiwcorpo.mcp</groupId>
             <artifactId>mcp-cedar-entities</artifactId>
             <version>${mcp-contracts.version}</version>
         </dependency>
-        <!-- Verification, rollback protection and atomic swap of policy bundles (C7), the gateway's receiver too. -->
-        <dependency>
-            <groupId>pl.aiwcorpo.mcp</groupId>
-            <artifactId>mcp-policy-bundle</artifactId>
-            <version>${mcp-contracts.version}</version>
-        </dependency>
-        <!-- definitionHash and the semantic rules of the manifest (C6), the same the gateway applies at registration. -->
+        <!-- definitionHash, policiesHash and the semantic rules of the manifest (C6), the same the gateway applies at registration. -->
         <dependency>
             <groupId>pl.aiwcorpo.mcp</groupId>
             <artifactId>mcp-manifest</artifactId>
