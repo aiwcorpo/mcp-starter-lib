@@ -39,4 +39,14 @@ public @interface ToolRisk {
      * operation. A value that contradicts the risk stops the server ({@link ToolAction#resolve}).
      */
     ToolAction action() default ToolAction.AUTO;
+
+    /**
+     * A group a user needs <em>in addition to</em> the one the risk derives ({@code mcp-<system>-read}, {@code -write}, {@code -destructive}),
+     * for a tool that only some users of the system may call: {@code mcp-<system>-<suffix>} with the system of this server and a suffix other
+     * than {@code read}, {@code write} and {@code destructive}, for example {@code mcp-opensearch-ops}. It can only narrow access
+     * ({@code platform-call-additional-group}); it goes to the manifest ({@code additionalGroup}) and into {@code definitionHash}, so a
+     * change needs approval, and the server enforces it on every call as the gateway does. Empty: none. A value that does not fit the
+     * rule stops the server.
+     */
+    String additionalGroup() default "";
 }

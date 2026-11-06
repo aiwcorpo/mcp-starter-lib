@@ -785,7 +785,15 @@ startup.
 
 Allowed types in `type`: those the server declares in `mcp/policies/resource-types.json` (a name of the shape `<Namespace>::<Name>`; an
 undeclared one stops startup with the list of the declared). The parameter is a `String`, an
-integer, or a list or array of such values. The tool's Cedar action is `@ToolRisk(action = ...)`; by default `read` for `READ_ONLY`,
+integer, or a list or array of such values. **A group on top of the risk (`additionalGroup`).** `@ToolRisk(value = RiskLevel.READ_ONLY, additionalGroup = "mcp-opensearch-ops")` makes a tool
+callable only by users who have that group besides the one its risk derives (`mcp-<system>-read`, `-write`, `-destructive`). The value is
+`mcp-<system>-<suffix>` with the system of this server and a suffix other than `read`, `write` and `destructive`; anything else stops the server at
+start (the check of the contract rule `additional-group-valid`). It can only narrow access. It goes into the manifest entry (`additionalGroup`) and
+so into the tool's `definitionHash`, which means a change needs approval, and the server enforces it on every call with the same platform call policy
+as the gateway (`platform-call-additional-group`): a user with only the risk group gets `access_denied`. A hand-written callback declares it
+through `RiskClassifiedTool#additionalGroup()`. An adapter has none.
+
+The tool's Cedar action is `@ToolRisk(action = ...)`; by default `read` for `READ_ONLY`,
 `update` for `UPDATE`, `delete` for `DESTRUCTIVE`, and `ToolAction.ADMIN` is set explicitly. An action that contradicts the risk
 stops startup.
 

@@ -13,6 +13,11 @@ public interface RiskClassifiedTool {
         return ToolAction.AUTO;
     }
 
+    /** The {@code additionalGroup} of {@link ToolRisk}; empty for none. */
+    default String additionalGroup() {
+        return "";
+    }
+
     /** The arguments that carry resource identifiers (what {@code @ResourceRef} declares on a method). */
     default java.util.List<pl.aiwcorpo.mcp.platform.resource.ResourceBinding> resourceRefs() {
         return java.util.List.of();

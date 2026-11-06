@@ -110,6 +110,12 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
                 resolvers.forRef(binding.type(), binding.resolver(), "@Tool " + tool + "(" + binding.argument() + ")");
             }
             checkShape(tool, registry.resultShapeOf(tool));
+            try {
+                descriptor(tool);
+            } catch (RuntimeException ex) {
+                // The additionalGroup must name the system of this server: the contract rule, checked at start and not at the first call.
+                throw new IllegalStateException("@Tool " + tool + ": " + ex.getMessage(), ex);
+            }
         }
     }
 
@@ -650,7 +656,8 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         String action = registry.actionOf(tool).orElseThrow().wireName();
         List<pl.aiwcorpo.mcp.cedar.entities.ResourceRef> refs = registry.resourceRefsOf(tool).stream()
                 .map(binding -> new pl.aiwcorpo.mcp.cedar.entities.ResourceRef(binding.argument(), binding.type())).toList();
-        return new ToolDescriptor(serverId, system, tool, risk.name(), action, refs);
+        ToolDescriptor descriptor = new ToolDescriptor(serverId, system, tool, risk.name(), action, refs);
+        return registry.additionalGroupOf(tool).map(descriptor::withAdditionalGroup).orElse(descriptor);
     }
 
     /** The caller of the Cedar request, from the verified claims of the internal JWT (C2). */

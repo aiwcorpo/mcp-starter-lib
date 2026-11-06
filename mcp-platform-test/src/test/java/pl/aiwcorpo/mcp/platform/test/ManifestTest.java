@@ -170,4 +170,20 @@ class ManifestTest {
         }
         throw new AssertionError("no tool " + name);
     }
+
+    @Test
+    void anAdditionalGroupIsInTheEntryAndInItsHashAndOnlyThere() throws Exception {
+        JsonNode manifest = manifest();
+        JsonNode ops = tool(manifest, "ops_report");
+
+        assertThat(ops.get("additionalGroup").asString()).isEqualTo("mcp-jira-ops");
+        assertThat(tool(manifest, "get_issue").has("additionalGroup")).isFalse();
+        assertThat(pl.aiwcorpo.mcp.manifest.DefinitionHash.ofManifestTool(manifest.toString(), "ops_report"))
+                .isEqualTo(ops.get("definitionHash").asString());
+        tools.jackson.databind.node.ObjectNode without = ((tools.jackson.databind.node.ObjectNode) ops.deepCopy());
+        without.remove("additionalGroup");
+        assertThat(pl.aiwcorpo.mcp.manifest.DefinitionHash.compute(ops.get("definition").toString(), without.toString(), "jira",
+                manifest.get("credential").toString())).as("the group is part of definitionHash")
+                .isNotEqualTo(ops.get("definitionHash").asString());
+    }
 }

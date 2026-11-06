@@ -124,6 +124,38 @@ class ToolRiskRegistryTest {
         }
     }
 
+    static class OpsOnly {
+        @Tool(name = "ops_report", description = "d")
+        @ToolRisk(value = RiskLevel.READ_ONLY, additionalGroup = "mcp-jira-ops")
+        @ToolTitle("Operations report")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
+        public String report() {
+            return "";
+        }
+    }
+
+    static class BadAdditionalGroup {
+        @Tool(name = "ops_report", description = "d")
+        @ToolRisk(value = RiskLevel.READ_ONLY, additionalGroup = "mcp-jira-write")
+        @ToolTitle("Operations report")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
+        public String report() {
+            return "";
+        }
+    }
+
+    @Test
+    void anAdditionalGroupIsRecordedAndOneThatIsARiskGroupOrMalformedStopsTheServer() {
+        registerAll(new OpsOnly());
+        assertThat(registry.additionalGroupOf("ops_report")).contains("mcp-jira-ops");
+        assertThat(new ToolRiskRegistry(ToolRiskRegistry.Unclassified.FAIL).additionalGroupOf("nothing")).isEmpty();
+
+        ToolRiskRegistry fresh = new ToolRiskRegistry(ToolRiskRegistry.Unclassified.FAIL);
+        assertThatThrownBy(() -> fresh.register(SchemaLimitedToolCallbacks.of(new BadAdditionalGroup()).getToolCallbacks()[0]))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("additionalGroup 'mcp-jira-write'");
+    }
+
     private void registerAll(Object tools) {
         for (ToolCallback callback : SchemaLimitedToolCallbacks.of(tools).getToolCallbacks()) {
             registry.register(callback);

@@ -363,4 +363,20 @@ class ResourcePolicyTest {
             assertThat(text(result)).contains("invalid_argument").contains("Repeat the query without a cursor");
         }
     }
+
+    @Test
+    void aToolWithAnAdditionalGroupNeedsItBesidesTheGroupOfItsRisk() {
+        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read")))) {
+            McpSchema.CallToolResult result = call(client, "ops_report", Map.of());
+
+            assertThat(result.isError()).isTrue();
+            assertThat(text(result)).contains("\"error\":\"access_denied\"");
+        }
+        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-ops")))) {
+            assertThat(text(call(client, "ops_report", Map.of()))).contains("access_denied");
+        }
+        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read", "mcp-jira-ops")))) {
+            assertThat(text(call(client, "ops_report", Map.of()))).contains("report");
+        }
+    }
 }

@@ -131,6 +131,7 @@ public final class ManifestGenerator {
         entry.put("name", name);
         entry.put("risk", risk.name());
         entry.put("action", registry.actionOf(name).orElseThrow().wireName());
+        registry.additionalGroupOf(name).ifPresent(group -> entry.put("additionalGroup", group));
         ArrayNode refs = entry.putArray("resourceRefs");
         for (ResourceBinding binding : registry.resourceRefsOf(name)) {
             ObjectNode ref = refs.addObject();

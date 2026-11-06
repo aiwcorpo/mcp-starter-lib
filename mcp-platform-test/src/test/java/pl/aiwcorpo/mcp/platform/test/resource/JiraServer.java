@@ -76,6 +76,24 @@ public class JiraServer {
         return SchemaLimitedToolCallbacks.of(new Tools(policy, codec));
     }
 
+    /** A tool for the ops team: its additionalGroup names the system jira, so only the server mcp-jira may have it. */
+    @Bean
+    @org.springframework.boot.autoconfigure.condition.ConditionalOnProperty(name = "aiwcorpo.mcp.platform.server-id", havingValue = "mcp-jira")
+    ToolCallbackProvider opsTools() {
+        return SchemaLimitedToolCallbacks.of(new OpsTools());
+    }
+
+    public static class OpsTools {
+
+        @Tool(name = "ops_report", description = "Returns the operations report, for the ops team only.")
+        @ToolRisk(value = RiskLevel.READ_ONLY, additionalGroup = "mcp-jira-ops")
+        @ToolTitle("Operations report")
+        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
+        public String opsReport() {
+            return "report";
+        }
+    }
+
     /** Resolves an issue key by asking Jira, as a real adapter would with the caller's credential. */
     public static final class JiraIssueResolver implements ResourceResolver<JiraIssue> {
 

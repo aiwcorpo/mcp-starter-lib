@@ -64,7 +64,7 @@ public class ToolRiskRegistry {
     private final Unclassified unclassified;
     private final Map<String, Registered> registered = new ConcurrentHashMap<>();
 
-    private record Registered(ToolCallback tool, RiskLevel risk, ToolAction action, String title,
+    private record Registered(ToolCallback tool, RiskLevel risk, ToolAction action, Optional<String> additionalGroup, String title,
                               List<ResourceBinding> resourceRefs, ResourceRefs.ResultShape resultShape,
                               Optional<ObjectNode> outputSchema) {
     }
@@ -88,6 +88,7 @@ public class ToolRiskRegistry {
         }
         RiskLevel risk = classify(callback);
         ToolAction action = actionOf(callback, risk);
+        Optional<String> additionalGroup = additionalGroupOf(callback);
         String title = titleOf(callback);
         noConfirmationCode(callback);
         Optional<ObjectNode> outputSchema = ToolMethods.methodOf(callback).flatMap(ToolOutputSchemas::forMethod);
@@ -105,7 +106,7 @@ public class ToolRiskRegistry {
                 : method.map(ResourceRefs::arguments).orElse(List.of());
         ResourceRefs.ResultShape shape = method.map(ResourceRefs::result).orElse(new ResourceRefs.None());
         Registered previous = registered.putIfAbsent(name,
-                new Registered(callback, risk, action, title, refs, shape, outputSchema));
+                new Registered(callback, risk, action, additionalGroup, title, refs, shape, outputSchema));
         if (previous != null && previous.tool() != callback) {
             throw new IllegalStateException("Two tools are named '" + name + "'. Tool names must be unique.");
         }
@@ -142,6 +143,12 @@ public class ToolRiskRegistry {
     public Optional<ToolAction> actionOf(String toolName) {
         Registered entry = registered.get(toolName);
         return entry == null ? Optional.empty() : Optional.of(entry.action());
+    }
+
+    /** The {@code additionalGroup} of a registered tool (C6), empty for none. */
+    public Optional<String> additionalGroupOf(String toolName) {
+        Registered entry = registered.get(toolName);
+        return entry == null ? Optional.empty() : entry.additionalGroup();
     }
 
     /** The title of a registered tool (C6 {@code definition.title}). */
@@ -208,6 +215,22 @@ public class ToolRiskRegistry {
                     + (risk == RiskLevel.READ_ONLY ? "" : " or admin") + " on its resources.");
         }
     }
+
+    private static Optional<String> additionalGroupOf(ToolCallback callback) {
+        String group = callback instanceof RiskClassifiedTool classified ? classified.additionalGroup()
+                : toolRisk(callback).map(ToolRisk::additionalGroup).orElse("");
+        if (group == null || group.isEmpty()) {
+            return Optional.empty();
+        }
+        if (!ADDITIONAL_GROUP.matcher(group).matches() || group.matches(".*-(read|write|destructive)$")) {
+            throw new IllegalStateException("Tool '" + callback.getToolDefinition().name() + "': additionalGroup '" + group
+                    + "' must be mcp-<system>-<suffix> with a suffix other than read, write and destructive");
+        }
+        return Optional.of(group);
+    }
+
+    private static final java.util.regex.Pattern ADDITIONAL_GROUP =
+            java.util.regex.Pattern.compile("^mcp-[a-z][a-z0-9]{1,30}-[a-z][a-z0-9-]{0,30}$");
 
     private static String titleOf(ToolCallback callback) {
         String name = callback.getToolDefinition().name();
