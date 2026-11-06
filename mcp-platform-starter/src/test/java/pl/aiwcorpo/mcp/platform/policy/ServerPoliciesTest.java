@@ -96,4 +96,38 @@ class ServerPoliciesTest {
         assertThatThrownBy(() -> ServerPolicies.load(both)).isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("more than one place");
     }
+
+    @Test
+    void policiesOfTheApplicationsOwnCodeAreAccepted() {
+        ServerPolicies policies = ServerPolicies.load(getClass().getClassLoader(), java.util.List.of(ServerPoliciesTest.class));
+
+        assertThat(policies.namespace()).isEqualTo("Jira");
+        assertThat(ServerPolicies.loadFromDirectory(getClass().getClassLoader()).namespace()).isEqualTo("Jira");
+    }
+
+    @Test
+    void policiesOnlyInALibraryJarAreRefusedWhateverTheApplicationIs(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) throws Exception {
+        java.nio.file.Path jar = dir.resolve("mcp-tools-1.0.0.jar");
+        try (java.util.jar.JarOutputStream out = new java.util.jar.JarOutputStream(java.nio.file.Files.newOutputStream(jar))) {
+            for (String[] file : new String[][] {{"schema.cedarschema", SCHEMA}, {"resource-types.json", TYPES}, {"read.cedar", READ}}) {
+                out.putNextEntry(new java.util.jar.JarEntry("mcp/policies/" + file[0]));
+                out.write(file[1].getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                out.closeEntry();
+            }
+        }
+        ClassLoader loader = new java.net.URLClassLoader(new java.net.URL[] {jar.toUri().toURL()}, ServerPoliciesTest.class.getClassLoader()) {
+            @Override
+            public java.util.Enumeration<java.net.URL> getResources(String name) throws java.io.IOException {
+                // Only the library holds mcp/policies in this loader; the classes of the test stay visible.
+                return name.startsWith("mcp/policies") ? findResources(name) : super.getResources(name);
+            }
+        };
+
+        assertThatThrownBy(() -> ServerPolicies.load(loader, java.util.List.of(ServerPoliciesTest.class)))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("not from the application's own code");
+        assertThatThrownBy(() -> ServerPolicies.loadFromDirectory(loader)).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("not the module under test");
+        assertThatThrownBy(() -> ServerPolicies.load(loader, java.util.List.of())).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("no application class");
+    }
 }

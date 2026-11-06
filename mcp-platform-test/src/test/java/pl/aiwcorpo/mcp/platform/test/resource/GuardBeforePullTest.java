@@ -26,6 +26,11 @@ import pl.aiwcorpo.mcp.platform.test.TestGateway;
  */
 class GuardBeforePullTest {
 
+    /** The application of the context: the policies must come from the classpath root of its code (here the test classes). */
+    @org.springframework.boot.SpringBootConfiguration
+    static class Application {
+    }
+
     private TestGateway gateway;
     private ApplicationContextRunner runner;
 
@@ -36,6 +41,7 @@ class GuardBeforePullTest {
         runner = new ApplicationContextRunner()
                 .withConfiguration(AutoConfigurations.of(PlatformSecurityAutoConfiguration.class,
                         PlatformObservabilityAutoConfiguration.class, PlatformPolicyAutoConfiguration.class))
+                .withUserConfiguration(Application.class)
                 .withInitializer(context -> TestPropertyValues.of(properties).applyTo(context))
                 .withPropertyValues("server.address=127.0.0.1", "server.ssl.client-auth=need");
     }

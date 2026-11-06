@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -67,11 +68,54 @@ public final class ServerPolicies {
     }
 
     /**
-     * The policies of the server on the classpath of {@code loader}.
+     * The policies of the server on the classpath of {@code loader}, wherever on it they are, as long as they come from one place. For a
+     * test or for reading declarations; the server itself decides only with {@link #load(ClassLoader, Collection)}.
      *
      * @throws IllegalStateException with the reason when a file is missing, malformed or fails the validation of the fragment
      */
     public static ServerPolicies load(ClassLoader loader) {
+        return load(loader, roots -> null);
+    }
+
+    /**
+     * The policies of the server, which must come from the application's own code: the same classpath root (the module output directory in
+     * a test, {@code BOOT-INF/classes} of a fat jar) as the application class, the {@code @SpringBootApplication} class. A dependency
+     * that ships {@code mcp/policies} files, a module jar of the application included, is refused: its policies would be the policies of
+     * the server without being in its repository.
+     *
+     * @param application the application classes whose classpath root may hold the policies
+     * @throws IllegalStateException when the files are missing, come from anywhere else, or are not valid
+     */
+    public static ServerPolicies load(ClassLoader loader, Collection<Class<?>> application) {
+        Set<String> own = new TreeSet<>();
+        for (Class<?> type : application) {
+            Class<?> user = org.springframework.util.ClassUtils.getUserClass(type);
+            String resource = user.getName().replace('.', '/') + ".class";
+            java.net.URL url = user.getClassLoader() == null ? null : user.getClassLoader().getResource(resource);
+            if (url != null) {
+                own.add(stripSuffix(url.toString(), resource));
+            }
+        }
+        if (own.isEmpty()) {
+            throw new IllegalStateException("cannot tell which classpath root is the application's own code (no application class given): the "
+                    + "policies of the server must come from it");
+        }
+        return load(loader, roots -> roots.stream().allMatch(own::contains) ? null
+                : "mcp/policies files come from " + roots + ", not from the application's own code " + own + ": only src/main/resources/"
+                + DIRECTORY + "/ of the application may hold them; remove the other, or the dependency that ships them");
+    }
+
+    /**
+     * As {@link #load(ClassLoader, Collection)} for code that has no application class, such as a policy test of a server: the files must come
+     * from a directory of the classpath (the output of the module under test), never from a jar.
+     */
+    public static ServerPolicies loadFromDirectory(ClassLoader loader) {
+        return load(loader, roots -> roots.stream().allMatch(root -> root.startsWith("file:")) ? null
+                : "mcp/policies files come from " + roots + ", which is not the module under test (a directory such as target/classes): only "
+                + "src/main/resources/" + DIRECTORY + "/ of the project may hold them");
+    }
+
+    private static ServerPolicies load(ClassLoader loader, java.util.function.Function<Set<String>, String> origin) {
         PathMatchingResourcePatternResolver resolver = new PathMatchingResourcePatternResolver(loader);
         Map<String, String> policyFiles = new TreeMap<>();
         Set<String> roots = new TreeSet<>();
@@ -89,12 +133,21 @@ public final class ServerPolicies {
             throw new UncheckedIOException("cannot list " + DIRECTORY, ex);
         }
         if (roots.size() > 1) {
-            // The policies are the application's own. A library on the classpath that ships files under mcp/policies would otherwise
-            // add or replace policies of the server without anyone having written them there.
+            // A library on the classpath that ships files under mcp/policies would otherwise add or replace policies of the server without
+            // anyone having written them there.
             throw new IllegalStateException("mcp/policies files come from more than one place on the classpath " + roots + ": only the "
                     + "application's own code may hold them (src/main/resources/" + DIRECTORY + "/); remove the other, or the dependency that ships it");
         }
+        String problem = origin.apply(roots);
+        if (problem != null) {
+            throw new IllegalStateException(problem);
+        }
         return of(schema, policyFiles, types);
+    }
+
+    private static String stripSuffix(String url, String suffix) {
+        int at = url.lastIndexOf(suffix);
+        return at < 0 ? url : url.substring(0, at);
     }
 
     /**

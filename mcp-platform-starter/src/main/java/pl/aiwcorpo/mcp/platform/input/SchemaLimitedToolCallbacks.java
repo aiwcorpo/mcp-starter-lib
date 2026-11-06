@@ -279,6 +279,8 @@ public final class SchemaLimitedToolCallbacks {
     private static ResourceTypes declaredTypes() {
         ResourceTypes types = declaredTypes;
         if (types == null) {
+            // Only the patterns for the schema of the tools: the server decides with the declarations of the checked ServerPolicies bean, whose
+            // origin is the application's own code.
             types = ServerPolicies.load(SchemaLimitedToolCallbacks.class.getClassLoader()).resourceTypes();
             declaredTypes = types;
         }

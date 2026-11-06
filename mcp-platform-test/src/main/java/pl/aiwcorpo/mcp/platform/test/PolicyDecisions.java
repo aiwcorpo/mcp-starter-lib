@@ -59,12 +59,18 @@ public final class PolicyDecisions {
     }
 
     /**
-     * The policies in {@code src/main/resources/mcp/policies/} of the project under test.
+     * The policies in {@code src/main/resources/mcp/policies/} of the project under test: they must be files of a directory of the classpath
+     * (its {@code target/classes}), not of a dependency jar.
      *
      * @throws IllegalStateException with every reason when they are missing or not valid: the same message the server's start gives
      */
     public static PolicyDecisions fromResources() {
-        return new PolicyDecisions(ServerPolicies.load(PolicyDecisions.class.getClassLoader()));
+        return new PolicyDecisions(ServerPolicies.loadFromDirectory(PolicyDecisions.class.getClassLoader()));
+    }
+
+    /** The policies of the application whose code contains {@code application}: the check the server makes at start. */
+    public static PolicyDecisions fromResources(Class<?> application) {
+        return new PolicyDecisions(ServerPolicies.load(PolicyDecisions.class.getClassLoader(), java.util.List.of(application)));
     }
 
     /** The same for policies given as text, for a test of a fragment under construction. */

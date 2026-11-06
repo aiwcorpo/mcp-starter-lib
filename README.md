@@ -584,8 +584,9 @@ grantable in the scope mapping, `earlyScopeCheck` lets the gateway check an argu
 for types whose scope is the exact id), and `classification` names the attribute the builder normalizes (`restricted` is the canonical
 value that policies compare with) and whether it is required.
 
-The files are read only from the application's own code (one place on the classpath): if another jar ships files under `mcp/policies/`, the
-server does not start. The starter loads and validates them when the server starts, with `PolicyFragments.validateFragment` of the contracts, the check
+The files must come from the application's own code: the classpath root of its `@SpringBootApplication` class (`BOOT-INF/classes` of a fat
+jar, `target/classes` in a test). Files in any other place, a module jar of the application or a library included, stop the start, and so does
+a second place that holds any. `PolicyDecisions.fromResources()` requires a directory of the classpath (the module under test), not a jar. The starter loads and validates them when the server starts, with `PolicyFragments.validateFragment` of the contracts, the check
 the gateway repeats at registration: the fragment composes with the base schema and validates in strict mode, declares nothing outside
 its namespace, every type has `scopes`, the policies validate against the composed schema (a `forbid` that can never match is an
 error), and the entity types are exactly the declared types with the declared attributes and parents. A server whose files fail does not

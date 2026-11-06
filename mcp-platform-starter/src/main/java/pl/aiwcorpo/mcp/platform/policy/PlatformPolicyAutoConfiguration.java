@@ -2,6 +2,7 @@ package pl.aiwcorpo.mcp.platform.policy;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import java.security.GeneralSecurityException;
+import java.util.List;
 import javax.net.ssl.SSLContext;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
@@ -33,16 +34,23 @@ import pl.aiwcorpo.mcp.platform.resource.ResourceResolvers;
 public class PlatformPolicyAutoConfiguration {
 
     /**
-     * The policies of the jar, validated. Eager: a server whose policies the gateway would reject must not finish starting. The
+     * The policies of the application's own code (the classpath root of its {@code @SpringBootApplication} class), validated. Eager: a server whose policies the gateway would reject must not finish starting. The
      * configuration guard is created by the first line of the method, before anything is read. {@code getIfAvailable} and not
      * {@code getObject}: the guard is missing only in a Spring test context that leaves the platform out on purpose;
      * {@code PlatformPresenceCheck} refuses its absence everywhere else.
      */
     @Bean
     @Lazy(false)
-    ServerPolicies serverPolicies(ObjectProvider<PlatformConfigurationGuard> guard) {
+    ServerPolicies serverPolicies(ObjectProvider<PlatformConfigurationGuard> guard, org.springframework.beans.factory.ListableBeanFactory beans) {
         guard.getIfAvailable();
-        return ServerPolicies.load(Thread.currentThread().getContextClassLoader());
+        List<Class<?>> application = new java.util.ArrayList<>();
+        for (String name : beans.getBeanNamesForAnnotation(org.springframework.boot.SpringBootConfiguration.class)) {
+            Class<?> type = beans.getType(name);
+            if (type != null) {
+                application.add(type);
+            }
+        }
+        return ServerPolicies.load(Thread.currentThread().getContextClassLoader(), application);
     }
 
     /**
