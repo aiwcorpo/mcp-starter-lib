@@ -28,6 +28,8 @@ Kontrakty 7.0.0 usuwają `mcp-policy-bundle`: starter nie zależy już od paczek
   Dozwoleni klienci (`azp`) sprawdzani w kodzie przed Cedar. Serwer powtarza decyzję gatewaya o `call` (polityki platformy z kontraktów, `Tool` z własnego manifestu) na tej samej migawce, co reszta wywołania (obrona w głąb).
 - `@ToolRisk(additionalGroup = "mcp-<system>-<sufiks>")` (CC-242): grupa wymagana oprócz grupy wynikającej z ryzyka; trafia do manifestu i do `definitionHash`,
   serwer egzekwuje ją przy każdym wywołaniu (`ToolDescriptor.withAdditionalGroup`), niepoprawna wartość zatrzymuje start. `RiskClassifiedTool#additionalGroup()` dla ręcznych wywołań.
+- Naprawa: `PlatformPresenceCheck` (i `DevProfileGuardAssertions`) w trybie `receiver-mode: adapter` nie wymaga `policyEngine` i `resourcePolicy`, których adapter nie definiuje
+  (`PlatformPresenceCheck.requiredBeans(environment)`); wcześniej sidecar adaptera nie startował. Test `AdapterModeStartTest` uruchamia prawdziwą aplikację w trybie adaptera.
 - Zakresy, których nie da się użyć (typ spoza deklaracji, część lokalna niezgodna z `scopePattern`), są pomijane i zgłaszane (`event=policy_data_scope_ignored`).
 - Zmienione: `CallerContext.policyRevision()` jest `long` (claim `prv` to licznik), `AuditLogger.policyDenied` przyjmuje `Long`.
 - Usunięte: `MCP_POLICY_*` i całe `aiwcorpo.mcp.platform.policy.*` (klucze, `state-dir`, `allow-test-keys`, nadpisania paczkami); pozostawione w konfiguracji

@@ -109,7 +109,7 @@ public final class DevProfileGuardAssertions {
      */
     public static void assertServerIsGuarded(ApplicationContext context) {
         List<String> missing = new ArrayList<>();
-        for (String name : PlatformPresenceCheck.REQUIRED_BEANS) {
+        for (String name : PlatformPresenceCheck.requiredBeans(context.getEnvironment())) {
             if (!context.containsBean(name)) {
                 missing.add(name);
                 continue;

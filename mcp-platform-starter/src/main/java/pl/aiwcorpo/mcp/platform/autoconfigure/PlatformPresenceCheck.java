@@ -4,9 +4,11 @@ import java.util.List;
 import org.springframework.beans.BeansException;
 import org.springframework.beans.factory.config.BeanFactoryPostProcessor;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
+import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.context.ApplicationContextInitializer;
 import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.env.Environment;
+import pl.aiwcorpo.mcp.platform.auth.ReceiverMode;
 import pl.aiwcorpo.mcp.platform.observability.ForeignToolPolicyCheck;
 import pl.aiwcorpo.mcp.platform.server.ForeignPrimaryCustomizerCheck;
 
@@ -32,6 +34,18 @@ public class PlatformPresenceCheck implements ApplicationContextInitializer<Conf
             ForeignToolPolicyCheck.AUDIT_POST_PROCESSOR_BEAN, ForeignToolPolicyCheck.POLICY_ENGINE_BEAN,
             ForeignToolPolicyCheck.RESOURCE_POLICY_BEAN, ForeignPrimaryCustomizerCheck.STARTER_BEAN);
 
+    /**
+     * The beans a server in this environment must have: all of {@link #REQUIRED_BEANS}, except that an adapter ({@code receiver-mode:
+     * adapter}) has no policies of the platform, so the auto-configuration that defines the policy engine and the resource checks is not
+     * active and they are not required.
+     */
+    public static List<String> requiredBeans(Environment environment) {
+        boolean adapter = Binder.get(environment).bind("aiwcorpo.mcp.platform.internal-jwt.receiver-mode", ReceiverMode.class)
+                .map(mode -> mode == ReceiverMode.ADAPTER).orElse(false);
+        return adapter ? REQUIRED_BEANS.stream().filter(name -> !ForeignToolPolicyCheck.POLICY_ENGINE_BEAN.equals(name)
+                && !ForeignToolPolicyCheck.RESOURCE_POLICY_BEAN.equals(name)).toList() : REQUIRED_BEANS;
+    }
+
     @Override
     public void initialize(ConfigurableApplicationContext context) {
         context.addBeanFactoryPostProcessor(new Check(context.getEnvironment()));
@@ -44,7 +58,7 @@ public class PlatformPresenceCheck implements ApplicationContextInitializer<Conf
             if (DevProfileEnvironment.inSpringTestContext()) {
                 return;
             }
-            List<String> missing = REQUIRED_BEANS.stream().filter(name -> !beanFactory.containsBeanDefinition(name)).toList();
+            List<String> missing = requiredBeans(environment).stream().filter(name -> !beanFactory.containsBeanDefinition(name)).toList();
             if (!missing.isEmpty()) {
                 throw new IllegalStateException("The platform's beans " + missing + " are not defined: its "
                         + "auto-configurations are excluded (spring.autoconfigure.exclude or exclude on "
