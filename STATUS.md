@@ -1,5 +1,13 @@
 # STATUS - mcp-starter-lib (ws-02)
 
+## 4.0.0: serwery dynamiczne (2026-11-06)
+
+Wersja 4.0.0, kontrakty 7.0.0 (CC-229 ... CC-237). Polityki serwera z jara (`mcp/policies/`), dane polityki z `GET /internal/v1/policy-data` po mTLS,
+bramka `PolicyDataGate` (zatwierdzony `policiesHash`, rewizja jako licznik, nadpisania walidowane), wygenerowane polityki platformy, haki resolverów zamiast
+`GrantProbe`, `PolicyDecisions` i `PolicyDataEndpoint` w `mcp-platform-test`. `./mvnw -B verify`: starter 855 testów, mcp-platform-test 169. Opis i migracja: `CHANGELOG.md`.
+Lokalne, niewypchnięte: wydanie i tag czekają na zgodę właściciela. Nie sprawdzone na prawdziwym gatewayu (jeszcze go nie ma w wersji 2.0.0): mTLS z `tls-name`
+sprawdzony tylko testem nazwy w certyfikacie (`GatewayTlsTest`), nie połączeniem.
+
 ## 3.0.0: publikacja na Maven Central (przygotowanie, 2026-11-04)
 
 Wersja 3.0.0 (z 3.0.0-beta-15-SNAPSHOT), zależność od kontraktów 6.3.2. Metadane POM i profil `release` (sources, javadoc, GPG z `MAVEN_GPG_PASSPHRASE`, `central-publishing-maven-plugin` 0.10.0, `autoPublish=false`); `./mvnw -Prelease -Dgpg.skip verify` przechodzi, javadoc bez błędów. `release.yml`: `publish` bez narzędzi budowania, podpis i wysyłka do Portalu (`USER_MANAGED`); `ci.yml` bez sekretów `MCP_MAVEN_REPOSITORY_*` i bez środowiska `ci-main`; akcje z komentarzem wersji przy SHA. Niesprawdzone bez konta: wysyłka do Portalu i walidacja metadanych bez e-maila programisty. Wydanie czeka na kontrakty 6.3.2 na Central i na kroki człowieka z README ("Releasing"). Tag `v3.0.0` jeszcze nie istnieje. Poprawki workflow po przeglądzie (2026-11-04): job `publish-maven` pomija wysyłkę, gdy wersja jest już na Central; weryfikacja podpisów i odcisku klucza (`vars.GPG_FINGERPRINT`); treść błędu Portalu w logu; błąd, gdy wdrożenie nie osiągnie VALIDATED/PUBLISHING/PUBLISHED; filtr tagu tylko `vX.Y.Z`; `sbom` bez `.ci/settings.xml`; `setup-java` 4.9.1 jak w mcp-contracts; `github-release` pomija istniejące wydanie.
