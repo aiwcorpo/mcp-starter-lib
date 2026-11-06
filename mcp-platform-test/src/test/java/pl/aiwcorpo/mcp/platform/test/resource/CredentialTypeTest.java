@@ -3,92 +3,90 @@ package pl.aiwcorpo.mcp.platform.test.resource;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
+import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import pl.aiwcorpo.mcp.cedar.entities.ResolvedResource;
 import pl.aiwcorpo.mcp.platform.auth.CallerContext;
-import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 import pl.aiwcorpo.mcp.platform.error.SanitizedToolException;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
+import pl.aiwcorpo.mcp.platform.policy.PolicyData;
 import pl.aiwcorpo.mcp.platform.policy.PolicyEngine;
 import pl.aiwcorpo.mcp.platform.resource.ResourceContext;
 import pl.aiwcorpo.mcp.platform.resource.ResourcePolicy;
+import pl.aiwcorpo.mcp.platform.resource.ResourceResolver;
 import pl.aiwcorpo.mcp.platform.resource.ResourceResolvers;
-import pl.aiwcorpo.mcp.platform.test.TestGateway;
 
 /**
- * {@code context.credentialType} (CC-136): every policy request carries the type from the server's configuration, so a rule that
- * depends on it applies, and a server without the type has no policy at all.
+ * {@code context.credentialType} (CC-136): every policy request carries the type from the server's configuration, so a rule that depends on
+ * it applies, and a server without the type has no policy at all. The rule here is the one of the Notes fixture of the contracts: a
+ * folder outside the caller's scopes is forbidden unless the credential is the user's own.
  */
 class CredentialTypeTest {
 
-    private static final String FORBID_USER_SECRET = """
-            @id("no-user-secret-calls")
-            forbid (principal, action == Action::"call", resource is Tool)
-            when { context has credentialType && context.credentialType == "user-secret" };
-            """;
+    private static final PolicyEngine ENGINE = PolicyEngine.fixed(Fixtures.notes(), PolicyData.of(1,
+            java.util.Optional.of(Fixtures.notes().policiesHash()), Map.of("mcp-notes-folder-team", List.of("Notes::Folder/team")), List.of("claude-code"), List.of()));
 
-    private static TestGateway gateway;
-    private static PolicyEngine engine;
+    private static final ResourceResolver<ResolvedResource> FOLDERS = new ResourceResolver<>() {
+        @Override
+        public String resourceType() {
+            return "Notes::Folder";
+        }
 
-    @BeforeAll
-    static void start() throws Exception {
-        gateway = TestGateway.start("mcp-jira");
-        gateway.main().publishGenerated("20261026130000-0e0e0e0", "mcp-jira", Map.of("no-user-secret.cedar", FORBID_USER_SECRET));
-        McpPlatformProperties props = new McpPlatformProperties();
-        Map<String, String> properties = gateway.serverProperties();
-        McpPlatformProperties.Policy policy = props.getPolicy();
-        policy.getMain().setUrl(properties.get("aiwcorpo.mcp.platform.policy.main.url"));
-        policy.getMain().setKeyId("test-policy-bundle");
-        policy.getMain().setPublicKey(properties.get("aiwcorpo.mcp.platform.policy.main.public-key"));
-        policy.setAllowTestKeys(true);
-        policy.setStartupTimeout(Duration.ofSeconds(5));
-        engine = PolicyEngine.create(policy, null, null);
-    }
+        @Override
+        public Optional<ResolvedResource> fetch(String id) {
+            return Optional.of(ResolvedResource.of("Notes::Folder", id, Map.of("path", id)).withScopes(
+                    pl.aiwcorpo.mcp.cedar.entities.Scopes.pathPrefixes(id).stream().map(p -> "Notes::Folder/" + p).toList()));
+        }
 
-    @AfterAll
-    static void stop() {
-        engine.close();
-        gateway.close();
-    }
+        @Override
+        public ResolvedResource describe(ResolvedResource fetched) {
+            return fetched;
+        }
+    };
 
-    private static ResourcePolicy policyWith(java.util.List<String> credentialTypes) {
+    private static ResourcePolicy policyWith(List<String> credentialTypes) {
         ToolRiskRegistry registry = new ToolRiskRegistry(ToolRiskRegistry.Unclassified.FAIL);
-        registry.register(new ReadThingTool());
-        return new ResourcePolicy(engine, new ResourceResolvers(List.of()), registry, new AuditLogger("test.credential.type", "mcp-jira"),
-                "mcp-jira", "jira", credentialTypes, 200);
+        registry.register(new RefTool("get_folder", "folderPath", "Notes::Folder"));
+        return new ResourcePolicy(ENGINE, new ResourceResolvers(List.of(FOLDERS)), registry,
+                new AuditLogger("test.credential.type", "mcp-notes"), "mcp-notes", "notes", credentialTypes, 200);
     }
 
-    private static ResourceContext open() {
-        CallerContext claims = new CallerContext("6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "jkowalski", List.of("mcp-jira-read"),
-                "claude-code", "read_thing", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", "00000000000000-0000000", null);
-        return ResourceContext.open(claims, "read_thing", Map.of());
+    private static ResourceContext open(String folder) {
+        CallerContext claims = new CallerContext("6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "jkowalski",
+                List.of("mcp-notes-read", "mcp-notes-folder-team"), "claude-code", "get_folder",
+                "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", 0L, null);
+        return ResourceContext.open(claims, "get_folder", Map.of("folderPath", folder));
+    }
+
+    private static String code(Runnable call) {
+        return assertThatThrownBy(call::run).isInstanceOf(SanitizedToolException.class).actual() instanceof SanitizedToolException e
+                ? e.getCode() : null;
     }
 
     @Test
     void aRuleOnTheCredentialTypeAppliesToTheTypeOfTheServersConfiguration() {
-        try (ResourceContext context = open()) {
-            assertThatThrownBy(policyWith(java.util.List.of("user-secret"))::authorizeCall).isInstanceOf(SanitizedToolException.class)
-                    .extracting(error -> ((SanitizedToolException) error).getCode()).isEqualTo("access_denied");
-            policyWith(java.util.List.of("service-account")).authorizeCall();
-            policyWith(java.util.List.of("user-oauth")).authorizeCall();
+        try (ResourceContext context = open("elsewhere")) {
+            assertThat(code(policyWith(List.of("service-account"))::authorizeCall)).isEqualTo("not_found_or_denied");
+            policyWith(List.of("user-oauth")).authorizeCall();
+            policyWith(List.of("user-secret")).authorizeCall();
+        }
+        try (ResourceContext context = open("team/a")) {
+            policyWith(List.of("service-account")).authorizeCall();
         }
     }
 
     @Test
     void aServerWithoutTheTypeHasNoPolicy() {
-        assertThatThrownBy(() -> policyWith(java.util.List.of())).isInstanceOf(IllegalStateException.class).hasMessageContaining("credential-type");
+        assertThatThrownBy(() -> policyWith(List.of())).isInstanceOf(IllegalStateException.class).hasMessageContaining("credential-type");
     }
 
     @Test
     void aTypeOfNoneOfTheFourIsAnInternalErrorNotAnUnconditionedCheck() {
-        try (ResourceContext context = open()) {
-            assertThatThrownBy(policyWith(java.util.List.of("password"))::authorizeCall).isInstanceOf(SanitizedToolException.class)
-                    .extracting(error -> ((SanitizedToolException) error).getCode()).isEqualTo("internal_error");
+        try (ResourceContext context = open("team/a")) {
+            assertThat(code(policyWith(List.of("password"))::authorizeCall)).isEqualTo("internal_error");
         }
     }
 }

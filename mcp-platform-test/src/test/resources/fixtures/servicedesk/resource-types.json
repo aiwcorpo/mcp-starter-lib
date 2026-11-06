@@ -1,0 +1,17 @@
+[
+  {
+    "type": "ServiceDesk::Queue",
+    "attributes": ["id", "classification"],
+    "idPattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+    "scopePattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$",
+    "earlyScopeCheck": true,
+    "classification": {"attribute": "classification", "kind": "set", "required": false}
+  },
+  {
+    "type": "ServiceDesk::Ticket",
+    "attributes": ["id"],
+    "parent": "ServiceDesk::Queue",
+    "parentAttribute": "queue",
+    "idPattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+  }
+]

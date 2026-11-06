@@ -1,0 +1,24 @@
+// Fragment of a Jira MCP server: one namespace, the server's own. Base types (User, ResourceScope, RequestContext) are
+// referenced unqualified from the empty namespace of cedar/mcp.cedarschema. Every entity type has `scopes`.
+
+namespace Jira {
+  entity Project {
+    key: String,
+    // Classification: required, "" when the project has no category. The entity builder normalizes it (trim, ASCII lower
+    // case); the canonical value for restricted data is "restricted".
+    category: String,
+    scopes: Set<ResourceScope>,
+  };
+  // `project` duplicates the parent edge because Cedar cannot read attributes of an ancestor through `in`.
+  entity Issue in [Project] {
+    key: String,
+    project: Project,
+    scopes: Set<ResourceScope>,
+  };
+
+  action "read", "update", "delete", "admin" appliesTo {
+    principal: [User],
+    resource: [Project, Issue],
+    context: RequestContext,
+  };
+}

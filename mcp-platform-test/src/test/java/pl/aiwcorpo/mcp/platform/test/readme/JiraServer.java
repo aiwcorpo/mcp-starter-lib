@@ -31,7 +31,7 @@ public class JiraServer {
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Test tool")
         @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
-        public String getIssue(@ArgumentLimits(maxLength = 16, contractPattern = "JiraIssueKey") String issueKey) {
+        public String getIssue(@ArgumentLimits(maxLength = 16, resourceType = "Jira::Issue") String issueKey) {
             // A real adapter calls Jira with: .headers(CredentialContext.require("jira")::applyTo)
             return issueKey + " read with a " + CredentialContext.require("jira").scheme().wireName() + " credential";
         }

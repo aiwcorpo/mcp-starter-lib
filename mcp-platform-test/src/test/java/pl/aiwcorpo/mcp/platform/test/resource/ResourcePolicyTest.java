@@ -169,25 +169,6 @@ class ResourcePolicyTest {
     }
 
     @Test
-    void aProjectUnderARestrictedGroupIsDeniedThroughItsAncestorsAtAnyDepth() {
-        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read", "mcp-gitlab-read")))) {
-            assertThat(text(call(client, "get_project", Map.of("path", "team-a/sub/app")))).contains("project team-a/sub/app");
-            assertThat(text(call(client, "get_project", Map.of("path", "solo/app")))).contains("project solo/app");
-            assertThat(text(call(client, "get_project", Map.of("path", "hr/payroll/app")))).contains("not_found_or_denied");
-        }
-    }
-
-    @Test
-    void aGitLabProjectWithoutTheTopicsOfItsAncestorsIsRefusedAsInternalError() {
-        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read", "mcp-gitlab-read")))) {
-            McpSchema.CallToolResult result = call(client, "get_project", Map.of("path", "bad/app"));
-
-            assertThat(result.isError()).isTrue();
-            assertThat(text(result)).contains("\"error\":\"internal_error\"");
-        }
-    }
-
-    @Test
     void aSystemThatIsDownIsUpstreamUnavailableNotADenial() {
         try (McpSyncClient client = client(ResourcePolicyTest::reader)) {
             McpSchema.CallToolResult result = call(client, "get_issue", Map.of("issueKey", "DOWN-1"));
@@ -209,13 +190,13 @@ class ResourcePolicyTest {
     }
 
     @Test
-    void aCallerWithoutTheGroupOfTheToolIsAccessDeniedWithoutTouchingTheSystem() {
+    void aCallerOfNoGroupOfTheServerIsRefusedWithoutTouchingTheSystem() {
         jira.calls.clear();
         try (McpSyncClient client = client(user -> user.groups(List.of("mcp-confluence-read")))) {
             McpSchema.CallToolResult result = call(client, "get_issue", Map.of("issueKey", "ABC-1"));
 
             assertThat(result.isError()).isTrue();
-            assertThat(text(result)).contains("\"error\":\"access_denied\"");
+            assertThat(text(result)).contains("\"error\":\"not_found_or_denied\"");
             assertThat(jira.calls).isEmpty();
         }
     }
@@ -324,7 +305,7 @@ class ResourcePolicyTest {
             assertThat(text(call(client, "transfer_issue", Map.of("issueKey", "ABC-1", "targetProject", "ABC"))))
                     .contains("ABC-1");
             assertThat(text(call(client, "transfer_issue", Map.of("issueKey", "ABC-1", "targetProject", "DEF"))))
-                    .contains("access_denied");
+                    .contains("not_found_or_denied");
             assertThat(text(call(client, "transfer_issue", Map.of("issueKey", "DEF-7", "targetProject", "ABC"))))
                     .contains("not_found_or_denied");
         }
@@ -333,7 +314,7 @@ class ResourcePolicyTest {
     @Test
     void aDestructiveToolIsDeniedWithoutItsGroupAndAllowedInsideTheScopeWithIt() {
         try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-write", "mcp-jira-proj-ABC")).mfaAgeSeconds(60))) {
-            assertThat(text(call(client, "delete_issue", Map.of("issueKey", "ABC-1")))).contains("access_denied");
+            assertThat(text(call(client, "delete_issue", Map.of("issueKey", "ABC-1")))).contains("not_found_or_denied");
         }
         try (McpSyncClient client = client(user -> user
                 .groups(List.of("mcp-jira-destructive", "mcp-jira-proj-ABC")).mfaAgeSeconds(60))) {

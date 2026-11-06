@@ -60,11 +60,6 @@ public class JiraServer {
     }
 
     @Bean
-    GitLabProjectResolver gitLabProjectResolver() {
-        return new GitLabProjectResolver();
-    }
-
-    @Bean
     JiraProjectResolver jiraProjectResolver() {
         return new JiraProjectResolver();
     }
@@ -117,13 +112,28 @@ public class JiraServer {
             return found;
         }
 
+        /** The project an issue key names, with the least restrictive category: the grant is judged before Jira is asked (CC-146). */
+        @Override
+        public Optional<ResolvedResource> probe(String key) {
+            int dash = key.lastIndexOf('-');
+            if (dash <= 0) {
+                return Optional.empty();
+            }
+            List<String> scopes = List.of("Jira::Project/" + key.substring(0, dash));
+            ResolvedResource project = ResolvedResource.of("Jira::Project", key.substring(0, dash),
+                    Map.of("key", key.substring(0, dash), "category", "")).withScopes(scopes);
+            return Optional.of(ResolvedResource.of("Jira::Issue", key, Map.of("key", key)).withParent(project).withScopes(scopes));
+        }
+
         @Override
         public ResolvedResource describe(JiraIssue issue) {
             Map<String, Object> project = issue.categoryKnown()
                     ? Map.of("key", issue.projectKey(), "category", issue.projectCategory())
                     : Map.of("key", issue.projectKey());
+            List<String> scopes = List.of("Jira::Project/" + issue.projectKey());
             return ResolvedResource.of("Jira::Issue", issue.key(), Map.of("key", issue.key()))
-                    .withParent(ResolvedResource.of("Jira::Project", issue.projectKey(), project));
+                    .withParent(ResolvedResource.of("Jira::Project", issue.projectKey(), project).withScopes(scopes))
+                    .withScopes(scopes);
         }
     }
 
@@ -141,54 +151,15 @@ public class JiraServer {
         }
 
         @Override
+        public Optional<ResolvedResource> probe(String key) {
+            return Optional.of(ResolvedResource.of("Jira::Project", key, Map.of("key", key, "category", ""))
+                    .withScopes(List.of("Jira::Project/" + key)));
+        }
+
+        @Override
         public ResolvedResource describe(String key) {
-            return ResolvedResource.of("Jira::Project", key, Map.of("key", key, "category", "HR".equals(key) ? "Restricted" : ""));
-        }
-    }
-
-    /**
-     * A GitLab project as the fake GitLab returns it: the topics of the project and of every group above it, by group path
-     * (CC-129). A project in a restricted group is protected through the ancestors, however deep it is.
-     */
-    public record GitLabProject(String path, Map<String, List<String>> ancestorTopics) {
-    }
-
-    /** Resolves a project path and gives the policy the topics of all ancestor groups. */
-    public static final class GitLabProjectResolver implements ResourceResolver<GitLabProject> {
-
-        private final Map<String, GitLabProject> projects = Map.of(
-                "team-a/sub/app", new GitLabProject("team-a/sub/app", Map.of("team-a", List.of(), "team-a/sub", List.of())),
-                "hr/payroll/app", new GitLabProject("hr/payroll/app", Map.of("hr", List.of("Restricted"), "hr/payroll", List.of())),
-                "solo/app", new GitLabProject("solo/app", Map.of("solo", List.of())),
-                "bad/app", new GitLabProject("bad/app", null));
-
-        @Override
-        public String resourceType() {
-            return "GitLab::Project";
-        }
-
-        @Override
-        public Optional<GitLabProject> fetch(String path) {
-            return Optional.ofNullable(projects.get(path));
-        }
-
-        @Override
-        public ResolvedResource describe(GitLabProject project) {
-            String group = project.path().substring(0, project.path().lastIndexOf('/'));
-            Map<String, Object> projectAttributes = new java.util.LinkedHashMap<>();
-            projectAttributes.put("path", project.path());
-            projectAttributes.put("classification", List.of());
-            Map<String, Object> groupAttributes = new java.util.LinkedHashMap<>();
-            groupAttributes.put("path", group);
-            groupAttributes.put("classification", List.of());
-            if (project.ancestorTopics() != null) {
-                projectAttributes.put("ancestorClassifications", project.ancestorTopics());
-                Map<String, List<String>> aboveGroup = new java.util.LinkedHashMap<>(project.ancestorTopics());
-                aboveGroup.remove(group);
-                groupAttributes.put("ancestorClassifications", aboveGroup);
-            }
-            return ResolvedResource.of("GitLab::Project", project.path(), projectAttributes)
-                    .withParent(ResolvedResource.of("GitLab::Group", group, groupAttributes));
+            return ResolvedResource.of("Jira::Project", key, Map.of("key", key, "category", "HR".equals(key) ? "Restricted" : ""))
+                    .withScopes(List.of("Jira::Project/" + key));
         }
     }
 
@@ -264,27 +235,18 @@ public class JiraServer {
         @Tool(name = "get_issue", description = "Returns an issue by key.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Get issue")
-        public IssueView getIssue(@ArgumentLimits(maxLength = 16, contractPattern = "JiraIssueKey")
+        public IssueView getIssue(@ArgumentLimits(maxLength = 16, resourceType = "Jira::Issue")
                                   @ResourceRef(type = "Jira::Issue") String issueKey) {
             JiraIssue issue = ResourceContext.current().orElseThrow().fetched("Jira::Issue", issueKey, JiraIssue.class)
                     .orElseThrow();
             return new IssueView(issue.key(), issue.projectKey());
         }
 
-        @Tool(name = "get_project", description = "Returns a GitLab project by path.")
-        @ToolRisk(RiskLevel.READ_ONLY)
-        @ToolTitle("Get project")
-        @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
-        public String getProject(@ArgumentLimits(maxLength = 1024, contractPattern = "GitLabProjectPath")
-                                 @ResourceRef(type = "GitLab::Project") String path) {
-            return "project " + path;
-        }
-
         @Tool(name = "count_issues", description = "Counts the given issues.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Count issues")
         @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
-        public String countIssues(@ArgumentLimits(maxItems = 5, maxLength = 16, contractPattern = "JiraIssueKey")
+        public String countIssues(@ArgumentLimits(maxItems = 5, maxLength = 16, resourceType = "Jira::Issue")
                                   @ResourceRef(type = "Jira::Issue") List<String> issueKeys) {
             return "counted " + issueKeys.size();
         }
@@ -292,7 +254,7 @@ public class JiraServer {
         @Tool(name = "search_issues", description = "Searches the given projects; links bring issues of other projects.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Search issues")
-        public SearchResult searchIssues(@ArgumentLimits(maxItems = 5, maxLength = 10, contractPattern = "JiraProjectKey")
+        public SearchResult searchIssues(@ArgumentLimits(maxItems = 5, maxLength = 10, resourceType = "Jira::Project")
                                          @ResourceRef(type = "Jira::Project") List<String> projectKeys) {
             List<IssueView> hits = List.of(new IssueView("ABC-1", "ABC"), new IssueView("DEF-7", "DEF"),
                     new IssueView("HR-5", "HR"), new IssueView("ABC-2", "ABC"));
@@ -302,7 +264,7 @@ public class JiraServer {
         @Tool(name = "search_two_lists", description = "Returns two long lists in one result.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Search two lists")
-        public TwoLists searchTwoLists(@ArgumentLimits(maxItems = 5, maxLength = 10, contractPattern = "JiraProjectKey")
+        public TwoLists searchTwoLists(@ArgumentLimits(maxItems = 5, maxLength = 10, resourceType = "Jira::Project")
                                        @ResourceRef(type = "Jira::Project") List<String> projectKeys) {
             List<IssueView> many = java.util.Collections.nCopies(120, new IssueView("ABC-1", "ABC"));
             return new TwoLists(many, many);
@@ -311,7 +273,7 @@ public class JiraServer {
         @Tool(name = "search_page", description = "Searches the given projects and returns a generic page.")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Search page")
-        public Page<IssueView> searchPage(@ArgumentLimits(maxItems = 5, maxLength = 10, contractPattern = "JiraProjectKey")
+        public Page<IssueView> searchPage(@ArgumentLimits(maxItems = 5, maxLength = 10, resourceType = "Jira::Project")
                                           @ResourceRef(type = "Jira::Project") List<String> projectKeys) {
             return new Page<>(List.of(new IssueView("ABC-1", "ABC"), new IssueView("DEF-7", "DEF"), new IssueView("HR-5", "HR")), 3);
         }
@@ -339,9 +301,9 @@ public class JiraServer {
         @Tool(name = "transfer_issue", description = "Moves an issue to another project.")
         @ToolRisk(RiskLevel.UPDATE)
         @ToolTitle("Transfer issue")
-        public Moved transferIssue(@ArgumentLimits(maxLength = 16, contractPattern = "JiraIssueKey")
+        public Moved transferIssue(@ArgumentLimits(maxLength = 16, resourceType = "Jira::Issue")
                                    @ResourceRef(type = "Jira::Issue") String issueKey,
-                                   @ArgumentLimits(maxLength = 10, contractPattern = "JiraProjectKey")
+                                   @ArgumentLimits(maxLength = 10, resourceType = "Jira::Project")
                                    @ResourceRef(type = "Jira::Project") String targetProject) {
             return new Moved(issueKey, targetProject);
         }
@@ -350,7 +312,7 @@ public class JiraServer {
         @ToolRisk(RiskLevel.DESTRUCTIVE)
         @ToolTitle("Delete issue")
         @pl.aiwcorpo.mcp.platform.resource.ResultWithoutResources
-        public String deleteIssue(@ArgumentLimits(maxLength = 16, contractPattern = "JiraIssueKey")
+        public String deleteIssue(@ArgumentLimits(maxLength = 16, resourceType = "Jira::Issue")
                                   @ResourceRef(type = "Jira::Issue") String issueKey) {
             return "deleted " + issueKey;
         }

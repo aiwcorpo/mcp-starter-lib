@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -13,8 +12,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -26,7 +23,8 @@ import org.springframework.core.io.Resource;
 import org.springframework.core.io.support.PathMatchingResourcePatternResolver;
 import pl.aiwcorpo.mcp.cedar.entities.ResolvedResource;
 import pl.aiwcorpo.mcp.platform.auth.CallerContext;
-import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
+import pl.aiwcorpo.mcp.platform.policy.PolicyData;
+import pl.aiwcorpo.mcp.platform.policy.ServerPolicies;
 import pl.aiwcorpo.mcp.platform.error.SanitizedToolException;
 import pl.aiwcorpo.mcp.platform.guard.RiskClassifiedTool;
 import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
@@ -40,51 +38,27 @@ import pl.aiwcorpo.mcp.platform.resource.ResourceContext;
 import pl.aiwcorpo.mcp.platform.resource.ResourcePolicy;
 import pl.aiwcorpo.mcp.platform.resource.ResourceResolver;
 import pl.aiwcorpo.mcp.platform.resource.ResourceResolvers;
-import pl.aiwcorpo.mcp.platform.test.TestGateway;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
  * The vectors {@code resource-checks/} and {@code result-filter/} of mcp-contracts, run on {@link ResourcePolicy} with the
- * example policies of the contracts as the signed bundle: a vector added to the contracts is run here without a line of code.
+ * fragment, the declarations and the scope mapping the vector names: a vector added to the contracts is run here without a line of code.
  * The vectors that give a tool with {@code resourceRefs} and no arguments (the result filters) exercise the filter and the query
  * scope, not {@code authorizeCall}: the starter refuses such a call as {@code no_resource} on purpose (STATUS, deviations).
  */
 class ContractVectorsOnResourcePolicyTest {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
-    private static final int RESOURCE_CHECKS = 4;
-    private static final int RESULT_FILTERS = 7;
-
-    private static TestGateway gateway;
-    private static PolicyEngine engine;
+    private static final int RESOURCE_CHECKS = 5;
+    private static final int RESULT_FILTERS = 5;
 
     record Vector(String name, JsonNode data) {
         @Override
         public String toString() {
             return name;
         }
-    }
-
-    @BeforeAll
-    static void start() throws Exception {
-        gateway = TestGateway.start("mcp-jira");
-        McpPlatformProperties props = new McpPlatformProperties();
-        Map<String, String> properties = gateway.serverProperties();
-        McpPlatformProperties.Policy policy = props.getPolicy();
-        policy.getMain().setUrl(properties.get("aiwcorpo.mcp.platform.policy.main.url"));
-        policy.getMain().setKeyId("test-policy-bundle");
-        policy.getMain().setPublicKey(properties.get("aiwcorpo.mcp.platform.policy.main.public-key"));
-        policy.setAllowTestKeys(true);
-        policy.setStartupTimeout(Duration.ofSeconds(5));
-        engine = PolicyEngine.create(policy, null, null);
-    }
-
-    @AfterAll
-    static void stop() {
-        engine.close();
-        gateway.close();
     }
 
     static List<Vector> vectors(String directory) throws IOException {
@@ -118,7 +92,7 @@ class ContractVectorsOnResourcePolicyTest {
     @MethodSource("resourceChecks")
     void everyValueOfTheCallIsEvaluatedAsTheVectorSays(Vector vector) {
         JsonNode input = vector.data().get("input");
-        Fixture fixture = new Fixture(input.get("tool"), vector.data().get("resources"));
+        Fixture fixture = new Fixture(vector.data(), vector.data().get("resources"));
         try (ResourceContext context = fixture.open(input)) {
             if (vector.data().at("/expected/allowed").asBoolean()) {
                 fixture.policy.authorizeCall();
@@ -132,7 +106,7 @@ class ContractVectorsOnResourcePolicyTest {
     @MethodSource("resultFilters")
     void theResultIsFilteredAndTheQueryLimitedAsTheVectorSays(Vector vector) {
         JsonNode input = vector.data().get("input");
-        Fixture fixture = new Fixture(input.get("tool"), vector.data().get("items"));
+        Fixture fixture = new Fixture(vector.data(), vector.data().get("items"));
         try (ResourceContext context = fixture.open(input)) {
             List<JsonNode> items = new ArrayList<>();
             vector.data().get("items").forEach(items::add);
@@ -166,7 +140,8 @@ class ContractVectorsOnResourcePolicyTest {
         final ResourcePolicy policy;
         final Map<String, ResolvedResource> resources = new LinkedHashMap<>();
 
-        Fixture(JsonNode tool, JsonNode listed) {
+        Fixture(JsonNode vector, JsonNode listed) {
+            JsonNode tool = vector.get("input").get("tool");
             serverId = tool.get("serverId").asString();
             system = tool.get("system").asString();
             toolName = tool.get("name").asString();
@@ -182,16 +157,53 @@ class ContractVectorsOnResourcePolicyTest {
                     ToolAction.valueOf(tool.get("action").asString().toUpperCase(java.util.Locale.ROOT)), refs));
             List<ResourceResolver<?>> resolvers = new ArrayList<>();
             resources.values().stream().map(ResolvedResource::type).distinct().forEach(type -> resolvers.add(new Resolver(type)));
-            policy = new ResourcePolicy(engine, new ResourceResolvers(resolvers), registry,
-                    new AuditLogger("test.vectors.audit", serverId), serverId, system, credentialTypes(system), 200);
+            policy = new ResourcePolicy(PolicyEngine.fixed(policies(vector), data(vector)), new ResourceResolvers(resolvers), registry,
+                    new AuditLogger("test.vectors.audit", serverId), serverId, system,
+                    List.of(vector.at("/input/credentialType").asString("user-secret")), 200);
         }
 
-        /**
-         * The vectors run the example policies without a credential type, which {@code credential-type.cedar} treats like the service account of
-         * the service desk (the default type of that server); the other systems apply the user's own rights.
-         */
-        private static List<String> credentialTypes(String system) {
-            return "servicedesk".equals(system) ? List.of("service-account") : List.of("user-secret");
+        /** The fragment the vector names, with the declarations of its namespace out of the files it lists. */
+        private static ServerPolicies policies(JsonNode vector) {
+            JsonNode named = vector.get("policies");
+            String schema = read(named.get("schema").asString());
+            java.util.regex.Matcher declared = java.util.regex.Pattern.compile("(?m)^namespace (\\w+) \\{").matcher(schema);
+            if (!declared.find()) {
+                throw new IllegalStateException("the schema of the vector declares no namespace");
+            }
+            String namespace = declared.group(1);
+            tools.jackson.databind.node.ArrayNode declarations = JSON.createArrayNode();
+            vector.get("resourceTypes").forEach(file -> JSON.readTree(read(file.asString())).forEach(declaration -> {
+                if (declaration.get("type").asString().startsWith(namespace + "::")) {
+                    declarations.add(declaration);
+                }
+            }));
+            Map<String, String> files = new java.util.TreeMap<>();
+            named.get("policies").forEach(directory -> {
+                try {
+                    for (Resource resource : new PathMatchingResourcePatternResolver()
+                            .getResources("classpath*:mcp-contracts/" + directory.asString() + "/*.cedar")) {
+                        files.put(resource.getFilename(), new String(resource.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+                    }
+                } catch (IOException ex) {
+                    throw new java.io.UncheckedIOException(ex);
+                }
+            });
+            return ServerPolicies.of(schema, files, declarations.toString());
+        }
+
+        private static PolicyData data(JsonNode vector) {
+            Map<String, List<String>> mapping = new LinkedHashMap<>();
+            JSON.readTree(read(vector.get("scopeMapping").asString())).forEach(entry ->
+                    mapping.put(entry.get("group").asString(), stringList(entry.get("scopes"))));
+            return PolicyData.of(1, java.util.Optional.of(policies(vector).policiesHash()), mapping, List.of("claude-code"), List.of());
+        }
+
+        private static String read(String repositoryPath) {
+            try (InputStream in = ContractVectorsOnResourcePolicyTest.class.getClassLoader().getResourceAsStream("mcp-contracts/" + repositoryPath)) {
+                return new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+            } catch (IOException ex) {
+                throw new java.io.UncheckedIOException(ex);
+            }
         }
 
         ResolvedResource resource(JsonNode item) {
@@ -201,14 +213,14 @@ class ContractVectorsOnResourcePolicyTest {
         ResourceContext open(JsonNode input) {
             JsonNode caller = input.get("caller");
             CallerContext claims = new CallerContext(caller.get("sub").asString(), caller.get("usr").asString(),
-                    stringList(caller.get("grp")), caller.get("azp").asString(), toolName, "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", "00000000000000-0000000", null);
+                    stringList(caller.get("grp")), caller.get("azp").asString(), toolName, "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", 0L, null);
             Map<String, Object> arguments = JSON.convertValue(input.get("arguments"), new TypeReference<Map<String, Object>>() { });
             return ResourceContext.open(claims, toolName, arguments);
         }
 
         private static ResolvedResource resourceOf(JsonNode node) {
             ResolvedResource resource = ResolvedResource.of(node.get("type").asString(), node.get("id").asString(),
-                    attributes(node.get("attrs")));
+                    attributes(node.get("attrs"))).withScopes(node.has("scopes") ? stringList(node.get("scopes")) : List.of());
             return node.has("parent") ? resource.withParent(resourceOf(node.get("parent"))) : resource;
         }
 

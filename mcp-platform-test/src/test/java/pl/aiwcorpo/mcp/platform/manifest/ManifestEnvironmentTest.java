@@ -50,10 +50,13 @@ class ManifestEnvironmentTest {
     @Autowired
     ToolRiskRegistry registry;
 
+    @Autowired
+    ObjectProvider<pl.aiwcorpo.mcp.platform.policy.ServerPolicies> policies;
+
     private JsonNode manifest(String profile) {
         MockEnvironment environment = new MockEnvironment();
         environment.setActiveProfiles(profile);
-        ManifestCheck check = new PlatformManifestAutoConfiguration().manifestCheck(servers, props, registry, environment);
+        ManifestCheck check = new PlatformManifestAutoConfiguration().manifestCheck(servers, props, registry, policies, environment);
         check.afterSingletonsInstantiated();
         return JSON.readTree(check.manifest().orElseThrow());
     }

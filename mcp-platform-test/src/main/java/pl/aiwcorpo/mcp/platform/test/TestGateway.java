@@ -32,8 +32,9 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Stands in for the platform gateway in a server's tests: serves the published test JWKS of mcp-contracts on
- * {@code 127.0.0.1} and mints internal JWTs (C2) signed with the published test key A.
+ * Stands in for the platform gateway in a server's tests: serves the published test JWKS of mcp-contracts and the policy data
+ * ({@code GET /internal/v1/policy-data}, {@link #policyData()}) on {@code 127.0.0.1} and mints internal JWTs (C2) signed with the
+ * published test key A.
  *
  * <pre>{@code
  * static final TestGateway GATEWAY = TestGateway.start("mcp-jira");
@@ -54,36 +55,30 @@ public final class TestGateway implements AutoCloseable {
 
     public static final String ISSUER = "https://mcp-gateway.internal";
     public static final String SERVICE_SUBJECT = "system:mcp-gateway";
-    public static final String DEFAULT_POLICY_REVISION = "20261026120000-a1b2c3d";
+    /** The {@code prv} of a token: the revision a test gateway starts with, so a call asks the server for no refresh. */
+    public static final long DEFAULT_POLICY_REVISION = PolicyDataEndpoint.INITIAL_REVISION;
 
-    private static final java.util.Set<String> SYSTEM_SERVERS = java.util.Set.of("mcp-jira", "mcp-confluence", "mcp-gitlab",
-            "mcp-servicedesk", "mcp-opensearch");
     private static final String KEYS = "mcp-contracts/test-vectors/keys/";
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     private final String serverId;
     private final HttpServer server;
     private final ECKey signingKey;
-    private final PolicyRepository main = new PolicyRepository();
-    private final PolicyRepository overrides = new PolicyRepository();
+    private final PolicyDataEndpoint policyData;
 
-    private TestGateway(String serverId, HttpServer server, ECKey signingKey) {
+    private TestGateway(String serverId, HttpServer server, ECKey signingKey, PolicyDataEndpoint policyData) {
+        this.policyData = policyData;
         this.serverId = serverId;
         this.server = server;
         this.signingKey = signingKey;
     }
 
-    /** The main policy bundle channel the server pulls from; it starts with the example policies of the contracts. */
-    public PolicyRepository main() {
-        return main;
-    }
-
     /**
-     * The emergency policy bundle channel. The server is configured to pull it only if a bundle was published here
-     * before {@link #serverProperties()} is called.
+     * The policy data the server pulls from {@code GET /internal/v1/policy-data}: the scope mapping (group to scopes), the allowed
+     * AI clients and the emergency overrides. Change it in a test to see the server follow.
      */
-    public PolicyRepository overrides() {
-        return overrides;
+    public PolicyDataEndpoint policyData() {
+        return policyData;
     }
 
     /** Starts the JWKS endpoint for a server with id {@code serverId} ({@code mcp-<system>}). */
@@ -108,18 +103,8 @@ public final class TestGateway implements AutoCloseable {
                     out.write(jwks);
                 }
             });
-            TestGateway gateway = new TestGateway(serverId, server, key);
-            if (SYSTEM_SERVERS.contains(serverId)) {
-                gateway.main.publish("20261026130000-b2c3d4e");
-            } else {
-                // A server of none of the five systems (the template's mcp-example): the example policies of the contracts
-                // know only those five, so the bundle is generated for this server id.
-                gateway.main.publishGenerated("20261026130000-0e0e0e0", serverId);
-            }
-            server.createContext("/policies/main/", exchange -> gateway.main.handle(exchange,
-                    exchange.getRequestURI().getPath().substring("/policies/main/".length())));
-            server.createContext("/policies/overrides/", exchange -> gateway.overrides.handle(exchange,
-                    exchange.getRequestURI().getPath().substring("/policies/overrides/".length())));
+            TestGateway gateway = new TestGateway(serverId, server, key, new PolicyDataEndpoint(ownPolicies()));
+            server.createContext("/internal/v1/policy-data", gateway.policyData::handle);
             server.setExecutor(java.util.concurrent.Executors.newCachedThreadPool(task -> {
                 Thread thread = new Thread(task, "test-gateway");
                 thread.setDaemon(true);
@@ -134,6 +119,15 @@ public final class TestGateway implements AutoCloseable {
         }
     }
 
+    /** The policies of the project under test (its {@code mcp/policies/}), or none when the classpath has none. */
+    private static pl.aiwcorpo.mcp.platform.policy.ServerPolicies ownPolicies() {
+        try {
+            return pl.aiwcorpo.mcp.platform.policy.ServerPolicies.load(TestGateway.class.getClassLoader());
+        } catch (IllegalStateException ex) {
+            return null;
+        }
+    }
+
     public String serverId() {
         return serverId;
     }
@@ -144,8 +138,8 @@ public final class TestGateway implements AutoCloseable {
 
     /**
      * Properties for the server under test: server id, issuer, this JWKS, test keys allowed, in-memory jti
-     * store, no client certificate, a portal link for {@code credential_required}, the policy bundle channels of this
-     * gateway ({@link #main()}, {@link #overrides()}, test keys allowed) and the manifest data.
+     * store, no client certificate, a portal link for {@code credential_required}, the policy data endpoint of this gateway
+     * ({@link #policyData()}) and the manifest data.
      */
     public Map<String, String> serverProperties() {
         Map<String, String> properties = new LinkedHashMap<>();
@@ -156,19 +150,10 @@ public final class TestGateway implements AutoCloseable {
         properties.put("aiwcorpo.mcp.platform.internal-jwt.replay-store", "memory");
         properties.put("aiwcorpo.mcp.platform.mtls.required", "false");
         properties.put("aiwcorpo.mcp.platform.credential.connect-url", "http://localhost:18090/connections?system={system}");
-        String base = "http://127.0.0.1:" + server.getAddress().getPort() + "/policies/";
-        properties.put("aiwcorpo.mcp.platform.policy.main.url", base + "main/latest.json");
-        properties.put("aiwcorpo.mcp.platform.policy.main.key-id", "test-policy-bundle");
-        properties.put("aiwcorpo.mcp.platform.policy.main.public-key", pem("test-policy-bundle.public.pem"));
-        properties.put("aiwcorpo.mcp.platform.policy.main.refresh-interval", "PT1S");
-        properties.put("aiwcorpo.mcp.platform.policy.allow-test-keys", "true");
-        properties.put("aiwcorpo.mcp.platform.policy.startup-timeout", "PT10S");
-        if (overrides.revision() != null) {
-            properties.put("aiwcorpo.mcp.platform.policy.overrides.url", base + "overrides/latest.json");
-            properties.put("aiwcorpo.mcp.platform.policy.overrides.key-id", "test-policy-overrides");
-            properties.put("aiwcorpo.mcp.platform.policy.overrides.public-key", pem("test-policy-overrides.public.pem"));
-            properties.put("aiwcorpo.mcp.platform.policy.overrides.refresh-interval", "PT1S");
-        }
+        properties.put("aiwcorpo.mcp.platform.policy-data.url",
+                "http://127.0.0.1:" + server.getAddress().getPort() + "/internal/v1/policy-data");
+        properties.put("aiwcorpo.mcp.platform.policy-data.refresh-interval", "PT1S");
+        properties.put("aiwcorpo.mcp.platform.policy-data.startup-timeout", "PT10S");
         properties.put("aiwcorpo.mcp.platform.manifest.version", "1.0.0");
         properties.put("aiwcorpo.mcp.platform.manifest.internal-url", "https://" + serverId + ".internal:8443/mcp");
         properties.put("aiwcorpo.mcp.platform.manifest.accepted-credential-types", "user-secret,user-oauth");
@@ -240,14 +225,6 @@ public final class TestGateway implements AutoCloseable {
         server.stop(0);
     }
 
-    private static String pem(String file) {
-        try {
-            return new String(resource(KEYS + file), StandardCharsets.UTF_8);
-        } catch (IOException ex) {
-            throw new UncheckedIOException(ex);
-        }
-    }
-
     private static byte[] resource(String path) throws IOException {
         try (InputStream in = TestGateway.class.getClassLoader().getResourceAsStream(path)) {
             if (in == null) {
@@ -284,7 +261,7 @@ public final class TestGateway implements AutoCloseable {
         private String jti = UUID.randomUUID().toString();
         private Instant issuedAt = Instant.now();
         private Duration lifetime = Duration.ofSeconds(60);
-        private String policyRevision = DEFAULT_POLICY_REVISION;
+        private long policyRevision = DEFAULT_POLICY_REVISION;
 
         private Token(TestGateway gateway, boolean service) {
             this.gateway = gateway;
@@ -361,7 +338,7 @@ public final class TestGateway implements AutoCloseable {
             return this;
         }
 
-        public Token policyRevision(String value) {
+        public Token policyRevision(long value) {
             policyRevision = value;
             return this;
         }

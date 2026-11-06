@@ -25,7 +25,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Runs one MCP server alone, without the platform: stands in for the gateway on the developer's machine. It serves the
- * test JWKS and policy bundle of {@link TestGateway} and forwards {@code /mcp} to the server, turning the client's
+ * test JWKS and the policy data (scope mapping, allowed clients) of {@link TestGateway} and forwards {@code /mcp} to the server, turning the client's
  * {@code Authorization} header (the user's own PAT or token) into the backend credential (C3) and adding an internal JWT
  * (C2) for a fixed local user.
  *
@@ -77,10 +77,24 @@ public final class LocalGateway {
         List<String> groups = options.containsKey("groups")
                 ? Arrays.stream(options.get("groups").split(",")).map(String::strip).filter(g -> !g.isEmpty()).toList()
                 : List.of(serverId + "-read", serverId + "-write", serverId + "-destructive");
-        String credentialType = options.getOrDefault("credential-type", defaultCredentialType(system));
+        String credentialType = options.getOrDefault("credential-type", "user-secret");
         Path envFile = Path.of(options.getOrDefault("env-file", "local-gateway.env")).toAbsolutePath();
 
         TestGateway gateway = TestGateway.start(serverId, jwksPort);
+        Path policiesDir = Path.of(options.getOrDefault("policies-dir", "src/main/resources/mcp/policies"));
+        if (Files.isDirectory(policiesDir)) {
+            gateway.policyData().policies(readPolicies(policiesDir));
+        } else {
+            System.err.println("No policies at " + policiesDir.toAbsolutePath() + " (--policies-dir): the policy data approves none, so the server "
+                    + "refuses every call.");
+        }
+        if (options.containsKey("scope-mapping")) {
+            gateway.policyData().scopeMapping(readScopeMapping(Path.of(options.get("scope-mapping"))));
+        }
+        if (options.containsKey("allowed-clients")) {
+            gateway.policyData().allowedClients(Arrays.stream(options.get("allowed-clients").split(",")).map(String::strip)
+                    .filter(client -> !client.isEmpty()).toArray(String[]::new));
+        }
         Map<String, String> properties = new LinkedHashMap<>(gateway.serverProperties());
         properties.put("aiwcorpo.mcp.platform.manifest.accepted-credential-types", credentialType);
         Files.writeString(envFile, "SPRING_PROFILES_ACTIVE=dev\nSPRING_APPLICATION_JSON='"
@@ -196,14 +210,27 @@ public final class LocalGateway {
         exchange.getResponseBody().write(bytes);
     }
 
-    /** The credential type each system's gateway configuration puts first (see new-server.sh of the template). */
-    private static String defaultCredentialType(String system) {
-        return switch (system) {
-            case "gitlab" -> "user-oauth";
-            case "servicedesk" -> "service-account";
-            case "opensearch" -> "token-exchange";
-            default -> "user-secret";
-        };
+    /** The policies of the server in its source tree: what the gateway would have approved from its manifest. */
+    private static pl.aiwcorpo.mcp.platform.policy.ServerPolicies readPolicies(Path dir) throws IOException {
+        Map<String, String> files = new java.util.TreeMap<>();
+        try (var listing = Files.list(dir)) {
+            for (Path file : listing.filter(path -> path.getFileName().toString().endsWith(".cedar")).toList()) {
+                files.put(file.getFileName().toString(), Files.readString(file, StandardCharsets.UTF_8));
+            }
+        }
+        return pl.aiwcorpo.mcp.platform.policy.ServerPolicies.of(Files.readString(dir.resolve("schema.cedarschema"), StandardCharsets.UTF_8),
+                files, Files.readString(dir.resolve("resource-types.json"), StandardCharsets.UTF_8));
+    }
+
+    /** The document of {@code scopeMapping} in the policy data: {@code [{"group": "mcp-x-team", "scopes": ["Type::Name/id"]}]}. */
+    private static Map<String, List<String>> readScopeMapping(Path file) throws IOException {
+        Map<String, List<String>> mapping = new LinkedHashMap<>();
+        for (JsonNode entry : JSON.readTree(Files.readAllBytes(file))) {
+            List<String> scopes = new java.util.ArrayList<>();
+            entry.path("scopes").forEach(scope -> scopes.add(scope.asString()));
+            mapping.put(entry.path("group").asString(), scopes);
+        }
+        return mapping;
     }
 
     private static Map<String, String> parse(String[] args) {
@@ -232,9 +259,12 @@ public final class LocalGateway {
                 usage: java -jar mcp-platform-test-local-gateway.jar --server mcp-<system> [options]
                   --listen PORT            MCP endpoint for the client (18500)
                   --upstream URL           the server's /mcp in the dev profile (http://127.0.0.1:8080/mcp)
-                  --jwks-port PORT         test JWKS and policy bundle for the server (18501)
+                  --jwks-port PORT         test JWKS and policy data for the server (18501)
                   --groups A,B             groups of the local user (mcp-<system>-read,-write,-destructive)
-                  --credential-type TYPE   user-secret, user-oauth, token-exchange or service-account (per system)
+                  --credential-type TYPE   user-secret (default), user-oauth, token-exchange or service-account
+                  --policies-dir PATH      the server's mcp/policies (src/main/resources/mcp/policies): its hash is the one the policy data approves
+                  --scope-mapping PATH     JSON file with the scope mapping, [{"group": "...", "scopes": ["<Type>/<id>"]}] (the example mapping of mcp-contracts)
+                  --allowed-clients A,B    AI clients the policy data allows (claude-code,claude-ai,local-gateway)
                   --user NAME              username in the internal JWT (local-user)
                   --env-file PATH          where to write the server settings (local-gateway.env)""");
         System.exit(2);

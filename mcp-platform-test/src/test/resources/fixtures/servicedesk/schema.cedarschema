@@ -1,0 +1,22 @@
+// Reference fragment, not a policy of the platform: the schema of a service desk server in the form the platform requires.
+
+namespace ServiceDesk {
+  // classification: category of the queue as reported by the adapter, normalized; optional (CC-057). A ticket is
+  // classified through its queue.
+  entity Queue {
+    id: String,
+    classification?: Set<String>,
+    scopes: Set<ResourceScope>,
+  };
+  entity Ticket in [Queue] {
+    id: String,
+    queue: Queue,
+    scopes: Set<ResourceScope>,
+  };
+
+  action "read", "update", "delete", "admin" appliesTo {
+    principal: [User],
+    resource: [Queue, Ticket],
+    context: RequestContext,
+  };
+}

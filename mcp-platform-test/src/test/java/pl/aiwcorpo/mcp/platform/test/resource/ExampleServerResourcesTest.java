@@ -19,9 +19,9 @@ import org.springframework.test.context.DynamicPropertySource;
 import pl.aiwcorpo.mcp.platform.test.TestGateway;
 
 /**
- * The template's scenario on a server that is none of the five systems ({@code mcp-example}): a read that is allowed, a
+ * The template's scenario on a server whose system the platform has never heard of ({@code mcp-example}): a read that is allowed, a
  * restricted resource that is refused, a search whose result is filtered, an update only inside the granted scope. The
- * resources are the fake Jira's; the groups are the server's own ({@code mcp-example-*}).
+ * resources are the fake Jira's and the policies are the fragment in {@code src/test/resources/mcp/policies}.
  */
 @SpringBootTest(classes = JiraServer.class, webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("dev")
@@ -61,7 +61,7 @@ class ExampleServerResourcesTest {
 
     @Test
     void aReadIsAllowedARestrictedResourceIsRefusedAndASearchIsFiltered() {
-        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-example-read")))) {
+        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read")))) {
             assertThat(text(call(client, "get_issue", Map.of("issueKey", "ABC-1")))).contains("ABC-1");
             assertThat(text(call(client, "get_issue", Map.of("issueKey", "HR-5")))).contains("not_found_or_denied");
             assertThat(text(call(client, "get_issue", Map.of("issueKey", "ABC-123")))).contains("not_found_or_denied");
@@ -72,14 +72,14 @@ class ExampleServerResourcesTest {
 
     @Test
     void aCallerOfAnotherServersGroupsGetsNothing() {
-        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-read")))) {
-            assertThat(text(call(client, "get_issue", Map.of("issueKey", "ABC-1")))).contains("access_denied");
+        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-confluence-read")))) {
+            assertThat(text(call(client, "get_issue", Map.of("issueKey", "ABC-1")))).contains("not_found_or_denied");
         }
     }
 
     @Test
     void anUpdateIsAllowedOnlyInsideTheGrantedScope() {
-        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-example-write", "mcp-jira-proj-ABC")))) {
+        try (McpSyncClient client = client(user -> user.groups(List.of("mcp-jira-write", "mcp-jira-proj-ABC")))) {
             assertThat(text(call(client, "transfer_issue", Map.of("issueKey", "ABC-1", "targetProject", "ABC")))).contains("ABC-1");
             assertThat(text(call(client, "transfer_issue", Map.of("issueKey", "DEF-7", "targetProject", "ABC"))))
                     .contains("not_found_or_denied");

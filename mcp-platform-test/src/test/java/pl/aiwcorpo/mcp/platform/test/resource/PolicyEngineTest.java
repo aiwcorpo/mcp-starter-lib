@@ -4,28 +4,25 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 import pl.aiwcorpo.mcp.platform.policy.PolicyEngine;
 import pl.aiwcorpo.mcp.platform.policy.PolicyUnavailableException;
+import pl.aiwcorpo.mcp.platform.policy.ServerPolicies;
 import pl.aiwcorpo.mcp.platform.test.TestGateway;
-import pl.aiwcorpo.mcp.policy.bundle.Channel;
 
 /**
- * The bundle distribution of the starter (C7) against a repository served from the signed bundles of the contracts: the
- * first load, a newer revision, a bad signature, a rollback, the emergency bundle, and what survives a restart.
+ * The distribution of the policy data (C7) against the endpoint of the test gateway: the first load, a newer revision, data this server
+ * cannot use, a gateway that is down or does not know the server, and the refresh a token asks for.
  */
 class PolicyEngineTest {
 
-    private static final String A = "20261026120000-a1b2c3d";
-    private static final String B = "20261026130000-b2c3d4e";
-    private static final String OVERRIDES = "20261026121500-d4e5f60";
+    private static final ServerPolicies POLICIES = ServerPolicies.load(PolicyEngineTest.class.getClassLoader());
 
     private TestGateway gateway;
     private SimpleMeterRegistry meters;
@@ -41,236 +38,179 @@ class PolicyEngineTest {
         gateway.close();
     }
 
-    private McpPlatformProperties.Policy policy(Path stateDir) {
-        McpPlatformProperties props = new McpPlatformProperties();
-        Map<String, String> properties = gateway.serverProperties();
-        McpPlatformProperties.Policy policy = props.getPolicy();
-        policy.getMain().setUrl(properties.get("aiwcorpo.mcp.platform.policy.main.url"));
-        policy.getMain().setKeyId("test-policy-bundle");
-        policy.getMain().setPublicKey(properties.get("aiwcorpo.mcp.platform.policy.main.public-key"));
-        if (properties.containsKey("aiwcorpo.mcp.platform.policy.overrides.url")) {
-            policy.getOverrides().setUrl(properties.get("aiwcorpo.mcp.platform.policy.overrides.url"));
-            policy.getOverrides().setKeyId("test-policy-overrides");
-            policy.getOverrides().setPublicKey(properties.get("aiwcorpo.mcp.platform.policy.overrides.public-key"));
-        }
-        policy.setAllowTestKeys(true);
-        policy.setStartupTimeout(Duration.ofSeconds(2));
-        policy.setOverridesGrace(Duration.ofMillis(400));
-        if (stateDir != null) {
-            policy.setStateDir(stateDir.toString());
-        }
-        return policy;
+    private McpPlatformProperties.PolicyData config() {
+        McpPlatformProperties.PolicyData config = new McpPlatformProperties().getPolicyData();
+        config.setUrl(gateway.serverProperties().get("aiwcorpo.mcp.platform.policy-data.url"));
+        config.setStartupTimeout(Duration.ofSeconds(2));
+        config.setRefreshInterval(Duration.ofHours(1));
+        config.setRetryInterval(Duration.ofHours(1));
+        return config;
     }
 
-    private PolicyEngine engine(Path stateDir) throws Exception {
-        return PolicyEngine.create(policy(stateDir), null, meters);
+    private PolicyEngine engine(McpPlatformProperties.PolicyData config) {
+        return PolicyEngine.create(config, POLICIES, null, meters);
     }
 
-    private double rejected(String reason) {
-        var counter = meters.find("mcp_server_policy_bundle_rejected_total").tag("channel", "main").tag("reason", reason).counter();
+    private double count(String name, String reason) {
+        var counter = meters.find(name).tag("reason", reason).counter();
         return counter == null ? 0 : counter.count();
     }
 
     @Test
-    void theFirstMainBundleIsLoadedAndANewerOneReplacesIt() throws Exception {
-        gateway.main().publish(A);
-        try (PolicyEngine engine = engine(null)) {
-            assertThat(engine.mainRevision()).contains(A);
+    void theFirstDataIsLoadedAndANewerRevisionReplacesIt() {
+        try (PolicyEngine engine = engine(config())) {
+            long first = engine.revision().orElseThrow();
+            assertThat(first).isEqualTo(gateway.policyData().revision());
+            assertThat(engine.snapshot().allows("claude-code")).isTrue();
 
-            gateway.main().publish(B);
-            engine.refresh(Channel.MAIN);
+            gateway.policyData().allowedClients("claude-ai");
+            engine.refresh();
 
-            assertThat(engine.mainRevision()).contains(B);
+            assertThat(engine.revision()).hasValue(gateway.policyData().revision());
+            assertThat(gateway.policyData().revision()).isGreaterThan(first);
+            assertThat(engine.snapshot().allows("claude-code")).isFalse();
+            assertThat(engine.snapshot().allows("claude-ai")).isTrue();
         }
     }
 
     @Test
-    void aBundleWithABadSignatureLeavesThePreviousOneAndIsCounted() throws Exception {
-        gateway.main().publish(A);
-        try (PolicyEngine engine = engine(null)) {
-            gateway.main().publish(B, "policies-" + B + ".tar.gz.sig-by-overrides-key");
-            engine.refresh(Channel.MAIN);
-            assertThat(rejected("bad_signature")).as("one rejected revision is counted once, not every pull").isEqualTo(1.0);
+    void anUnchangedRevisionIsAskedForWithItsEtagAndAnswered304() {
+        try (PolicyEngine engine = engine(config())) {
+            int before = gateway.policyData().requests();
+            engine.refresh();
+            engine.refresh();
+
+            assertThat(gateway.policyData().requests()).isEqualTo(before + 2);
+            assertThat(engine.revision()).hasValue(gateway.policyData().revision());
         }
     }
 
     @Test
-    void anOlderSignedBundleIsNotAccepted() throws Exception {
-        try (PolicyEngine engine = engine(null)) {
-            gateway.main().publish(A);
-            engine.refresh(Channel.MAIN);
+    void dataThisServerCannotUseLeavesThePreviousOneAndIsCountedOnce() {
+        try (PolicyEngine engine = engine(config())) {
+            long previous = engine.revision().orElseThrow();
+            gateway.policyData().scopeMapping(Map.of("mcp-jira-proj-abc", List.of("Jira::Project/not a key", "Jira::Project/ABC")));
 
-            assertThat(engine.mainRevision()).contains(B);
-            assertThat(rejected("not_newer")).isEqualTo(1.0);
+            engine.refresh();
+
+            assertThat(engine.revision()).as("a scope of ours that is not valid is skipped and listed, the rest of the data is used")
+                    .hasValue(gateway.policyData().revision());
+            assertThat(engine.snapshot().ignored()).extracting(skipped -> skipped.reason()).containsExactly("invalid_scope");
+            assertThat(count("mcp_server_policy_data_scope_ignored_total", "invalid_scope")).isEqualTo(1.0);
+            assertThat(previous).isLessThan(engine.snapshot().revision());
         }
     }
 
     @Test
-    void aRepositoryThatIsDownLeavesThePreviousBundleAndTheServerKeepsDeciding() throws Exception {
-        try (PolicyEngine engine = engine(null)) {
-            gateway.main().offline(true);
-            engine.refresh(Channel.MAIN);
+    void anOverrideThatDoesNotValidateRefusesEveryCallUntilItIsFixed() {
+        try (PolicyEngine engine = engine(config())) {
+            gateway.policyData().override("override-opens-everything", "permit (principal, action, resource);");
+            engine.refresh();
 
-            assertThat(engine.mainRevision()).contains(B);
-            assertThat(engine.snapshot().main().revision()).isEqualTo(B);
-        }
-    }
+            assertThat(engine.gate(java.util.OptionalLong.empty())).extracting(d -> d.allowed(), d -> d.reason())
+                    .containsExactly(false, "overrides_invalid");
+            assertThat(count("mcp_server_policy_data_rejected_total", "override_invalid")).isEqualTo(1.0);
 
-    private static byte[] resource(String path) throws Exception {
-        try (java.io.InputStream in = PolicyEngineTest.class.getResourceAsStream(path)) {
-            return java.util.Objects.requireNonNull(in, path).readAllBytes();
-        }
-    }
+            gateway.policyData().removeOverride("override-opens-everything");
+            engine.refresh();
 
-    /** The bundle of the contracts 3.1.1 for revision B: the same policies on the schema before CC-136 (other bytes of mcp.cedarschema). */
-    private void publishBundleOfContracts311() throws Exception {
-        gateway.main().publishRaw(B, resource("/contracts-3.1.1-bundle/policies-" + B + ".tar.gz"),
-                resource("/contracts-3.1.1-bundle/policies-" + B + ".tar.gz.sig"));
-    }
-
-    @Test
-    void aBundleOnTheSchemaOfContracts3_1_IsRejectedAsASchemaMismatchAndTheCurrentOneStays() throws Exception {
-        gateway.main().publish(A);
-        try (PolicyEngine engine = engine(null)) {
-            publishBundleOfContracts311();
-            engine.refresh(Channel.MAIN);
-
-            assertThat(engine.mainRevision()).contains(A);
-            assertThat(rejected("schema_mismatch")).isEqualTo(1.0);
+            assertThat(engine.gate(java.util.OptionalLong.empty()).allowed()).isTrue();
         }
     }
 
     @Test
-    void aFirstBundleOnTheSchemaOfContracts3_1_DoesNotStartTheServer() throws Exception {
-        publishBundleOfContracts311();
+    void theCallsAreRefusedUnlessTheAdministratorApprovedTheHashOfTheOwnPolicies() {
+        try (PolicyEngine engine = engine(config())) {
+            assertThat(engine.gate(java.util.OptionalLong.empty()).allowed()).isTrue();
 
-        assertThatThrownBy(() -> engine(null)).isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("No policy bundle could be loaded");
-        assertThat(rejected("schema_mismatch")).isGreaterThanOrEqualTo(1.0);
-    }
+            gateway.policyData().unapproved();
+            engine.refresh();
+            assertThat(engine.gate(java.util.OptionalLong.empty()).reason()).isEqualTo("policies_not_approved");
 
-    /** The bundle of the contracts 4.1.0 for revision B: it still has the virtual server rules and the schema with vsScopes (other bytes of mcp.cedarschema). */
-    private void publishBundleOfContracts410() throws Exception {
-        gateway.main().publishRaw(B, resource("/contracts-4.1.0-bundle/policies-" + B + ".tar.gz"),
-                resource("/contracts-4.1.0-bundle/policies-" + B + ".tar.gz.sig"));
-    }
+            gateway.policyData().approvedPoliciesHash("sha256:" + "0".repeat(64));
+            engine.refresh();
+            assertThat(engine.gate(java.util.OptionalLong.empty()).reason()).isEqualTo("policies_differ");
 
-    @Test
-    void aBundleOnTheSchemaOfContracts4_IsRejectedAsASchemaMismatchAndTheCurrentOneStays() throws Exception {
-        gateway.main().publish(A);
-        try (PolicyEngine engine = engine(null)) {
-            publishBundleOfContracts410();
-            engine.refresh(Channel.MAIN);
-
-            assertThat(engine.mainRevision()).contains(A);
-            assertThat(rejected("schema_mismatch")).isEqualTo(1.0);
+            gateway.policyData().approved();
+            engine.refresh();
+            assertThat(engine.gate(java.util.OptionalLong.empty()).allowed()).isTrue();
         }
     }
 
     @Test
-    void aFirstBundleOnTheSchemaOfContracts4_DoesNotStartTheServer() throws Exception {
-        publishBundleOfContracts410();
+    void aRevisionThatIsNotHigherThanTheOneHeldIsNeverTaken() throws Exception {
+        try (PolicyEngine engine = engine(config())) {
+            gateway.policyData().allowedClients("claude-ai");
+            engine.refresh();
+            long held = engine.snapshot().revision();
 
-        assertThatThrownBy(() -> engine(null)).isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("No policy bundle could be loaded");
-        assertThat(rejected("schema_mismatch")).isGreaterThanOrEqualTo(1.0);
-    }
+            gateway.policyData().nextRevision(held - 1);
+            gateway.policyData().allowedClients("claude-code");
+            engine.refresh();
 
-    private PolicyEngine engineWithDevKey(boolean devstackProfile) throws Exception {
-        String dev = "20261026151100-17ba079";
-        gateway.main().publish(dev, "policies-" + dev + ".tar.gz.sig-by-dev-key");
-        McpPlatformProperties.Policy policy = policy(null);
-        policy.getMain().setKeyId("dev-policy-main");
-        policy.getMain().setPublicKey(new String(resource("/mcp-contracts/test-vectors/keys/dev-policy-bundle.pub.pem"),
-                java.nio.charset.StandardCharsets.UTF_8));
-        return PolicyEngine.create(policy, null, meters, devstackProfile);
-    }
-
-    @Test
-    void aDevKeyIdIsAcceptedOnlyInDevMode() throws Exception {
-        gateway.main().offline(false);
-        assertThatThrownBy(() -> engineWithDevKey(false)).as("allow-test-keys alone is not dev mode").isInstanceOf(IllegalStateException.class);
-        assertThat(rejected("test_key_not_allowed")).isGreaterThanOrEqualTo(1.0);
-        try (PolicyEngine engine = engineWithDevKey(true)) {
-            assertThat(engine.mainRevision()).contains("20261026151100-17ba079");
+            assertThat(gateway.policyData().revision()).isLessThanOrEqualTo(held);
+            assertThat(engine.snapshot().revision()).isEqualTo(held);
+            assertThat(engine.snapshot().allows("claude-ai")).as("the older data is not used").isTrue();
+            assertThat(count("mcp_server_policy_data_rejected_total", "older")).isEqualTo(1.0);
         }
     }
 
     @Test
-    void withoutABundleTheServerDoesNotStart() {
-        gateway.main().offline(true);
+    void aGatewayThatIsDownLeavesTheDataInUse() {
+        try (PolicyEngine engine = engine(config())) {
+            gateway.policyData().offline(true);
+            engine.refresh();
 
-        assertThatThrownBy(() -> engine(null)).isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("No policy bundle could be loaded");
-    }
-
-    @Test
-    void aBundleSignedWithAnotherKeyDoesNotStartTheServer() {
-        gateway.main().publish(B, "policies-" + B + ".tar.gz.sig-by-overrides-key");
-
-        assertThatThrownBy(() -> engine(null)).isInstanceOf(IllegalStateException.class);
-    }
-
-    @Test
-    void theEmergencyBundleIsLoadedOnTopOfTheMainOne() throws Exception {
-        gateway.overrides().publish(OVERRIDES);
-
-        try (PolicyEngine engine = engine(null)) {
-            assertThat(engine.snapshot().overrides()).isPresent();
-            assertThat(engine.snapshot().overrides().orElseThrow().revision()).isEqualTo(OVERRIDES);
+            assertThat(engine.snapshot().revision()).isEqualTo(gateway.policyData().revision());
+            assertThat(count("mcp_server_policy_data_fetch_failed_total", "io")).isEqualTo(1.0);
         }
     }
 
     @Test
-    void anOlderBundleIsNotAcceptedAfterARestartEither(@TempDir Path state) throws Exception {
-        try (PolicyEngine first = engine(state)) {
-            assertThat(first.mainRevision()).contains(B);
-        }
-        gateway.main().publish(A);
+    void aServerStartedWithoutAGatewayRefusesUntilItHasDataAndThenLoadsIt() {
+        gateway.policyData().offline(true);
+        McpPlatformProperties.PolicyData config = config();
+        config.setStartupTimeout(Duration.ofMillis(300));
+        try (PolicyEngine engine = engine(config)) {
+            assertThatThrownBy(engine::snapshot).isInstanceOf(PolicyUnavailableException.class);
 
-        assertThatThrownBy(() -> engine(state)).isInstanceOf(IllegalStateException.class);
-    }
+            gateway.policyData().offline(false);
+            engine.refresh();
 
-    @Test
-    void afterARestartTheCallsWaitForTheEmergencyBundleThatWasActive(@TempDir Path state) throws Exception {
-        gateway.overrides().publish(OVERRIDES);
-        try (PolicyEngine first = engine(state)) {
-            assertThat(first.snapshot().overrides()).isPresent();
-        }
-        gateway.overrides().offline(true);
-
-        try (PolicyEngine second = PolicyEngine.create(policy(state), null, meters)) {
-            assertThatThrownBy(second::snapshot).isInstanceOf(PolicyUnavailableException.class)
-                    .hasMessageContaining("overrides");
-            Thread.sleep(600);
-            assertThat(second.snapshot().main().revision()).as("after the grace the server serves, with an alarm").isEqualTo(B);
+            assertThat(engine.snapshot().revision()).isEqualTo(gateway.policyData().revision());
         }
     }
 
     @Test
-    void whileNoPolicyCanBeUsedACallIsUpstreamUnavailableAndAuditedAsPolicyUnavailable(@TempDir Path state) throws Exception {
-        gateway.overrides().publish(OVERRIDES);
-        try (PolicyEngine first = engine(state)) {
-            assertThat(first.snapshot().overrides()).isPresent();
+    void aServerTheGatewayDoesNotKnowYetGetsNoDataAndKeepsAsking() {
+        gateway.policyData().unregistered(true);
+        McpPlatformProperties.PolicyData config = config();
+        config.setStartupTimeout(Duration.ofMillis(300));
+        try (PolicyEngine engine = engine(config)) {
+            assertThat(engine.revision()).isEmpty();
+            assertThatThrownBy(engine::snapshot).isInstanceOf(PolicyUnavailableException.class);
         }
-        gateway.overrides().offline(true);
+    }
+
+    @Test
+    void whileNoDataIsLoadedACallIsUpstreamUnavailableAndAuditedAsPolicyUnavailable() {
+        gateway.policyData().offline(true);
+        McpPlatformProperties.PolicyData config = config();
+        config.setStartupTimeout(Duration.ofMillis(200));
         ch.qos.logback.classic.Logger auditLog = (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger("test.policy.unavailable");
         ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> lines = new ch.qos.logback.core.read.ListAppender<>();
         lines.start();
         auditLog.addAppender(lines);
-        try (PolicyEngine second = PolicyEngine.create(policy(state), null, meters)) {
-            pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry registry =
-                    new pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry(pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry.Unclassified.FAIL);
-            registry.register(new ReadThingTool());
-            pl.aiwcorpo.mcp.platform.resource.ResourcePolicy policy = new pl.aiwcorpo.mcp.platform.resource.ResourcePolicy(second,
-                    new pl.aiwcorpo.mcp.platform.resource.ResourceResolvers(java.util.List.of()), registry,
+        try (PolicyEngine engine = engine(config)) {
+            var registry = new pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry(pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry.Unclassified.FAIL);
+            registry.register(new RefTool("get_issue", "issueKey", "Jira::Issue"));
+            var policy = new pl.aiwcorpo.mcp.platform.resource.ResourcePolicy(engine,
+                    new pl.aiwcorpo.mcp.platform.resource.ResourceResolvers(List.of()), registry,
                     new pl.aiwcorpo.mcp.platform.observability.AuditLogger("test.policy.unavailable", "mcp-jira"), "mcp-jira", "jira",
-                    java.util.List.of("user-secret"), 200);
-            pl.aiwcorpo.mcp.platform.auth.CallerContext claims = new pl.aiwcorpo.mcp.platform.auth.CallerContext(
-                    "6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "jkowalski", java.util.List.of("mcp-jira-read"), "claude-code",
-                    "read_thing", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", "00000000000000-0000000", null);
-            try (pl.aiwcorpo.mcp.platform.resource.ResourceContext context =
-                         pl.aiwcorpo.mcp.platform.resource.ResourceContext.open(claims, "read_thing", Map.of())) {
+                    List.of("user-secret"), 200);
+            var claims = new pl.aiwcorpo.mcp.platform.auth.CallerContext("6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "jkowalski",
+                    List.of("mcp-jira-read"), "claude-code", "get_issue", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", 0L, null);
+            try (var context = pl.aiwcorpo.mcp.platform.resource.ResourceContext.open(claims, "get_issue", Map.of("issueKey", "ABC-1"))) {
                 assertThatThrownBy(policy::authorizeCall).isInstanceOf(pl.aiwcorpo.mcp.platform.error.SanitizedToolException.class)
                         .satisfies(error -> {
                             var refused = (pl.aiwcorpo.mcp.platform.error.SanitizedToolException) error;
@@ -282,62 +222,50 @@ class PolicyEngineTest {
             auditLog.detachAppender(lines);
         }
         assertThat(lines.list).singleElement().satisfies(line -> assertThat(line.getFormattedMessage())
-                .contains("\"event\":\"policy_decision\"", "\"decision\":\"deny\"", "\"reason\":\"policy_unavailable\"",
+                .contains("\"event\":\"policy_decision\"", "\"decision\":\"deny\"", "\"reason\":\"policy_data_unavailable\"",
                         "\"errorCode\":\"upstream_unavailable\"", "\"outcome\":\"error\""));
     }
 
-    private static java.util.Optional<String> awaitMainRevision(PolicyEngine engine, String revision) throws InterruptedException {
-        for (int i = 0; i < 100 && !engine.mainRevision().equals(java.util.Optional.of(revision)); i++) {
-            Thread.sleep(50);
+    @Test
+    void aTokenNamingANewerRevisionMakesTheServerAskBeforeItDecidesAndTheAnswerDecides() {
+        try (PolicyEngine engine = engine(config())) {
+            long held = engine.snapshot().revision();
+            gateway.policyData().allowedClients("claude-ai");
+            long newer = gateway.policyData().revision();
+
+            assertThat(engine.gate(java.util.OptionalLong.of(0)).allowed()).as("prv 0 (a gateway without data) forces nothing").isTrue();
+            assertThat(engine.revision()).hasValue(held);
+            assertThat(engine.gate(java.util.OptionalLong.of(newer)).allowed()).isTrue();
+
+            assertThat(engine.revision()).as("the data was asked for before the decision").hasValue(newer);
         }
-        return engine.mainRevision();
     }
 
     @Test
-    void aRepositoryThatStopsInTheMiddleOfTheBodyEndsThePullAtTheTimeLimitAndTheHintDoesNotWait() throws Exception {
-        gateway.main().publish(A);
-        McpPlatformProperties.Policy policy = policy(null);
-        policy.setReadTimeout(Duration.ofMillis(800));
-        policy.getMain().setRefreshInterval(Duration.ofHours(1));
-        gateway.overrides().publish(OVERRIDES);
-        McpPlatformProperties.Policy withOverrides = policy(null);
-        withOverrides.setReadTimeout(Duration.ofMillis(800));
-        withOverrides.getMain().setRefreshInterval(Duration.ofHours(1));
-        try (PolicyEngine engine = PolicyEngine.create(withOverrides, null, meters)) {
-            gateway.main().publish(B).stall(true);
+    void aTokenNamingARevisionTheGatewayCannotServeIsRefusedNotEvaluatedWithOlderData() {
+        try (PolicyEngine engine = engine(config())) {
+            long held = engine.snapshot().revision();
+
+            assertThat(engine.gate(java.util.OptionalLong.of(held + 5)).reason()).isEqualTo("policy_data_unavailable");
+            assertThat(engine.revision()).hasValue(held);
+        }
+    }
+
+    @Test
+    void aGatewayThatStopsInTheMiddleOfTheBodyEndsTheRequestAtTheTimeLimitAndTheCallIsRefused() {
+        McpPlatformProperties.PolicyData config = config();
+        config.setReadTimeout(Duration.ofMillis(800));
+        try (PolicyEngine engine = engine(config)) {
+            long loaded = engine.revision().orElseThrow();
+            gateway.policyData().allowedClients("claude-ai").stall(true);
+            long later = gateway.policyData().revision();
 
             long start = System.nanoTime();
-            engine.hintRevision(B);
-            assertThat(Duration.ofNanos(System.nanoTime() - start)).as("the hint returns at once").isLessThan(Duration.ofMillis(300));
-
-            start = System.nanoTime();
-            engine.refresh(Channel.MAIN);
-            assertThat(Duration.ofNanos(System.nanoTime() - start)).as("a stalled body ends at the limit")
-                    .isLessThan(Duration.ofSeconds(3));
-            assertThat(engine.mainRevision()).contains(A);
-            gateway.overrides().publish("20261026121700-f607182");
-            start = System.nanoTime();
-            engine.refresh(Channel.OVERRIDES);
-            assertThat(Duration.ofNanos(System.nanoTime() - start)).as("a stuck main does not hold up overrides")
-                    .isLessThan(Duration.ofSeconds(3));
+            assertThat(engine.gate(java.util.OptionalLong.of(later)).reason()).isEqualTo("policy_data_unavailable");
+            assertThat(Duration.ofNanos(System.nanoTime() - start)).as("a stalled body ends at the limit").isLessThan(Duration.ofSeconds(3));
+            assertThat(engine.revision()).hasValue(loaded);
         } finally {
-            gateway.main().stall(false);
-        }
-    }
-
-    @Test
-    void aTokenNamingANewerRevisionMakesTheServerPullAtOnce() throws Exception {
-        gateway.main().publish(A);
-        McpPlatformProperties.Policy policy = policy(null);
-        policy.getMain().setRefreshInterval(Duration.ofHours(1));
-        try (PolicyEngine engine = PolicyEngine.create(policy, null, meters)) {
-            gateway.main().publish(B);
-
-            engine.hintRevision("00000000000000-0000000");
-            assertThat(engine.mainRevision()).as("the all-zero revision of a gateway without bundle is no hint").contains(A);
-            engine.hintRevision(B);
-
-            assertThat(awaitMainRevision(engine, B)).contains(B);
+            gateway.policyData().stall(false);
         }
     }
 }

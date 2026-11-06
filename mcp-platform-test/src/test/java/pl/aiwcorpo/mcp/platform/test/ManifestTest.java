@@ -133,7 +133,21 @@ class ManifestTest {
         assertThat(tool(manifest, "find_issues").get("resourceRefs")).isEmpty();
         List<String> types = new ArrayList<>();
         manifest.get("resourceTypes").forEach(type -> types.add(type.get("type").asString()));
-        assertThat(types).containsExactlyInAnyOrder("Jira::Project", "Jira::Issue", "GitLab::Project", "GitLab::Group");
+        assertThat(types).containsExactlyInAnyOrder("Jira::Project", "Jira::Issue");
+        assertThat(manifest.at("/resourceTypes/0/idPattern").asString()).startsWith("^");
+    }
+
+    @Test
+    void thePoliciesOfTheJarAndTheirHashAreInTheManifest() throws Exception {
+        JsonNode manifest = manifest();
+
+        assertThat(manifest.at("/policies/namespace").asString()).isEqualTo("Jira");
+        assertThat(manifest.at("/policies/schema").asString()).contains("namespace Jira");
+        List<String> names = new ArrayList<>();
+        manifest.at("/policies/files").forEach(file -> names.add(file.get("name").asString()));
+        assertThat(names).containsExactly("forbid-restricted.cedar", "read.cedar", "update.cedar");
+        assertThat(manifest.get("policiesHash").asString()).isEqualTo(pl.aiwcorpo.mcp.manifest.PoliciesHash.of(
+                manifest.get("policies").toString(), manifest.get("resourceTypes").toString()));
     }
 
     @Test
