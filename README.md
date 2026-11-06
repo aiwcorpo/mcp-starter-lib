@@ -584,7 +584,8 @@ grantable in the scope mapping, `earlyScopeCheck` lets the gateway check an argu
 for types whose scope is the exact id), and `classification` names the attribute the builder normalizes (`restricted` is the canonical
 value that policies compare with) and whether it is required.
 
-The starter loads and validates these files when the server starts, with `PolicyFragments.validateFragment` of the contracts, the check
+The files are read only from the application's own code (one place on the classpath): if another jar ships files under `mcp/policies/`, the
+server does not start. The starter loads and validates them when the server starts, with `PolicyFragments.validateFragment` of the contracts, the check
 the gateway repeats at registration: the fragment composes with the base schema and validates in strict mode, declares nothing outside
 its namespace, every type has `scopes`, the policies validate against the composed schema (a `forbid` that can never match is an
 error), and the entity types are exactly the declared types with the declared attributes and parents. A server whose files fail does not
@@ -624,7 +625,9 @@ A call is evaluated only when the gate of the contracts (`PolicyDataGate`, `mcp-
 - The `revision` is a counter that only grows. The server never takes data whose revision is not higher than the one it holds (the log has
   `event=policy_data_rejected`, the counter `mcp_server_policy_data_rejected_total{reason="older"}` counts an older one). When the `prv` of a
   token is newer than the data held, the server asks the gateway before it decides (the call waits for the answer, at most `read-timeout`) and
-  refuses the call when the answer is not at least that new. A `prv` of `0` (a gateway without data) forces nothing.
+  refuses the call when the answer is not at least that new. Calls that wait for the same revision share one request, none waits longer than
+  `read-timeout`, and a request that failed is not repeated for 3 seconds. A newer revision whose document is malformed (an override with a duplicate
+  id, a scope mapping that is not an array) is taken as a snapshot that refuses every call, not ignored in favour of the older data. A `prv` of `0` (a gateway without data) forces nothing.
 - Overrides have ids `override-<name>`, are `forbid` only and are validated against the server's composed schema.
 - Scope ids the server cannot use (a type it does not declare, a local part that does not match its `scopePattern`) are skipped and
   reported, not hidden: `event=policy_data_scope_ignored` and `mcp_server_policy_data_scope_ignored_total{reason}`. The rest of the data is used.
@@ -632,12 +635,18 @@ A call is evaluated only when the gate of the contracts (`PolicyDataGate`, `mcp-
   Data that cannot be used at all (a scope mapping that is not an array) is rejected as a whole and the previous snapshot stays
   (`mcp_server_policy_data_rejected_total{reason="unusable"}`); a failure to fetch is `event=policy_data_fetch_failed` and
   `mcp_server_policy_data_fetch_failed_total{reason}`.
-- `policy-data.tls-name` is the name the gateway's certificate must carry when the address in `url` is not in it. It is checked against
+- Outside `dev` the connection always has the server's own certificate and the internal CA: without a usable SSL bundle the start fails, there is
+  no fallback to the JVM default trust. `policy-data.tls-name` is the name the gateway's certificate must carry when the address in `url` is not in it. It is checked against
   the subject alternative names (an `iPAddress` entry for an address), after the chain has been checked against the internal CA of the SSL
   bundle.
 
-The decision on `call` on a tool is the gateway's: the server does not repeat it (entity-builder.md, section 12b: the server evaluates
-resources only). A tool without `@ResourceRef` arguments is therefore not evaluated on the server beyond the gate and the client check.
+The decision on `call` on a tool is the gateway's, and the server repeats it as defence in depth: for every tool call it evaluates the platform
+call policies of the contracts (`McpCedarSchema.platformPolicies()`) with the `Tool` built from its own manifest (`requiredGroup` is
+`mcp-<system>-read`, `-write` or `-destructive` by the risk; `context.refs` come from the arguments of the types declared `earlyScopeCheck`),
+with the same snapshot as every other decision of the call. A deny is `access_denied`, as at the gateway. The gate, the client check, the call
+decision and the resource decisions of one call all use the one snapshot the gate returned (`PolicyEngine.gate` gives it with the decision, and
+it is kept in the `ResourceContext`), so a swap of the data during a call changes nothing for that call and a gate refusal in the middle of a
+tool is `upstream_unavailable` (it is not turned into a denial or a `false`).
 
 ### Testing your policies
 

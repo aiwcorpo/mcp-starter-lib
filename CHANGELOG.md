@@ -20,11 +20,12 @@ Kontrakty 7.0.0 usuwają `mcp-policy-bundle`: starter nie zależy już od paczek
   (`policy-data.url`, `tls-name`, `ssl-bundle`), z odpytywaniem przez `ETag` i `If-None-Match`. Bramka `PolicyDataGate` z kontraktów: wywołanie jest
   oceniane tylko przy załadowanych danych, zatwierdzonym `policiesHash` własnych polityk i poprawnych nadpisaniach; inaczej `upstream_unavailable`
   z powodem `policy_data_unavailable`, `policies_not_approved`, `policies_differ` albo `overrides_invalid`. Rewizja to licznik: starter nie przyjmuje
-  rewizji nie wyższej od trzymanej. `prv` nowsze od danych: odświeżenie przed oceną (wywołanie czeka najwyżej `read-timeout`), a gdy odpowiedź nie jest
-  dość nowa, odmowa.
+  rewizji nie wyższej od trzymanej. `prv` nowsze od danych: odświeżenie przed oceną (jedno żądanie na rewizję, czekanie najwyżej `read-timeout`, 3 s pamięci nieudanego żądania), a gdy odpowiedź nie jest
+  dość nowa, odmowa. Nowsza rewizja z niepoprawnym dokumentem to migawka odmawiająca wszystkiego. Bramka zwraca migawkę, którą wywołanie decyduje we wszystkich krokach.
+  Poza `dev` połączenie z gatewayem zawsze używa certyfikatu własnego serwera (bez SSL bundle start się nie udaje); polityki czytane tylko z własnego kodu aplikacji.
 - Zestaw polityk serwera: wygenerowane polityki platformy dla zadeklarowanych typów (`PlatformServerPolicies`: dane `restricted` przez klasyfikację typu
   i rodziców, konto serwisowe poza zakresami użytkownika), fragment serwera i nadpisania, scalone przez `PolicyFragments.merge` (powtórzone `@id` to błąd).
-  Dozwoleni klienci (`azp`) sprawdzani w kodzie przed Cedar. Serwer nie decyduje o `call` na narzędziu: to decyzja gatewaya.
+  Dozwoleni klienci (`azp`) sprawdzani w kodzie przed Cedar. Serwer powtarza decyzję gatewaya o `call` (polityki platformy z kontraktów, `Tool` z własnego manifestu) na tej samej migawce, co reszta wywołania (obrona w głąb).
 - Zakresy, których nie da się użyć (typ spoza deklaracji, część lokalna niezgodna z `scopePattern`), są pomijane i zgłaszane (`event=policy_data_scope_ignored`).
 - Zmienione: `CallerContext.policyRevision()` jest `long` (claim `prv` to licznik), `AuditLogger.policyDenied` przyjmuje `Long`.
 - Usunięte: `MCP_POLICY_*` i całe `aiwcorpo.mcp.platform.policy.*` (klucze, `state-dir`, `allow-test-keys`, nadpisania paczkami); pozostawione w konfiguracji
