@@ -13,6 +13,7 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
+import pl.aiwcorpo.mcp.platform.policy.ServerPolicies;
 
 /**
  * Builds the manifest once the MCP server is up, checks it (a failure stops the server) and keeps it for
@@ -26,6 +27,7 @@ public final class ManifestCheck implements SmartInitializingSingleton {
     private final ObjectProvider<McpSyncServer> servers;
     private final McpPlatformProperties props;
     private final ToolRiskRegistry registry;
+    private final ObjectProvider<ServerPolicies> policies;
     private final boolean strict;
     private final boolean devEnvironment;
     private volatile String manifest;
@@ -35,20 +37,21 @@ public final class ManifestCheck implements SmartInitializingSingleton {
      *               manifest is served with a warning instead of stopping the server
      */
     public ManifestCheck(ObjectProvider<McpSyncServer> servers, McpPlatformProperties props, ToolRiskRegistry registry,
-                         boolean strict) {
-        this(servers, props, registry, strict, false);
+                         ObjectProvider<ServerPolicies> policies, boolean strict) {
+        this(servers, props, registry, policies, strict, false);
     }
 
     /**
      * @param devEnvironment true with the {@code devstack} profile: the manifest then carries {@code environment: dev} (CC-138)
      */
     public ManifestCheck(ObjectProvider<McpSyncServer> servers, McpPlatformProperties props, ToolRiskRegistry registry,
-                         boolean strict, boolean devEnvironment) {
+                         ObjectProvider<ServerPolicies> policies, boolean strict, boolean devEnvironment) {
         this.devEnvironment = devEnvironment;
         this.strict = strict;
         this.servers = servers;
         this.props = props;
         this.registry = registry;
+        this.policies = policies;
     }
 
     @Override
@@ -57,7 +60,7 @@ public final class ManifestCheck implements SmartInitializingSingleton {
         if (server == null) {
             return;
         }
-        manifest = ManifestGenerator.generate(props, registry, server.listTools(), strict, devEnvironment);
+        manifest = ManifestGenerator.generate(props, registry, server.listTools(), policies.getIfAvailable(), strict, devEnvironment);
         String file = props.getManifest().getOutputFile();
         if (file != null && !file.isBlank()) {
             try {

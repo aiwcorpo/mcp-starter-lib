@@ -58,9 +58,18 @@ class SchemaLimitedToolCallbacksTest {
 
         @Tool(name = "c", description = "d")
         @ToolRisk(RiskLevel.READ_ONLY)
-        public String c(@ArgumentLimits(maxLength = 20, contractPattern = "JiraIssueKey") String issue,
-                        @ArgumentLimits(contractPattern = "GitLabProjectPath") String project, State state) {
+        public String c(@ArgumentLimits(maxLength = 20, resourceType = "Jira::Issue") String issue,
+                        @ArgumentLimits(contractPattern = "GroupName") String group,
+                        @ArgumentLimits(maxLength = 10, resourceType = "Jira::Project") String project, State state) {
             return issue;
+        }
+    }
+
+    static class UndeclaredResourceType {
+        @Tool(name = "c", description = "d")
+        @ToolRisk(RiskLevel.READ_ONLY)
+        public String c(@ArgumentLimits(maxLength = 20, resourceType = "Jira::Sprint") String sprint) {
+            return sprint;
         }
     }
 
@@ -78,10 +87,20 @@ class SchemaLimitedToolCallbacksTest {
         JsonNode properties = JsonMapper.builder().build().readTree(callback.getToolDefinition().inputSchema())
                 .path("properties");
 
-        assertThat(properties.path("issue").path("pattern").asString()).isEqualTo("^[A-Z][A-Z0-9_]{1,9}-[1-9][0-9]{0,9}$");
+        assertThat(properties.path("issue").path("pattern").asString()).as("the idPattern of the declaration")
+                .isEqualTo("^[A-Z][A-Z0-9_]{1,9}-[1-9][0-9]{0,9}$");
         assertThat(properties.path("issue").path("maxLength").asInt()).isEqualTo(20);
-        assertThat(properties.path("project").path("maxLength").asInt()).as("from the definition").isEqualTo(1024);
+        assertThat(properties.path("group").path("maxLength").asInt()).as("from the definition")
+                .isEqualTo(SchemaLimitedToolCallbacks.contractDefinition("GroupName").path("maxLength").asInt());
+        assertThat(properties.path("project").path("maxLength").asInt()).isEqualTo(10);
         assertThat(properties.path("state").has("maxLength")).as("enums need no length").isFalse();
+    }
+
+    @Test
+    void aResourceTypeThatIsNotDeclaredStopsTheServer() {
+        assertThatThrownBy(() -> SchemaLimitedToolCallbacks.of(new UndeclaredResourceType()))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("Jira::Sprint")
+                .hasMessageContaining("resource-types.json");
     }
 
     @Test

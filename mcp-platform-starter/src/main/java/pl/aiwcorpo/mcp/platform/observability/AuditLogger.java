@@ -85,10 +85,10 @@ public class AuditLogger {
      * @param resourceId   canonical id, or {@code null}; left out when it contains characters C8 does not allow in a log field
      * @param parent       {@code <Namespace>::<Type>::<id>} of the parent, or {@code null}
      * @param reason       {@code policy_forbid} (the policy denied) or {@code not_granted} (not resolved, no resource)
-     * @param revision     revision of the bundle that decided
+     * @param revision     revision of the policy data that decided
      */
     public void policyDenied(CallerContext caller, String tool, RiskLevel risk, String resourceType, String resourceId,
-                             String parent, String reason, String revision, String errorCode) {
+                             String parent, String reason, Long revision, String errorCode) {
         Map<String, Object> event = base("policy_decision", caller);
         event.put("server", componentId);
         event.put("tool", tool);

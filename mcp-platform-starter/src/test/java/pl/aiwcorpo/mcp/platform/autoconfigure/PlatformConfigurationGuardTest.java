@@ -16,10 +16,8 @@ class PlatformConfigurationGuardTest {
         props.setServerId("mcp-jira");
         props.getInternalJwt().setJwksUri("https://mcp-gateway.internal:8443/.well-known/jwks.json");
         props.getCredential().setConnectUrl("http://localhost:18090/connections?system={system}");
-        props.getPolicy().getMain().setUrl("https://policies.internal/policies/main/latest.json");
-        props.getPolicy().getMain().setKeyId("policies-main-2026");
-        props.getPolicy().getMain().setPublicKeyFile("/etc/mcp/policies-main.pub.pem");
-        props.getPolicy().setStateDir("/var/lib/mcp/policy-state");
+        props.getPolicyData().setUrl("https://mcp-gateway.internal:8443/internal/v1/policy-data");
+        props.getPolicyData().setSslBundle("mcp-internal");
         props.getManifest().setVersion("1.0.0");
         props.getManifest().setInternalUrl("https://mcp-jira.internal:8443/mcp");
         props.getManifest().setAcceptedCredentialTypes(java.util.List.of("user-secret"));
@@ -46,38 +44,59 @@ class PlatformConfigurationGuardTest {
     }
 
     @Test
-    void thePolicyBundleMustBeConfiguredAndIsHardenedOutsideDev() {
+    void thePolicyDataMustBeConfiguredAndIsHardenedOutsideDev() {
         McpPlatformProperties none = valid();
-        none.getPolicy().getMain().setUrl(null);
-        none.getPolicy().getMain().setKeyId(null);
-        none.getPolicy().getMain().setPublicKeyFile(null);
-        assertThatThrownBy(() -> check(none, production())).hasMessageContaining("policy.main.url")
-                .hasMessageContaining("policy.main.key-id").hasMessageContaining("policy.main.public-key");
+        none.getPolicyData().setUrl(null);
+        assertThatThrownBy(() -> check(none, production())).hasMessageContaining("policy-data.url must point at GET /internal/v1/policy-data");
 
         McpPlatformProperties http = valid();
-        http.getPolicy().getMain().setUrl("http://policies.internal/latest.json");
-        assertThatThrownBy(() -> check(http, production())).hasMessageContaining("policy.main.url must be an absolute https");
+        http.getPolicyData().setUrl("http://mcp-gateway.internal:8080/internal/v1/policy-data");
+        assertThatThrownBy(() -> check(http, production())).hasMessageContaining("policy-data.url must be an absolute https");
 
-        McpPlatformProperties noState = valid();
-        noState.getPolicy().setStateDir(null);
-        assertThatThrownBy(() -> check(noState, production())).hasMessageContaining("policy.state-dir is required");
+        McpPlatformProperties noBundle = valid();
+        noBundle.getPolicyData().setSslBundle(null);
+        assertThatThrownBy(() -> check(noBundle, production())).hasMessageContaining("policy-data.ssl-bundle (or server.ssl.bundle)");
+        assertThatCode(() -> check(noBundle, production().withProperty("server.ssl.bundle", "server"))).doesNotThrowAnyException();
 
-        McpPlatformProperties testKeys = valid();
-        testKeys.getPolicy().setAllowTestKeys(true);
-        assertThatThrownBy(() -> check(testKeys, production())).hasMessageContaining("policy.allow-test-keys");
-
-        McpPlatformProperties overridesWithoutKey = valid();
-        overridesWithoutKey.getPolicy().getOverrides().setUrl("https://policies.internal/overrides/latest.json");
-        assertThatThrownBy(() -> check(overridesWithoutKey, production())).hasMessageContaining("policy.overrides.key-id");
+        McpPlatformProperties interval = valid();
+        interval.getPolicyData().setRefreshInterval(java.time.Duration.ZERO);
+        assertThatThrownBy(() -> check(interval, production())).hasMessageContaining("refresh-interval and retry-interval must be positive");
     }
 
     @Test
-    void devMayUseHttpTestKeysAndNoStateDirectory() {
+    void theRemovedPolicyBundleSettingsStopTheStartWithThePointerToTheNewOnes() {
+        MockEnvironment env = production().withProperty("aiwcorpo.mcp.platform.policy.main.url", "https://policies.internal/latest.json");
+
+        assertThatThrownBy(() -> check(valid(), env)).hasMessageContaining("policy.* (the signed policy bundles")
+                .hasMessageContaining("removed in 4.0.0").hasMessageContaining("policy-data.url");
+    }
+
+    @Test
+    void anAdapterNeedsNoPolicyData() {
+        McpPlatformProperties adapter = valid();
+        adapter.getPolicyData().setUrl(null);
+        adapter.getInternalJwt().setReceiverMode(pl.aiwcorpo.mcp.platform.auth.ReceiverMode.ADAPTER);
+
+        assertThatCode(() -> check(adapter, production())).doesNotThrowAnyException();
+    }
+
+    @Test
+    void aServerIdIsMcpAndASystemOfLowerCaseLettersAndDigitsWhateverItIs() {
+        McpPlatformProperties notes = valid();
+        notes.setServerId("mcp-notes");
+        assertThatCode(() -> check(notes, production())).doesNotThrowAnyException();
+
+        McpPlatformProperties dashed = valid();
+        dashed.setServerId("mcp-my-notes");
+        assertThatThrownBy(() -> check(dashed, production())).hasMessageContaining("server-id must be set to mcp-<system>");
+    }
+
+    @Test
+    void devMayUseHttpForThePolicyData() {
         DeploymentSignalAssumption.assumeDeveloperMachine();
         McpPlatformProperties props = valid();
-        props.getPolicy().getMain().setUrl("http://127.0.0.1:18747/policies/main/latest.json");
-        props.getPolicy().setStateDir(null);
-        props.getPolicy().setAllowTestKeys(true);
+        props.getPolicyData().setUrl("http://127.0.0.1:18747/internal/v1/policy-data");
+        props.getPolicyData().setSslBundle(null);
         props.getInternalJwt().setJwksUri("http://127.0.0.1:9/jwks.json");
         props.getMtls().setRequired(false);
 
@@ -145,7 +164,6 @@ class PlatformConfigurationGuardTest {
     void devstackAcceptsTestKeysOnlyWithBothAcknowledgements() {
         McpPlatformProperties props = valid();
         props.getInternalJwt().setAllowTestKeys(true);
-        props.getPolicy().setAllowTestKeys(true);
 
         assertThatCode(() -> checkWithProcessEnvironment(props, devstack(true), true)).doesNotThrowAnyException();
         assertThatThrownBy(() -> checkWithProcessEnvironment(props, devstack(true), false)).hasMessageContaining("two acknowledgements");
@@ -171,13 +189,12 @@ class PlatformConfigurationGuardTest {
         props.getInternalJwt().setAllowTestKeys(true);
         props.getInternalJwt().setReplayStore(McpPlatformProperties.ReplayStore.MEMORY);
         props.getMtls().setRequired(false);
-        props.getPolicy().getMain().setUrl("http://policies.internal/latest.json");
-        props.getPolicy().setStateDir(null);
+        props.getPolicyData().setUrl("http://mcp-gateway.internal:8080/internal/v1/policy-data");
         props.setAuthMode(AuthMode.DEV_PAT);
 
         assertThatThrownBy(() -> checkWithProcessEnvironment(props, devstack(true), true))
                 .hasMessageContaining("replay-store=memory").hasMessageContaining("mtls.required=false")
-                .hasMessageContaining("policy.main.url must be an absolute https").hasMessageContaining("state-dir is required")
+                .hasMessageContaining("policy-data.url must be an absolute https")
                 .hasMessageContaining("dev-pat");
     }
 
@@ -190,7 +207,6 @@ class PlatformConfigurationGuardTest {
         prod.setActiveProfiles("prod");
         McpPlatformProperties withKeys = valid();
         withKeys.getInternalJwt().setAllowTestKeys(true);
-        withKeys.getPolicy().setAllowTestKeys(true);
 
         assertThatThrownBy(() -> checkWithProcessEnvironment(props, both, true))
                 .hasMessageContaining("'devstack' profile must be the only active profile");
@@ -292,18 +308,6 @@ class PlatformConfigurationGuardTest {
 
         assertThatThrownBy(() -> check(valid(), env)).hasMessageContaining("guard.*").hasMessageContaining("pat-header-prefix");
         assertThat(PlatformConfigurationGuard.DEV_PROFILE).isEqualTo("dev");
-    }
-
-    @Test
-    void aSystemOutsideTheContractIsRefusedOutsideDevAndOnlyWarnedInDev() {
-        DeploymentSignalAssumption.assumeDeveloperMachine();
-        McpPlatformProperties props = valid();
-        props.setServerId("mcp-example");
-
-        assertThatThrownBy(() -> check(props, production())).hasMessageContaining("system 'example' is not a SystemId");
-        assertThatCode(() -> check(props, profiles("dev"))).doesNotThrowAnyException();
-        assertThat(PlatformConfigurationGuard.SYSTEM_IDS)
-                .containsExactlyInAnyOrder("jira", "confluence", "gitlab", "servicedesk", "opensearch");
     }
 
     @Test

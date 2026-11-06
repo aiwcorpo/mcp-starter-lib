@@ -37,8 +37,8 @@ import org.springframework.core.env.MapPropertySource;
  * <p>With {@code dev} as the only active profile the platform also forces, above the server's own
  * {@code application*.yml} (command line, system properties and environment variables still win), what a local run
  * on a developer's machine cannot have: {@code server.ssl.enabled=false} (no certificates), {@code mtls.required=false},
- * {@code internal-jwt.replay-store=memory} (no Redis) and an empty {@code internal-jwt.jwks-ssl-bundle} (no internal
- * CA). So the configuration of a real server starts in {@code dev} as it is, without per-run overrides. This is safe
+ * {@code internal-jwt.replay-store=memory} (no Redis) and empty {@code internal-jwt.jwks-ssl-bundle} and
+ * {@code policy-data.ssl-bundle} (no internal CA, no server certificate). So the configuration of a real server starts in {@code dev} as it is, without per-run overrides. This is safe
  * for the same reason the rest of {@code dev} is: the guard refuses a non-loopback {@code server.address} in {@code dev}.
  * {@code allow-test-keys} is not forced; set it where the gateway signs with the published test keys.
  *
@@ -85,7 +85,8 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
                     "server.ssl.enabled", "false",
                     "aiwcorpo.mcp.platform.mtls.required", "false",
                     "aiwcorpo.mcp.platform.internal-jwt.replay-store", "memory",
-                    "aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle", ""));
+                    "aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle", "",
+                    "aiwcorpo.mcp.platform.policy-data.ssl-bundle", ""));
             // A value the server's own configuration sets differently is what a deployment looks like.
             List<String> changed = overrides.entrySet().stream()
                     .filter(entry -> environment.getProperty(entry.getKey()) != null

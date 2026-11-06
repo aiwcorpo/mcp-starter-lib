@@ -264,7 +264,7 @@ public final class InternalJwtVerifier {
                 text(claims, "azp"),
                 text(claims, "tool"),
                 claims.get("rid").asString(),
-                claims.get("prv").asString(),
+                claims.get("prv").asLong(),
                 mfa == null || !mfa.canConvertToLong() ? null : mfa.asLong(),
                 text(claims, "mcp_risk"),
                 text(claims, "mcp_action"));

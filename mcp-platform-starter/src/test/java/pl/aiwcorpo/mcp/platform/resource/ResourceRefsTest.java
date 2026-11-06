@@ -199,7 +199,7 @@ class ResourceRefsTest {
             return null;
         }
 
-        public String badType(@ResourceRef(type = "Jira::Nothing") String id) {
+        public String badType(@ResourceRef(type = "jira-nothing") String id) {
             return null;
         }
     }
@@ -277,7 +277,7 @@ class ResourceRefsTest {
     @Test
     void anArgumentThatIsNotAnIdentifierOrNamesAnUnknownTypeOrTwoResolversIsRefused() {
         assertThatThrownBy(() -> ResourceRefs.arguments(method("badArgument"))).hasMessageContaining("@ResourceRef");
-        assertThatThrownBy(() -> ResourceRefs.arguments(method("badType"))).hasMessageContaining("Jira::Nothing");
+        assertThatThrownBy(() -> ResourceRefs.arguments(method("badType"))).hasMessageContaining("jira-nothing");
         assertThatThrownBy(() -> ResourceRefs.arguments(method("twoResolvers"))).hasMessageContaining("different resolvers");
     }
 }

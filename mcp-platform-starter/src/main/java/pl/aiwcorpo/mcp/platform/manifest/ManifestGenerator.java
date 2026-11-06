@@ -8,17 +8,16 @@ import com.networknt.schema.SpecificationVersion;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import pl.aiwcorpo.mcp.manifest.DefinitionHash;
 import pl.aiwcorpo.mcp.manifest.ManifestRules;
+import pl.aiwcorpo.mcp.platform.auth.ReceiverMode;
 import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 import pl.aiwcorpo.mcp.platform.guard.RiskLevel;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
+import pl.aiwcorpo.mcp.platform.policy.ServerPolicies;
 import pl.aiwcorpo.mcp.platform.resource.ResourceBinding;
-import pl.aiwcorpo.mcp.platform.resource.ResourceRefs;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ArrayNode;
@@ -28,7 +27,8 @@ import tools.jackson.databind.node.ObjectNode;
  * The C6 manifest of this server, built from what the server really publishes: the tool definitions of
  * {@code tools/list} (so the {@code definitionHash} the gateway pins is the hash of exactly what a client is shown), the
  * risk, action and {@code resourceRefs} the platform registered from the annotations, and the configuration in
- * {@code aiwcorpo.mcp.platform.manifest}. Before it is served it is checked against {@code server-manifest.schema.json}
+ * {@code aiwcorpo.mcp.platform.manifest}, plus the {@code resourceTypes}, the {@code policies} fragment and the {@code policiesHash} of the
+ * policies in the server's jar ({@link ServerPolicies}); an adapter has none of them. Before it is served it is checked against {@code server-manifest.schema.json}
  * and the semantic rules of mcp-manifest, the checks the gateway makes at registration; a manifest that fails them
  * stops the server, so a deployment never publishes a manifest the gateway would reject.
  */
@@ -39,33 +39,18 @@ public final class ManifestGenerator {
     private static final Schema MANIFEST_SCHEMA = SchemaRegistry.withDefaultDialect(SpecificationVersion.DRAFT_2020_12)
             .getSchema(SchemaLocation.of("classpath:mcp-contracts/schemas/server-manifest.schema.json"));
 
-    /** Attributes the resolvers fill and the parent of a type: the entity model of {@code mcp.cedarschema}. */
-    private static final Map<String, List<String>> ATTRIBUTES = Map.of(
-            "Jira::Project", List.of("key", "category"),
-            "Jira::Issue", List.of("key", "project"),
-            "Confluence::Space", List.of("key", "labels"),
-            "Confluence::Page", List.of("id", "space", "ancestorIds"),
-            "GitLab::Group", List.of("path", "classification", "ancestorClassifications"),
-            "GitLab::Project", List.of("path", "group", "classification", "ancestorClassifications"),
-            "OpenSearch::Index", List.of("name", "tags"),
-            "ServiceDesk::Queue", List.of("id", "classification"),
-            "ServiceDesk::Ticket", List.of("id", "queue"));
-    private static final Map<String, String> PARENTS = Map.of(
-            "Jira::Issue", "Jira::Project",
-            "Confluence::Page", "Confluence::Space",
-            "GitLab::Project", "GitLab::Group",
-            "ServiceDesk::Ticket", "ServiceDesk::Queue");
-
     private ManifestGenerator() {
     }
 
     /**
+     * @param policies the policies of the server's jar, whose declarations and fragment go into the manifest with their hash; {@code null}
+     *                 for the {@code adapter} receiver mode, where the manifest has neither
      * @param published the tools as the MCP server lists them
      * @throws IllegalStateException when the manifest is not one the gateway would accept
      */
     public static String generate(McpPlatformProperties props, ToolRiskRegistry registry, List<McpSchema.Tool> published,
-                                  boolean strict) {
-        return generate(props, registry, published, strict, false);
+                                  ServerPolicies policies, boolean strict) {
+        return generate(props, registry, published, policies, strict, false);
     }
 
     /**
@@ -73,7 +58,13 @@ public final class ManifestGenerator {
      *                       gateway in production mode rejects ({@code environment_mismatch}). Otherwise the field is left out, which means production.
      */
     public static String generate(McpPlatformProperties props, ToolRiskRegistry registry, List<McpSchema.Tool> published,
-                                  boolean strict, boolean devEnvironment) {
+                                  ServerPolicies policies, boolean strict, boolean devEnvironment) {
+        boolean adapter = props.getInternalJwt().getReceiverMode() == ReceiverMode.ADAPTER;
+        if (adapter != (policies == null)) {
+            throw new IllegalStateException(adapter
+                    ? "an adapter has no policies of the platform: its manifest carries neither resourceTypes nor policies"
+                    : "a server built on the starter has policies (mcp/policies/): the manifest carries them and their hash");
+        }
         ObjectNode manifest = JSON.createObjectNode();
         manifest.put("serverId", props.getServerId());
         manifest.put("version", props.getManifest().getVersion());
@@ -82,30 +73,27 @@ public final class ManifestGenerator {
         if (devEnvironment) {
             manifest.put("environment", "dev");
         }
+        if (adapter) {
+            manifest.put("source", "adapter");
+        }
         ObjectNode credential = manifest.putObject("credential");
         credential.put("required", props.getManifest().isCredentialRequired());
         ArrayNode accepted = credential.putArray("acceptedTypes");
         props.getManifest().getAcceptedCredentialTypes().forEach(accepted::add);
 
-        Set<String> types = new LinkedHashSet<>();
         ArrayNode tools = JSON.createArrayNode();
         List<McpSchema.Tool> sorted = new ArrayList<>(published);
         sorted.sort((a, b) -> a.name().compareTo(b.name()));
         for (McpSchema.Tool tool : sorted) {
-            tools.add(entry(props, registry, tool, types));
+            tools.add(adapter ? adapterEntry(props, tool) : entry(props, registry, tool));
         }
-        ArrayNode resourceTypes = manifest.putArray("resourceTypes");
-        Set<String> declared = new LinkedHashSet<>();
-        types.forEach(type -> declare(type, declared));
-        declared.forEach(type -> {
-            ObjectNode node = resourceTypes.addObject();
-            node.put("type", type);
-            ArrayNode attributes = node.putArray("attributes");
-            ATTRIBUTES.get(type).forEach(attributes::add);
-            if (PARENTS.containsKey(type)) {
-                node.put("parent", PARENTS.get(type));
-            }
-        });
+        if (policies == null) {
+            manifest.putArray("resourceTypes");
+        } else {
+            manifest.set("resourceTypes", JSON.readTree(policies.resourceTypesJson()));
+            manifest.set("policies", policies.manifestPolicies());
+            manifest.put("policiesHash", policies.policiesHash());
+        }
         manifest.set("tools", tools);
 
         String text = JSON.writerWithDefaultPrettyPrinter().writeValueAsString(manifest);
@@ -113,14 +101,19 @@ public final class ManifestGenerator {
         return text;
     }
 
-    private static void declare(String type, Set<String> declared) {
-        if (declared.add(type) && PARENTS.containsKey(type)) {
-            declare(PARENTS.get(type), declared);
-        }
+    /** The entry of a tool of an adapter (CC-193): not classified, no resource references; the administrator classifies it at approval. */
+    private static ObjectNode adapterEntry(McpPlatformProperties props, McpSchema.Tool tool) {
+        ObjectNode entry = JSON.createObjectNode();
+        entry.put("name", tool.name());
+        entry.putArray("resourceRefs");
+        JsonNode definition = JSON.valueToTree(tool);
+        entry.set("definition", definition);
+        entry.put("definitionHash", DefinitionHash.compute(definition.toString(), entry.toString(), props.system(),
+                credentialOf(props).toString()));
+        return entry;
     }
 
-    private static ObjectNode entry(McpPlatformProperties props, ToolRiskRegistry registry, McpSchema.Tool tool,
-                                    Set<String> types) {
+    private static ObjectNode entry(McpPlatformProperties props, ToolRiskRegistry registry, McpSchema.Tool tool) {
         String name = tool.name();
         RiskLevel risk = registry.riskOf(name).orElseThrow(() -> new IllegalStateException(
                 "tool '" + name + "' is listed but was never registered with a risk"));
@@ -143,9 +136,7 @@ public final class ManifestGenerator {
             ObjectNode ref = refs.addObject();
             ref.put("argument", binding.argument());
             ref.put("type", binding.type());
-            types.add(binding.type());
         }
-        resultTypes(registry.resultShapeOf(name), types);
         JsonNode definition = JSON.valueToTree(tool);
         entry.set("definition", definition);
         entry.put("definitionHash", DefinitionHash.compute(definition.toString(), entry.toString(), props.system(),
@@ -159,18 +150,6 @@ public final class ManifestGenerator {
         ArrayNode accepted = credential.putArray("acceptedTypes");
         props.getManifest().getAcceptedCredentialTypes().forEach(accepted::add);
         return credential;
-    }
-
-    private static void resultTypes(ResourceRefs.ResultShape shape, Set<String> types) {
-        switch (shape) {
-            case ResourceRefs.Element element -> {
-                types.add(element.type());
-                resultTypes(element.inside(), types);
-            }
-            case ResourceRefs.Many many -> resultTypes(many.element(), types);
-            case ResourceRefs.Fields fields -> fields.fields().values().forEach(inner -> resultTypes(inner, types));
-            case ResourceRefs.None none -> { }
-        }
     }
 
     /** The checks of the gateway at registration: the JSON Schema of C6, then the semantic rules. */

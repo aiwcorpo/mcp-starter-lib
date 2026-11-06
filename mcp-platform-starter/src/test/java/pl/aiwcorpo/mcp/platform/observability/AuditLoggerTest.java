@@ -47,7 +47,7 @@ class AuditLoggerTest {
                 + "\"requestId\":\"0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f\",\"component\":\"server\","
                 + "\"componentId\":\"mcp-jira\",\"event\":\"tool_call\",\"sub\":\"6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11\","
                 + "\"username\":\"jkowalski\",\"client\":\"claude-code\",\"server\":\"mcp-jira\",\"tool\":\"get_issue\","
-                + "\"risk\":\"READ_ONLY\",\"policyRevision\":\"20261026120000-a1b2c3d\",\"credentialType\":\"user-secret\","
+                + "\"risk\":\"READ_ONLY\",\"policyRevision\":1,\"credentialType\":\"user-secret\","
                 + "\"outcome\":\"ok\",\"errorCode\":null,\"latencyMs\":42,\"argsLength\":118}");
     }
 
@@ -62,7 +62,7 @@ class AuditLoggerTest {
     @Test
     void aCallWithUnusualCharactersInTheUsernameStaysOnOneEscapedLine() {
         CallerContext caller = new CallerContext("sub-1", "zołta\u2028k\u0007", List.of(), "claude-code", "get_issue", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f",
-                "20261026120000-a1b2c3d", 30L);
+                1L, 30L);
 
         audit.toolCall(caller, "get_issue", RiskLevel.READ_ONLY, null, "error", "internal_error", 3, 2);
 

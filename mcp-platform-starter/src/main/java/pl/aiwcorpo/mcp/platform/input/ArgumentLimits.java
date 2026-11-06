@@ -14,7 +14,7 @@ import java.lang.annotation.Target;
  *
  * <ul>
  *   <li>text ({@code String}, dates and the like that Spring AI describes as {@code string}):
- *       {@link #maxLength()} is required (or comes from {@link #contractPattern()}); {@link #minLength()} and
+ *       {@link #maxLength()} is required (or comes from {@link #contractPattern()} or {@link #resourceType()}); {@link #minLength()} and
  *       {@link #pattern()} are optional;</li>
  *   <li>integers and decimals: {@link #minimum()} and {@link #maximum()} are both required;</li>
  *   <li>lists and arrays: {@link #maxItems()} is required; the other limits describe the elements (scalars);
@@ -44,11 +44,19 @@ public @interface ArgumentLimits {
 
     /**
      * Name of a string definition in the contracts' {@code common.schema.json} ({@code $defs}), for example
-     * {@code JiraIssueKey} or {@code GitLabProjectPath}: its {@code pattern} (and its {@code maxLength}, when
+     * {@code SemVer} or {@code RequestId}: its {@code pattern} (and its {@code maxLength}, when
      * {@link #maxLength()} is not given) is published instead of a copy typed into the server. Cannot be combined
      * with {@link #pattern()}. An unknown name, or a definition without a pattern, stops the server.
      */
     String contractPattern() default "";
+
+    /**
+     * A resource type the server declares in {@code mcp/policies/resource-types.json}, for example {@code Jira::Issue}: the
+     * {@code idPattern} of its declaration is published as the {@code pattern}, so the schema of the tool and the check of the platform
+     * cannot differ. {@link #maxLength()} defaults to the longest id the platform matches at all ({@code ResourceTypes.MAX_ID_LENGTH}, 1024) when it is not given; give a smaller one for a type whose ids are short.
+     * Cannot be combined with {@link #pattern()} or {@link #contractPattern()}. A type that is not declared stops the server.
+     */
+    String resourceType() default "";
 
     /** JSON Schema {@code maxItems} of a list or array; -1 = none, which {@link SchemaLimitedToolCallbacks} refuses. */
     int maxItems() default -1;

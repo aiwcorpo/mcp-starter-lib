@@ -27,7 +27,7 @@ class StructuredQueryTest {
     private static final Set<String> FIELDS = Set.of("status", "assignee", "summary", "text");
 
     private static QueryScope scope(Set<String> link) {
-        QueryScope scope = QueryScope.of(new QueryConstraint("Jira::Project", new TreeSet<>(Set.of("ABC"))));
+        QueryScope scope = QueryScope.of(new QueryConstraint("Jira::Project", new TreeSet<>(Set.of("ABC"))), ExampleTypes.ALL);
         return link == null ? scope : scope.narrowedTo(link);
     }
 
@@ -111,7 +111,8 @@ class StructuredQueryTest {
 
     @Test
     void cqlGetsTheSpaceClauseAfterTheConditions() {
-        QueryScope spaces = QueryScope.of(new QueryConstraint("Confluence::Page", new TreeSet<>())).narrowedTo(Set.of("ENG"));
+        QueryScope spaces = QueryScope.of(new QueryConstraint("Confluence::Page", new TreeSet<>()), ExampleTypes.ALL)
+                .narrowedTo("Confluence::Space", Set.of("ENG"));
 
         assertThat(spaces.cql(Set.of("title", "label")).where("title", Operator.CONTAINS, "plan").orderBy("lastmodified", Direction.ASC).build())
                 .isEqualTo("(title ~ \"plan\") AND space in (\"ENG\") AND type = page ORDER BY lastmodified ASC");
@@ -119,7 +120,7 @@ class StructuredQueryTest {
 
     @Test
     void grantsAndNarrowingAreTwoClausesAfterTheConditions() {
-        QueryScope both = QueryScope.of(new QueryConstraint("Jira::Project", new TreeSet<>(Set.of("ABC"))))
+        QueryScope both = QueryScope.of(new QueryConstraint("Jira::Project", new TreeSet<>(Set.of("ABC"))), ExampleTypes.ALL)
                 .narrowedTo(Set.of("ABC", "DEF"));
 
         assertThat(both.jql(FIELDS, true).where("status", Operator.EQUALS, "Open").build())
@@ -157,7 +158,8 @@ class StructuredQueryTest {
     @ValueSource(strings = {"x\\\" ) OR space = SECRET OR ( title ~ \"y", "\\", "\"", "\" OR space = SECRET OR \"", ") OR (",
             "order by title", "currentUser()", "-- c", "/* c */", "\u00e9\u0301", "*"})
     void aCqlValueIsAlwaysOneStringLiteralToo(String hostile) {
-        QueryScope spaces = QueryScope.of(new QueryConstraint("Confluence::Space", new TreeSet<>(Set.of("ENG")))).narrowedTo(Set.of("ENG"));
+        QueryScope spaces = QueryScope.of(new QueryConstraint("Confluence::Space", new TreeSet<>(Set.of("ENG"))), ExampleTypes.ALL)
+                .narrowedTo(Set.of("ENG"));
         for (Operator operator : Operator.values()) {
             String query = spaces.cql(Set.of("title")).where("title", operator, hostile).build();
             List<String> tokens = lex(query);

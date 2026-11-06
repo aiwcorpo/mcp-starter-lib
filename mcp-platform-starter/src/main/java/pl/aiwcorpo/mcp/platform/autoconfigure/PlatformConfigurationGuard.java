@@ -5,7 +5,6 @@ import java.io.InputStream;
 import java.net.URI;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Function;
@@ -30,8 +29,10 @@ import tools.jackson.databind.json.JsonMapper;
  *       stops the server.</li>
  *   <li>Outside {@code dev}: {@code server.ssl.client-auth=need}, https JWKS, no separate management port.</li>
  *   <li>Unauthenticated paths only from {@link #ALLOWED_UNAUTHENTICATED_PATHS}; MCP transport STREAMABLE.</li>
+ *   <li>A native server names the gateway's policy data ({@code policy-data.url}); outside {@code dev} it is https and an SSL bundle
+ *       with the server's own certificate (mTLS) is set.</li>
  *   <li>Clock skew at most 30 s and token lifetime at most 60 s (C2).</li>
- *   <li>No 2.x settings ({@code guard.*}, {@code pat-header-prefix}): left in place they would be ignored
+ *   <li>No removed settings ({@code guard.*}, {@code pat-header-prefix}, the 3.x {@code policy.*} of the signed bundles): left in place they would be ignored
  *       while the operator believes they still protect the server.</li>
  * </ul>
  */
@@ -67,11 +68,11 @@ public class PlatformConfigurationGuard implements InitializingBean {
 
     private static final Logger LOG = LoggerFactory.getLogger(PlatformConfigurationGuard.class);
 
-    /** {@code common.schema.json#/$defs/SystemId} from the contracts jar on the classpath. */
-    static final Set<String> SYSTEM_IDS = systemIds();
+    /** {@code common.schema.json#/$defs/SystemId} from the contracts jar on the classpath: a pattern, the systems themselves are runtime data. */
+    static final Pattern SYSTEM_ID = contractPattern("SystemId");
 
-    /** {@code common.schema.json#/$defs/ComponentId}. */
-    private static final Pattern COMPONENT_ID = Pattern.compile("^mcp-[a-z0-9]+(-[a-z0-9]+)*$");
+    /** {@code common.schema.json#/$defs/ServerId}: {@code mcp-<system>}. */
+    private static final Pattern SERVER_ID = contractPattern("ServerId");
 
     private final McpPlatformProperties properties;
     private final Environment environment;
@@ -98,8 +99,9 @@ public class PlatformConfigurationGuard implements InitializingBean {
         McpPlatformProperties.InternalJwt jwt = properties.getInternalJwt();
 
         String serverId = properties.getServerId();
-        if (serverId == null || !COMPONENT_ID.matcher(serverId).matches()) {
-            problems.add("aiwcorpo.mcp.platform.server-id must be set to mcp-<system> (the aud of the internal JWT)");
+        if (serverId == null || !SERVER_ID.matcher(serverId).matches()) {
+            problems.add("aiwcorpo.mcp.platform.server-id must be set to mcp-<system>, with a system of lower case letters and digits "
+                    + "(" + SERVER_ID.pattern() + "): it is the aud of the internal JWT");
         }
         List<String> active = List.of(environment.getActiveProfiles());
         boolean dev = active.equals(List.of(DEV_PROFILE));
@@ -121,9 +123,8 @@ public class PlatformConfigurationGuard implements InitializingBean {
                         + "environment variable " + DEVSTACK_ACK_ENVIRONMENT + "=true");
             } else {
                 // The manifest says environment: dev (CC-138); every start says it as well, and a gauge shows it.
-                LOG.warn("event=devstack_profile detail=\"signing keys named test-* are accepted (internal JWT: {}, policy "
-                        + "bundles: {}); this server must not run in production\"", properties.getInternalJwt().isAllowTestKeys(),
-                        properties.getPolicy().isAllowTestKeys());
+                LOG.warn("event=devstack_profile detail=\"signing keys named test-* are accepted (internal JWT: {}); this server "
+                        + "must not run in production\"", properties.getInternalJwt().isAllowTestKeys());
             }
         }
         boolean testKeysAllowed = dev || devstack;
@@ -149,15 +150,9 @@ public class PlatformConfigurationGuard implements InitializingBean {
         }
 
         String system = properties.system();
-        if (system != null && COMPONENT_ID.matcher(serverId).matches() && !SYSTEM_IDS.contains(system)) {
-            String message = "aiwcorpo.mcp.platform.server-id '" + serverId + "': system '" + system + "' is not a "
-                    + "SystemId of the contracts " + SYSTEM_IDS + "; audit events (server) and credential_required "
-                    + "(system) would not match the contract and credential_required would reach clients as internal_error";
-            if (dev) {
-                LOG.warn("event=platform_config_warning detail=\"{}\"", message);
-            } else {
-                problems.add(message);
-            }
+        if (system != null && SERVER_ID.matcher(serverId).matches() && !SYSTEM_ID.matcher(system).matches()) {
+            problems.add("aiwcorpo.mcp.platform.server-id '" + serverId + "': system '" + system + "' is not a SystemId of the contracts ("
+                    + SYSTEM_ID.pattern() + ")");
         }
 
         if (isBlank(jwt.getJwksUri())) {
@@ -202,7 +197,9 @@ public class PlatformConfigurationGuard implements InitializingBean {
         if (properties.getTools().getMaxFilteredElements() < 1) {
             problems.add("aiwcorpo.mcp.platform.tools.max-filtered-elements must be at least 1");
         }
-        policyProblems(properties.getPolicy(), dev, testKeysAllowed, problems);
+        if (properties.getInternalJwt().getReceiverMode() == pl.aiwcorpo.mcp.platform.auth.ReceiverMode.NATIVE) {
+            policyDataProblems(properties.getPolicyData(), dev, problems);
+        }
         manifestProblems(properties.getManifest(), problems);
         credentialTypeProblems(properties.getManifest(), problems);
         if (environment.containsProperty("aiwcorpo.mcp.platform.credential-type")) {
@@ -236,6 +233,11 @@ public class PlatformConfigurationGuard implements InitializingBean {
             problems.add("aiwcorpo.mcp.platform.guard.* was removed in 3.0 (identity, privileges and confirmations "
                     + "moved to the gateway); remove it, see MIGRATION-3.0.md");
         }
+        if (binder.bind("aiwcorpo.mcp.platform.policy", Bindable.mapOf(String.class, Object.class)).isBound()) {
+            problems.add("aiwcorpo.mcp.platform.policy.* (the signed policy bundles, their keys and state directory) was removed in 4.0.0: "
+                    + "the policies are in the server's jar (mcp/policies/) and the scope mapping comes from the gateway, set "
+                    + "aiwcorpo.mcp.platform.policy-data.url instead, see the CHANGELOG, 4.0.0");
+        }
         if (environment.containsProperty("aiwcorpo.mcp.platform.pat-header-prefix")) {
             problems.add("aiwcorpo.mcp.platform.pat-header-prefix was removed in 3.0; use auth-mode=dev-pat with "
                     + "dev-pat.header-prefix (dev profile only), see MIGRATION-3.0.md");
@@ -246,48 +248,27 @@ public class PlatformConfigurationGuard implements InitializingBean {
         }
     }
 
-    private static void policyProblems(McpPlatformProperties.Policy policy, boolean dev, boolean testKeysAllowed,
-                                       List<String> problems) {
-        channelProblems("main", policy.getMain(), true, dev, problems);
-        channelProblems("overrides", policy.getOverrides(), !isBlank(policy.getOverrides().getUrl()), dev, problems);
-        if (!dev) {
-            if (isBlank(policy.getStateDir())) {
-                problems.add("aiwcorpo.mcp.platform.policy.state-dir is required outside the 'dev' profile: without it a "
-                        + "restart accepts an older signed bundle again (rollback protection, CC-066)");
-            }
+    private void policyDataProblems(McpPlatformProperties.PolicyData policyData, boolean dev, List<String> problems) {
+        String prefix = "aiwcorpo.mcp.platform.policy-data";
+        if (isBlank(policyData.getUrl())) {
+            problems.add(prefix + ".url must point at GET /internal/v1/policy-data of the gateway (C7): the server decides on the resources "
+                    + "of its system with the scope mapping, the allowed clients and the overrides that endpoint serves");
+        } else if (!absoluteUrl(policyData.getUrl(), dev ? Set.of("http", "https") : Set.of("https"))) {
+            problems.add(prefix + ".url must be an absolute " + (dev ? "http(s)" : "https") + " URL" + (dev ? "" : " outside the 'dev' profile"));
         }
-        if (policy.isAllowTestKeys() && !testKeysAllowed) {
-            problems.add("aiwcorpo.mcp.platform.policy.allow-test-keys=true is allowed only with the 'dev' or the 'devstack' profile");
+        if (!dev && isBlank(policyData.getSslBundle()) && isBlank(environment.getProperty("server.ssl.bundle"))) {
+            problems.add(prefix + ".ssl-bundle (or server.ssl.bundle) must name the Spring SSL bundle with the server's own certificate and "
+                    + "the internal CA outside the 'dev' profile: the gateway serves the policy data only over mTLS, to a certificate whose "
+                    + "CN is the serverId");
         }
-        if (!policy.getStartupTimeout().isPositive() || !policy.getOverridesGrace().isPositive()) {
-            problems.add("aiwcorpo.mcp.platform.policy.startup-timeout and overrides-grace must be positive");
+        if (!dev && !isBlank(policyData.getTlsName()) && policyData.getTlsName().contains("/")) {
+            problems.add(prefix + ".tls-name must be a host name or an address, not a URL");
         }
-    }
-
-    private static void channelProblems(String name, McpPlatformProperties.PolicyChannel channel, boolean required,
-                                        boolean dev, List<String> problems) {
-        String prefix = "aiwcorpo.mcp.platform.policy." + name;
-        if (!required) {
-            return;
+        if (!policyData.getRefreshInterval().isPositive() || !policyData.getRetryInterval().isPositive()) {
+            problems.add(prefix + ".refresh-interval and retry-interval must be positive");
         }
-        if (isBlank(channel.getUrl())) {
-            problems.add(prefix + ".url must point at the latest.json of the " + name + " policy bundle (C7)");
-        } else if (!absoluteUrl(channel.getUrl(), dev ? Set.of("http", "https") : Set.of("https"))) {
-            problems.add(prefix + ".url must be an absolute " + (dev ? "http(s)" : "https") + " URL"
-                    + (dev ? "" : " outside the 'dev' profile"));
-        }
-        if (isBlank(channel.getKeyId())) {
-            problems.add(prefix + ".key-id must name the signing key (test-* keys only with policy.allow-test-keys in 'dev')");
-        }
-        if (isBlank(channel.getPublicKey()) && isBlank(channel.getPublicKeyFile())) {
-            problems.add(prefix + ".public-key or " + prefix + ".public-key-file must hold the Ed25519 public key (SPKI PEM)");
-        }
-        if (channel.getMinimumRevision() != null
-                && !channel.getMinimumRevision().matches("^[0-9]{14}-[0-9a-f]{7}$")) {
-            problems.add(prefix + ".minimum-revision must look like 20261028194138-ad20673");
-        }
-        if (channel.getRefreshInterval() != null && !channel.getRefreshInterval().isPositive()) {
-            problems.add(prefix + ".refresh-interval must be positive");
+        if (policyData.getStartupTimeout().isNegative()) {
+            problems.add(prefix + ".startup-timeout must not be negative");
         }
     }
 
@@ -389,16 +370,14 @@ public class PlatformConfigurationGuard implements InitializingBean {
         }
     }
 
-    private static Set<String> systemIds() {
+    private static Pattern contractPattern(String definition) {
         String resource = "/mcp-contracts/schemas/common.schema.json";
         try (InputStream in = PlatformConfigurationGuard.class.getResourceAsStream(resource)) {
             if (in == null) {
                 throw new IllegalStateException(resource + " is missing: mcp-contracts must be on the classpath");
             }
-            Set<String> ids = new LinkedHashSet<>();
-            JsonMapper.builder().build().readTree(in).required("$defs").required("SystemId").required("enum")
-                    .forEach(id -> ids.add(id.asString()));
-            return Set.copyOf(ids);
+            return Pattern.compile(JsonMapper.builder().build().readTree(in).required("$defs").required(definition).required("pattern")
+                    .asString());
         } catch (IOException ex) {
             throw new IllegalStateException("cannot read " + resource, ex);
         }

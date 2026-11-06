@@ -1,0 +1,17 @@
+[
+  {
+    "type": "Jira::Project",
+    "attributes": ["key", "category"],
+    "idPattern": "^[A-Z][A-Z0-9_]{1,9}$",
+    "scopePattern": "^[A-Z][A-Z0-9_]{1,9}$",
+    "earlyScopeCheck": true,
+    "classification": {"attribute": "category", "kind": "string", "required": true}
+  },
+  {
+    "type": "Jira::Issue",
+    "attributes": ["key"],
+    "parent": "Jira::Project",
+    "parentAttribute": "project",
+    "idPattern": "^[A-Z][A-Z0-9_]{1,9}-[1-9][0-9]{0,9}$"
+  }
+]

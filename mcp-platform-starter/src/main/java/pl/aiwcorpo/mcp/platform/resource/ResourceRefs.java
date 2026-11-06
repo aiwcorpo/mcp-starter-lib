@@ -23,7 +23,7 @@ import tools.jackson.databind.json.JsonMapper;
 public final class ResourceRefs {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
-    private static final Set<String> TYPES = contractTypes();
+    private static final java.util.regex.Pattern TYPE = contractTypePattern();
     private static final int MAX_DEPTH = 6;
 
     private ResourceRefs() {
@@ -157,8 +157,9 @@ public final class ResourceRefs {
     }
 
     private static void checkType(ResourceRef ref, String where) {
-        if (!TYPES.contains(ref.type())) {
-            throw new IllegalStateException(where + ": '" + ref.type() + "' is not a resource type of the contracts " + TYPES);
+        if (!TYPE.matcher(ref.type()).matches()) {
+            throw new IllegalStateException(where + ": '" + ref.type() + "' is not a resource type (" + TYPE.pattern()
+                    + "); the type must also be declared in mcp/policies/resource-types.json");
         }
     }
 
@@ -324,16 +325,13 @@ public final class ResourceRefs {
         return Object.class;
     }
 
-    private static Set<String> contractTypes() {
+    private static java.util.regex.Pattern contractTypePattern() {
         String resource = "/mcp-contracts/schemas/common.schema.json";
         try (java.io.InputStream in = ResourceRefs.class.getResourceAsStream(resource)) {
             if (in == null) {
                 throw new IllegalStateException(resource + " is missing: mcp-contracts must be on the classpath");
             }
-            JsonNode values = JSON.readTree(in).path("$defs").path("ResourceType").path("enum");
-            Set<String> types = new HashSet<>();
-            values.forEach(value -> types.add(value.asString()));
-            return Set.copyOf(types);
+            return java.util.regex.Pattern.compile(JSON.readTree(in).path("$defs").path("ResourceType").path("pattern").asString());
         } catch (java.io.IOException ex) {
             throw new java.io.UncheckedIOException(ex);
         }

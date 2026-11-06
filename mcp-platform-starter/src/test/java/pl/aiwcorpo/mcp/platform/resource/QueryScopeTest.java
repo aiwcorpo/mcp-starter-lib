@@ -12,8 +12,9 @@ import pl.aiwcorpo.mcp.cedar.entities.QueryConstraint;
 class QueryScopeTest {
 
     private static QueryScope scope(String type, Set<String> narrowing, Set<String> granted) {
-        QueryScope scope = QueryScope.of(new QueryConstraint(type, new TreeSet<>(granted)));
-        return narrowing == null ? scope : scope.narrowedTo(narrowing);
+        QueryScope scope = QueryScope.of(new QueryConstraint(type, new TreeSet<>(granted)), ExampleTypes.ALL);
+        return narrowing == null ? scope
+                : scope.narrowedTo("Confluence::Page".equals(type) ? "Confluence::Space" : type, narrowing);
     }
 
     @Test
@@ -80,8 +81,6 @@ class QueryScopeTest {
         assertThat(scope.resolveIndexArgument("logs-team-a-2", answer)).isEqualTo("logs-team-a-2");
         assertThatThrownBy(() -> scope.resolveIndexNames("{\"aliases\":[]}")).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> scope.resolveIndexNames("not json")).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> scope("Jira::Project", null, Set.of("ABC")).resolveIndexNames(answer))
-                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
@@ -144,11 +143,10 @@ class QueryScopeTest {
     void anArgumentIsAValidContainerIdentifierAndNotQueryText() {
         QueryScope scope = scope("Confluence::Page", null, Set.of());
 
-        assertThatThrownBy(() -> scope.narrowedTo(List.of("ENG\" OR space = \"HR"))).isInstanceOf(IllegalArgumentException.class);
-        assertThat(scope.narrowedTo(List.of("ENG")).cql(Set.of("title")).where("title", StructuredQuery.Operator.EQUALS, "x").build())
+        assertThatThrownBy(() -> scope.narrowedTo("Confluence::Space", List.of("ENG\" OR space = \"HR"))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> scope.narrowedTo(List.of("ENG"))).as("ENG is not a page id").isInstanceOf(IllegalArgumentException.class);
+        assertThat(scope.narrowedTo("Confluence::Space", List.of("ENG")).cql(Set.of("title")).where("title", StructuredQuery.Operator.EQUALS, "x").build())
                 .isEqualTo("(title = \"x\") AND space in (\"ENG\") AND type = page");
-        assertThatThrownBy(() -> scope("OpenSearch::Index", null, Set.of("a")).narrowedTo(List.of("a")))
-                .isInstanceOf(IllegalStateException.class);
     }
 
     @Test
@@ -168,17 +166,11 @@ class QueryScopeTest {
     }
 
     @Test
-    void aClauseForAnotherTypeIsAProgrammingError() {
-        assertThatThrownBy(() -> scope("Confluence::Space", null, Set.of()).jqlProjectClause())
-                .isInstanceOf(IllegalStateException.class);
-    }
-
-    @Test
     void confluenceGrantsBecomeACqlClauseOnlyForSpacesAndNeverEmpty() {
         QueryScope spaces = scope("Confluence::Space", Set.of("ENG"), Set.of("ENG", "OPS"));
         QueryScope open = scope("Confluence::Space", null, Set.of("OPS"));
         QueryScope none = scope("Confluence::Space", null, Set.of());
-        QueryScope pages = scope("Confluence::Page", null, Set.of("1000"));
+        QueryScope pages = scope("Confluence::Page", Set.of("ENG"), Set.of("1000"));
 
         assertThat(spaces.cqlSpaceClause(true)).contains("space in (\"ENG\") AND space in (\"ENG\", \"OPS\")");
         assertThat(open.cqlSpaceClause(true)).contains("space in (\"OPS\")");

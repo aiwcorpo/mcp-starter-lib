@@ -18,18 +18,18 @@ import java.util.OptionalLong;
  * @param client              {@code azp}, the AI client; {@code null} for the service variant
  * @param tool                {@code tool}; present only on {@code tools/call}
  * @param requestId           {@code rid}, equal to {@code X-Request-Id}
- * @param policyRevision      {@code prv}, the policy bundle revision the gateway decided with
+ * @param policyRevision      {@code prv}, the revision of the gateway's policy data the call was decided with (a counter; 0: a gateway without policy data)
  * @param mfaAgeSeconds       {@code mfa}, or {@code null} when unknown
  * @param mcpRisk             {@code mcp_risk}, the administrator's classification; only in {@link ReceiverMode#ADAPTER}, otherwise {@code null}
  * @param mcpAction           {@code mcp_action}, as above
  */
 public record CallerContext(String subject, String username, List<String> groups, String client,
-                            String tool, String requestId, String policyRevision, Long mfaAgeSeconds,
+                            String tool, String requestId, long policyRevision, Long mfaAgeSeconds,
                             String mcpRisk, String mcpAction) {
 
     /** Without the classification of an adapter; what every native server has. */
     public CallerContext(String subject, String username, List<String> groups, String client, String tool,
-                         String requestId, String policyRevision, Long mfaAgeSeconds) {
+                         String requestId, long policyRevision, Long mfaAgeSeconds) {
         this(subject, username, groups, client, tool, requestId, policyRevision, mfaAgeSeconds, null, null);
     }
 

@@ -102,7 +102,7 @@ class InternalJwtVectorsTest {
             JsonNode claims = data.get("claims");
             assertThat(caller.subject()).isEqualTo(claims.get("sub").asString());
             assertThat(caller.requestId()).isEqualTo(claims.get("rid").asString());
-            assertThat(caller.policyRevision()).isEqualTo(claims.get("prv").asString());
+            assertThat(caller.policyRevision()).isEqualTo(claims.get("prv").asLong());
             assertThat(caller.tool()).isEqualTo(claims.has("tool") ? claims.get("tool").asString() : null);
             assertThat(expected.get("httpStatus").asInt()).isEqualTo(200);
         } else {

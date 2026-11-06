@@ -19,6 +19,9 @@ import org.springframework.ai.tool.support.ToolDefinitions;
 import org.springframework.ai.tool.support.ToolUtils;
 import org.springframework.aop.support.AopUtils;
 import org.springframework.util.ReflectionUtils;
+import pl.aiwcorpo.mcp.cedar.entities.ResourceTypeDeclaration;
+import pl.aiwcorpo.mcp.cedar.entities.ResourceTypes;
+import pl.aiwcorpo.mcp.platform.policy.ServerPolicies;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
@@ -47,6 +50,7 @@ public final class SchemaLimitedToolCallbacks {
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final JsonNode CONTRACT_DEFINITIONS = contractDefinitions();
     private static final int MAX_DEPTH = 6;
+    private static volatile ResourceTypes declaredTypes;
 
     private SchemaLimitedToolCallbacks() {
     }
@@ -177,7 +181,7 @@ public final class SchemaLimitedToolCallbacks {
                     + "@ArgumentLimits(minimum = ..., maximum = ...), otherwise the model may send any value");
         }
         if (limits.minLength() >= 0 || limits.maxLength() >= 0 || !limits.pattern().isEmpty()
-                || !limits.contractPattern().isEmpty() || limits.mentionFiltered()) {
+                || !limits.contractPattern().isEmpty() || !limits.resourceType().isEmpty() || limits.mentionFiltered()) {
             throw new IllegalStateException("@ArgumentLimits on " + where + ": text limits only on text "
                     + "arguments, minimum/maximum only on numbers (schema type: " + type + ")");
         }
@@ -190,7 +194,7 @@ public final class SchemaLimitedToolCallbacks {
             return;
         }
         boolean any = limits.minLength() >= 0 || limits.maxLength() >= 0 || !limits.pattern().isEmpty()
-                || !limits.contractPattern().isEmpty() || limits.minimum() != Long.MIN_VALUE
+                || !limits.contractPattern().isEmpty() || !limits.resourceType().isEmpty() || limits.minimum() != Long.MIN_VALUE
                 || limits.maximum() != Long.MAX_VALUE || limits.maxItems() >= 0 || limits.minItems() >= 0
                 || limits.mentionFiltered();
         if (any) {
@@ -238,6 +242,18 @@ public final class SchemaLimitedToolCallbacks {
         }
         String pattern = limits.pattern().isEmpty() ? null : limits.pattern();
         int maxLength = limits.maxLength();
+        if (!limits.resourceType().isEmpty()) {
+            if (pattern != null || !limits.contractPattern().isEmpty()) {
+                throw new IllegalStateException("@ArgumentLimits on " + where + ": resourceType with pattern or contractPattern");
+            }
+            ResourceTypeDeclaration declaration = declaredTypes().declaration(limits.resourceType()).orElseThrow(
+                    () -> new IllegalStateException("@ArgumentLimits on " + where + ": '" + limits.resourceType()
+                            + "' is not declared in mcp/policies/resource-types.json"));
+            pattern = declaration.idPattern();
+            if (maxLength < 0) {
+                maxLength = ResourceTypes.MAX_ID_LENGTH;
+            }
+        }
         if (!limits.contractPattern().isEmpty()) {
             if (pattern != null) {
                 throw new IllegalStateException("@ArgumentLimits on " + where + ": pattern and contractPattern together");
@@ -257,6 +273,16 @@ public final class SchemaLimitedToolCallbacks {
                     + "@ArgumentLimits(maxLength = ...), otherwise the model may send any amount of text");
         }
         return new Limits(limits.minLength(), maxLength, pattern);
+    }
+
+    /** The declarations of the server's own jar, read once: the tool schemas are built before the Spring context exists. */
+    private static ResourceTypes declaredTypes() {
+        ResourceTypes types = declaredTypes;
+        if (types == null) {
+            types = ServerPolicies.load(SchemaLimitedToolCallbacks.class.getClassLoader()).resourceTypes();
+            declaredTypes = types;
+        }
+        return types;
     }
 
     /**

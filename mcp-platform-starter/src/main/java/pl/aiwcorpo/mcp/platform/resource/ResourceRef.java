@@ -12,18 +12,17 @@ import java.lang.annotation.Target;
  * <p><b>On a parameter of a {@code @Tool} method</b> (a {@code String}, an integer, or a list or array of them): the
  * argument is a {@code resourceRefs} entry of the manifest (C6), and before the tool runs the platform resolves
  * <em>every</em> value of it to the resource as the system reports it (with {@link ResourceResolver}) and asks the
- * policy of the signed bundle whether the caller may do the tool's action on it (C7, {@link pl.aiwcorpo.mcp.platform.guard.ToolRisk#action()}). One
+ * policy of the server whether the caller may do the tool's action on it (C7, {@link pl.aiwcorpo.mcp.platform.guard.ToolRisk#action()}). One
  * value that cannot be resolved, or is not allowed, ends the call with {@code not_found_or_denied}, the same answer
- * as for a resource that does not exist. A resource whose required classification attribute is missing (a Jira
- * project without {@code category}, a Confluence space without {@code labels}, an OpenSearch index without
- * {@code tags}) is not allowed either.
+ * as for a resource that does not exist. A resource whose required classification attribute (the {@code classification} of its
+ * declaration in {@code mcp/policies/resource-types.json}) is missing is not allowed either.
  *
  * <pre>{@code
  * @Tool(name = "get_issue", description = "Returns an issue by key.")
  * @ToolRisk(RiskLevel.READ_ONLY)
  * @ToolTitle("Get issue")
  * public IssueView getIssue(
- *         @ArgumentLimits(maxLength = 16, contractPattern = "JiraIssueKey")
+ *         @ArgumentLimits(maxLength = 16, resourceType = "Jira::Issue")
  *         @ResourceRef(type = "Jira::Issue", resolver = JiraIssueResolver.class) String issueKey) { ... }
  * }</pre>
  *
@@ -38,7 +37,7 @@ import java.lang.annotation.Target;
 @Retention(RetentionPolicy.RUNTIME)
 public @interface ResourceRef {
 
-    /** Cedar resource type of the contracts, for example {@code Jira::Issue}. */
+    /** Cedar resource type declared by the server in {@code mcp/policies/resource-types.json}, for example {@code Jira::Issue}. */
     String type();
 
     /**

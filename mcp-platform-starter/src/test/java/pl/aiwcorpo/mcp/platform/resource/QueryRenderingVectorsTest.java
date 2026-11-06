@@ -108,7 +108,7 @@ class QueryRenderingVectorsTest {
 
     private static QueryScope grants(String type, JsonNode input) {
         JsonNode ids = input.has("scope") ? input.get("scope") : input.get("granted");
-        return QueryScope.of(new QueryConstraint(type, new TreeSet<>(strings(ids))));
+        return QueryScope.of(new QueryConstraint(type, new TreeSet<>(strings(ids))), ExampleTypes.ALL);
     }
 
     private static String render(StructuredQuery.Builder builder, JsonNode input) {

@@ -70,18 +70,15 @@ class ManifestInputSchemaTest {
     }
 
     @Test
-    void theOpenSearchIndexPrefixOfTheContractsIsPublishedAsItIsAndPassesTheAnchoringRule() {
-        String published = SchemaLimitedToolCallbacks.contractDefinition("OpenSearchIndexPrefix").path("pattern").asString();
+    void theIdPatternOfADeclarationIsPublishedAsItIsAndPassesTheAnchoringRule() {
+        ToolCallback callback = SchemaLimitedToolCallbacks.of(new Shapes()).getToolCallbacks()[0];
+        String published = JSON.readTree(callback.getToolDefinition().inputSchema()).path("properties").path("key").path("pattern")
+                .asString();
 
-        assertThat(published).as("one anchored pattern since CC-139, no rewriting by the starter")
-                .isEqualTo("^(?:[a-z0-9][a-z0-9._-]{0,253}[a-z0-9_]|[a-z0-9])$");
+        assertThat(published).as("no rewriting by the starter").isEqualTo("^[A-Z][A-Z0-9_]{1,9}-[1-9][0-9]{0,9}$");
         assertThat(InputSchemaBounds.anchored(published)).isTrue();
-        for (String prefix : List.of("a", "logs", "logs-team-a", "x_")) {
-            assertThat(java.util.regex.Pattern.matches(published, prefix)).as(prefix).isTrue();
-        }
-        for (String prefix : List.of("", "-a", "logs-", ".hidden", "A")) {
-            assertThat(java.util.regex.Pattern.matches(published, prefix)).as(prefix).isFalse();
-        }
+        assertThat(java.util.regex.Pattern.matches(published, "ABC-1")).isTrue();
+        assertThat(java.util.regex.Pattern.matches(published, "abc-1")).isFalse();
     }
 
     public record Person(@ArgumentLimits(maxLength = 40) String name, @Nullable @ArgumentLimits(maxLength = 80) String note) {
@@ -97,7 +94,7 @@ class ManifestInputSchemaTest {
         @Tool(name = "shapes", description = "d")
         @ToolRisk(RiskLevel.READ_ONLY)
         @ToolTitle("Shapes")
-        public String shapes(@ArgumentLimits(maxLength = 16, contractPattern = "JiraIssueKey") String key,
+        public String shapes(@ArgumentLimits(maxLength = 16, resourceType = "Jira::Issue") String key,
                              @ArgumentLimits(maxLength = 40, mentionFiltered = true) String comment,
                              @ArgumentLimits(maxItems = 5, maxLength = 20) List<String> labels,
                              @ArgumentLimits(minimum = 1, maximum = 9) long priority,
@@ -121,9 +118,7 @@ class ManifestInputSchemaTest {
 
     @Test
     void theDefinitionsServersReadFromTheContractsAreStillThere() {
-        for (String definition : List.of("JiraProjectKey", "JiraIssueKey", "ConfluenceSpaceKey", "ConfluencePageId",
-                "GitLabGroupPath", "GitLabProjectPath", "OpenSearchIndexName", "OpenSearchIndexPrefix",
-                "ServiceDeskQueueId", "ServiceDeskTicketId")) {
+        for (String definition : List.of("ToolName", "QualifiedToolName", "GroupName")) {
             assertThat(SchemaLimitedToolCallbacks.contractDefinition(definition)).as(definition).isNotNull();
             assertThat(SchemaLimitedToolCallbacks.contractDefinition(definition).path("pattern").asString(null))
                     .as(definition).isNotNull();

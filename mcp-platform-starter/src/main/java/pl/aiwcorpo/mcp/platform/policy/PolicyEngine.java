@@ -1,188 +1,124 @@
 package pl.aiwcorpo.mcp.platform.policy;
 
-import com.cedarpolicy.BasicAuthorizationEngine;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.security.GeneralSecurityException;
-import java.security.PublicKey;
-import javax.net.ssl.SSLContext;
-import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
-import pl.aiwcorpo.mcp.policy.bundle.BundleVerifier;
 import java.net.URI;
 import java.time.Duration;
-import java.util.EnumMap;
-import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
-import java.util.concurrent.atomic.AtomicLong;
+import javax.net.ssl.SSLContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import pl.aiwcorpo.mcp.cedar.entities.ResultFilter;
-import pl.aiwcorpo.mcp.policy.bundle.BundlePointer;
-import pl.aiwcorpo.mcp.policy.bundle.BundleRejectedException;
-import pl.aiwcorpo.mcp.policy.bundle.Channel;
-import pl.aiwcorpo.mcp.policy.bundle.PolicyBundle;
-import pl.aiwcorpo.mcp.policy.bundle.PolicyStore;
-import pl.aiwcorpo.mcp.policy.bundle.PolicyStore.Snapshot;
-import pl.aiwcorpo.mcp.policy.bundle.Revisions;
+import pl.aiwcorpo.mcp.cedar.entities.ResourceTypes;
+import pl.aiwcorpo.mcp.manifest.PolicyDataGate;
+import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 
 /**
- * The policy a server decides with: the same signed bundle (C7) the gateway loads, pulled from the repository, verified
- * and swapped atomically by {@link PolicyStore} of mcp-policy-bundle (signature, strictly increasing revision with
- * rollback protection across restarts, schema equal to the contracts', policies validated against it).
+ * The policy data a server decides with: what the gateway serves at {@code GET /internal/v1/policy-data} (C7) over mTLS, taken
+ * together with the policies of the server's own jar ({@link ServerPolicies}) into a {@link PolicySnapshot} that is swapped
+ * atomically.
  *
- * <p>Fail-closed: a server does not start without a main bundle ({@link #start}); a bundle that is rejected (bad
- * signature, older revision, broken content) leaves the previous one active and is counted and logged; after a restart
- * in which the emergency overrides bundle was active, {@link #snapshot()} refuses until that bundle is loaded again or
- * {@code overrides-grace} has passed (then the server serves and logs an alarm).
+ * <p>Fail-closed, by the rule of the contracts ({@link PolicyDataGate}): a call is evaluated only when data is loaded, the
+ * administrator has approved the {@code policiesHash} of this server's own policies and resource types, and every override
+ * validates; otherwise it is refused as {@code upstream_unavailable}. A server whose gateway cannot be reached at start, or that is
+ * not registered there yet, starts all the same and keeps asking. Data that cannot be used at all leaves the previous snapshot in
+ * use and is counted and logged; data with an override that does not validate is taken and refuses every call. A revision that is not
+ * higher than the one held is never taken (revisions are a counter that only grows).
  *
- * <p>The main bundle is pulled every 30 s and the overrides bundle every 5 s unless configured otherwise. A caller whose
- * token names a policy revision {@code prv} newer than the loaded one makes the engine pull the main bundle at once (at
- * most every two seconds), so a server that lags behind the gateway does not refuse calls the gateway has just allowed.
+ * <p>The data is asked for every 30 s unless configured otherwise, with {@code If-None-Match}, and every 5 s while there is none. A call
+ * whose token names a revision {@code prv} newer than the loaded one makes the engine ask before the call is evaluated, and refuses it
+ * when the answer is not at least that new.
  */
 public final class PolicyEngine implements AutoCloseable {
 
-    /** Defaults of the pull intervals (C7). */
-    public static final Duration MAIN_INTERVAL = Duration.ofSeconds(30);
-    public static final Duration OVERRIDES_INTERVAL = Duration.ofSeconds(5);
-
     private static final Logger LOG = LoggerFactory.getLogger(PolicyEngine.class);
-    private static final String ZERO_REVISION = "00000000000000-0000000";
-    private static final long HINT_PULL_MIN_NANOS = TimeUnit.SECONDS.toNanos(2);
 
-    private record Source(URI latest, Duration interval) {
-    }
-
-    private static final class ChannelState {
-        String etag;
-        String rejectedRevision;
-    }
-
-    private final PolicyStore store;
-    private final PolicyBundleClient client;
-    private final Map<Channel, Source> sources = new EnumMap<>(Channel.class);
-    private final Map<Channel, ChannelState> states = new EnumMap<>(Channel.class);
-    /** One pull of a channel at a time, and a stuck channel does not hold up the other. */
-    private final Map<Channel, ReentrantLock> locks = new EnumMap<>(Channel.class);
+    private final ServerPolicies policies;
+    private final PolicyDataClient client;
+    private final URI uri;
+    private final Duration refreshInterval;
+    private final Duration retryInterval;
     private final Duration startupTimeout;
-    private final Duration overridesGrace;
     private final MeterRegistry meters;
-    private volatile long startedNanos = System.nanoTime();
-    private final AtomicLong lastHintPull = new AtomicLong(System.nanoTime() - HINT_PULL_MIN_NANOS);
-    private final AtomicBoolean graceAlarmRaised = new AtomicBoolean();
-    private ScheduledExecutorService scheduler;
+    private final ReentrantLock pulling = new ReentrantLock();
+    private volatile PolicySnapshot current;
+    private String etag;
+    private long rejectedRevision = -1;
+    private volatile ScheduledExecutorService scheduler;
 
-    /**
-     * @param main      where the main bundle is pulled from and how often
-     * @param overrides the emergency bundle, or {@code null} when none is configured
-     */
-    public PolicyEngine(PolicyStore store, PolicyBundleClient client, URI main, Duration mainInterval, URI overrides,
-                        Duration overridesInterval, Duration startupTimeout, Duration overridesGrace, MeterRegistry meters) {
-        this.store = store;
+    private PolicyEngine(ServerPolicies policies, PolicyDataClient client, URI uri, Duration refreshInterval, Duration retryInterval,
+                         Duration startupTimeout, MeterRegistry meters) {
+        this.policies = policies;
         this.client = client;
-        sources.put(Channel.MAIN, new Source(main, mainInterval));
-        if (overrides != null) {
-            sources.put(Channel.OVERRIDES, new Source(overrides, overridesInterval));
-        }
-        states.put(Channel.MAIN, new ChannelState());
-        states.put(Channel.OVERRIDES, new ChannelState());
-        locks.put(Channel.MAIN, new ReentrantLock());
-        locks.put(Channel.OVERRIDES, new ReentrantLock());
+        this.uri = uri;
+        this.refreshInterval = refreshInterval;
+        this.retryInterval = retryInterval;
         this.startupTimeout = startupTimeout;
-        this.overridesGrace = overridesGrace;
         this.meters = meters;
     }
 
     /**
-     * The engine for the configured channels, started: the first main bundle is loaded (and the overrides bundle, when one
-     * is configured) or the call throws.
+     * The engine for the configured gateway, started: the first policy data is asked for and the periodic refresh begins. When
+     * nothing could be loaded within the startup timeout the engine is returned all the same and refuses until it has data.
+     *
+     * @param sslContext the context with the server's own certificate for mTLS, or {@code null} for plain http in the dev profile
      */
-    public static PolicyEngine create(McpPlatformProperties.Policy policy, SSLContext sslContext, MeterRegistry meters)
-            throws IOException, GeneralSecurityException {
-        return create(policy, sslContext, meters, false);
-    }
-
-    /** @param devstackProfile the server runs with the {@code devstack} profile: with {@code allow-test-keys} a {@code dev-} key id is accepted (CC-137) */
-    public static PolicyEngine create(McpPlatformProperties.Policy policy, SSLContext sslContext, MeterRegistry meters,
-                                      boolean devstackProfile) throws IOException, GeneralSecurityException {
-        BundleVerifier main = verifier(Channel.MAIN, policy.getMain(), policy.isAllowTestKeys(), devstackProfile);
-        boolean withOverrides = policy.getOverrides().getUrl() != null && !policy.getOverrides().getUrl().isBlank();
-        BundleVerifier overrides = withOverrides ? verifier(Channel.OVERRIDES, policy.getOverrides(), policy.isAllowTestKeys(), devstackProfile)
-                : main;
-        Map<Channel, String> minimum = new EnumMap<>(Channel.class);
-        if (policy.getMain().getMinimumRevision() != null) {
-            minimum.put(Channel.MAIN, policy.getMain().getMinimumRevision());
-        }
-        if (withOverrides && policy.getOverrides().getMinimumRevision() != null) {
-            minimum.put(Channel.OVERRIDES, policy.getOverrides().getMinimumRevision());
-        }
-        PolicyStore store = policy.getStateDir() == null || policy.getStateDir().isBlank()
-                ? new PolicyStore(main, overrides)
-                : new PolicyStore(main, overrides, new PolicyStore.Persistence(Path.of(policy.getStateDir()), minimum,
-                        warning -> LOG.warn("event=policy_state_warning detail=\"{}\"", warning)));
-        PolicyEngine engine = new PolicyEngine(store,
-                new PolicyBundleClient(sslContext, policy.getConnectTimeout(), policy.getReadTimeout()),
-                URI.create(policy.getMain().getUrl()),
-                policy.getMain().getRefreshInterval() == null ? MAIN_INTERVAL : policy.getMain().getRefreshInterval(),
-                withOverrides ? URI.create(policy.getOverrides().getUrl()) : null,
-                policy.getOverrides().getRefreshInterval() == null ? OVERRIDES_INTERVAL
-                        : policy.getOverrides().getRefreshInterval(),
-                policy.getStartupTimeout(), policy.getOverridesGrace(), meters);
+    public static PolicyEngine create(McpPlatformProperties.PolicyData config, ServerPolicies policies, SSLContext sslContext,
+                                      MeterRegistry meters) {
+        PolicyEngine engine = new PolicyEngine(policies, new PolicyDataClient(sslContext, config.getConnectTimeout(), config.getReadTimeout()),
+                URI.create(config.getUrl()), config.getRefreshInterval(), config.getRetryInterval(), config.getStartupTimeout(), meters);
         engine.start();
         return engine;
     }
 
-    private static BundleVerifier verifier(Channel channel, McpPlatformProperties.PolicyChannel config, boolean allowTestKeys,
-                                           boolean devstackProfile) throws IOException, GeneralSecurityException {
-        String pem = config.getPublicKey() != null && !config.getPublicKey().isBlank() ? config.getPublicKey()
-                : Files.readString(Path.of(config.getPublicKeyFile()));
-        PublicKey key = BundleVerifier.ed25519PublicKeyFromPem(pem);
-        return BundleVerifier.of(channel, key, config.getKeyId(), allowTestKeys).withDevstackProfile(devstackProfile);
+    /**
+     * An engine that holds {@code data} and never asks anyone: for a test of the checks of a server without a gateway.
+     *
+     * @throws IllegalArgumentException when the data cannot be used for the policies
+     */
+    public static PolicyEngine fixed(ServerPolicies policies, PolicyData data) {
+        PolicyEngine engine = new PolicyEngine(policies, null, null, Duration.ofDays(1), Duration.ofDays(1), Duration.ZERO, null);
+        engine.current = PolicySnapshot.of(policies, data);
+        return engine;
     }
 
-    /**
-     * Loads the first bundles and starts the periodic pulls.
-     *
-     * @throws IllegalStateException when no main bundle could be loaded within the startup timeout
-     */
+    /** Asks for the first data (for at most the startup timeout) and starts the periodic refresh. */
     public void start() {
         long deadline = System.nanoTime() + startupTimeout.toNanos();
-        while (!store.current().isPresent()) {
-            refresh(Channel.MAIN);
-            if (store.current().isPresent()) {
-                break;
-            }
-            if (System.nanoTime() > deadline) {
-                throw new IllegalStateException("No policy bundle could be loaded from " + sources.get(Channel.MAIN).latest()
-                        + " within " + startupTimeout.toSeconds() + " s (a server without a signed policy does not start; "
-                        + "see the log for event=policy_bundle_rejected or event=policy_bundle_fetch_failed)");
-            }
-            sleep(500);
+        refresh();
+        while (current == null && System.nanoTime() < deadline) {
+            sleep(Math.min(500, Math.max(1, TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime()))));
+            refresh();
         }
-        if (sources.containsKey(Channel.OVERRIDES)) {
-            while (store.current().flatMap(Snapshot::overrides).isEmpty() && System.nanoTime() < deadline) {
-                refresh(Channel.OVERRIDES);
-                if (store.current().flatMap(Snapshot::overrides).isPresent() || !store.awaitingOverrides()
-                        && states.get(Channel.OVERRIDES).etag != null) {
-                    break;
-                }
-                sleep(500);
-            }
+        if (current == null) {
+            LOG.warn("event=policy_data_missing detail=\"no policy data could be loaded from {} within {} s; calls are refused until it "
+                    + "is (is the server registered at the gateway?)\"", uri, startupTimeout.toSeconds());
         }
-        startedNanos = System.nanoTime();
-        scheduler = Executors.newScheduledThreadPool(2, task -> {
-            Thread thread = new Thread(task, "policy-bundle-pull");
+        scheduler = Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, "policy-data-pull");
             thread.setDaemon(true);
             return thread;
         });
-        sources.forEach((channel, source) -> scheduler.scheduleWithFixedDelay(() -> refresh(channel),
-                source.interval().toMillis(), source.interval().toMillis(), TimeUnit.MILLISECONDS));
+        scheduleNext();
+    }
+
+    private void scheduleNext() {
+        ScheduledExecutorService pool = scheduler;
+        if (pool == null || pool.isShutdown()) {
+            return;
+        }
+        Duration delay = current == null ? retryInterval : refreshInterval;
+        pool.schedule(() -> {
+            try {
+                refresh();
+            } finally {
+                scheduleNext();
+            }
+        }, delay.toMillis(), TimeUnit.MILLISECONDS);
     }
 
     private static void sleep(long millis) {
@@ -190,150 +126,151 @@ public final class PolicyEngine implements AutoCloseable {
             Thread.sleep(millis);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            throw new IllegalStateException("interrupted while waiting for the policy bundle", ex);
+            throw new IllegalStateException("interrupted while waiting for the policy data", ex);
         }
     }
 
-    /** One pull of a channel; never throws: a failure leaves the active bundle in place. */
-    public void refresh(Channel channel) {
-        ReentrantLock lock = locks.get(channel);
-        lock.lock();
+    /** One request for the data; never throws: a failure leaves the active snapshot in place. */
+    public void refresh() {
+        pulling.lock();
         try {
-            pull(channel);
+            pull();
         } finally {
-            lock.unlock();
+            pulling.unlock();
         }
     }
 
-    private void pull(Channel channel) {
-        Source source = sources.get(channel);
-        if (source == null) {
+    private void pull() {
+        if (client == null) {
             return;
         }
-        ChannelState state = states.get(channel);
         try {
-            Optional<PolicyBundleClient.Pointer> pointer = client.pointer(source.latest(), state.etag);
-            if (pointer.isEmpty()) {
+            Optional<PolicyDataClient.Fetched> fetched = client.fetch(uri, etag);
+            if (fetched.isEmpty()) {
                 return;
             }
-            BundlePointer latest = pointer.get().pointer();
-            if (latest.revision().equals(loadedRevision(channel).orElse(null))) {
-                state.etag = pointer.get().etag();
+            PolicyData data = fetched.get().data();
+            PolicySnapshot loaded = current;
+            if (loaded != null && !PolicyDataGate.acceptRevision(OptionalLong.of(loaded.revision()), data.revision())) {
+                if (data.revision() < loaded.revision()) {
+                    count("mcp_server_policy_data_rejected_total", "older");
+                    LOG.warn("event=policy_data_rejected revision={} detail=\"older than revision {} in use; previous data stays active\"",
+                            data.revision(), loaded.revision());
+                } else {
+                    etag = fetched.get().etag();
+                }
                 return;
             }
-            if (latest.revision().equals(state.rejectedRevision)) {
+            if (data.revision() == rejectedRevision) {
                 return;
             }
-            PolicyBundleClient.Bundle bundle = client.download(source.latest(), latest);
             try {
-                Snapshot snapshot = channel == Channel.MAIN
-                        ? store.loadMain(latest, bundle.archive(), bundle.signature())
-                        : store.loadOverrides(latest, bundle.archive(), bundle.signature());
-                state.etag = pointer.get().etag();
-                state.rejectedRevision = null;
-                PolicyBundle loaded = channel == Channel.MAIN ? snapshot.main() : snapshot.overrides().orElseThrow();
-                LOG.info("event=policy_bundle_loaded channel={} revision={}", channel.name().toLowerCase(java.util.Locale.ROOT),
-                        loaded.revision());
-            } catch (BundleRejectedException ex) {
-                state.rejectedRevision = latest.revision();
-                state.etag = pointer.get().etag();
-                count("mcp_server_policy_bundle_rejected_total", channel, ex.reason().wireCode());
-                LOG.warn("event=policy_bundle_rejected channel={} revision={} reason={} detail=\"previous bundle stays active\"",
-                        channel.name().toLowerCase(java.util.Locale.ROOT), latest.revision(), ex.reason().wireCode());
+                PolicySnapshot made = PolicySnapshot.of(policies, data);
+                current = made;
+                etag = fetched.get().etag();
+                rejectedRevision = -1;
+                LOG.info("event=policy_data_loaded revision={} overrides={} approved={}", data.revision(), data.overrides().size(),
+                        data.approvedPoliciesHash().isPresent());
+                made.ignored().forEach(skipped -> {
+                    count("mcp_server_policy_data_scope_ignored_total", skipped.reason());
+                    LOG.warn("event=policy_data_scope_ignored revision={} group=\"{}\" scope=\"{}\" reason={}", data.revision(),
+                            clean(skipped.group()), clean(skipped.scope()), skipped.reason());
+                });
+                if (!made.overridesValid()) {
+                    count("mcp_server_policy_data_rejected_total", "override_invalid");
+                    LOG.error("event=policy_data_overrides_invalid revision={} detail=\"every call is refused until the overrides validate: {}\"",
+                            data.revision(), clean(String.join(" | ", made.overrideProblems())));
+                }
+            } catch (IllegalArgumentException ex) {
+                rejectedRevision = data.revision();
+                etag = fetched.get().etag();
+                count("mcp_server_policy_data_rejected_total", "unusable");
+                LOG.warn("event=policy_data_rejected revision={} detail=\"{}\"{}", data.revision(), clean(ex.getMessage()),
+                        loaded == null ? "" : " previous=\"previous data stays active\"");
             }
-        } catch (BundleRejectedException ex) {
-            count("mcp_server_policy_bundle_rejected_total", channel, ex.reason().wireCode());
-            LOG.warn("event=policy_bundle_rejected channel={} reason={} detail=\"latest.json; previous bundle stays active\"",
-                    channel.name().toLowerCase(java.util.Locale.ROOT), ex.reason().wireCode());
         } catch (IOException ex) {
-            count("mcp_server_policy_bundle_fetch_failed_total", channel, "io");
-            LOG.warn("event=policy_bundle_fetch_failed channel={} detail=\"{}\"",
-                    channel.name().toLowerCase(java.util.Locale.ROOT), ex.getClass().getSimpleName());
+            count("mcp_server_policy_data_fetch_failed_total", "io");
+            LOG.warn("event=policy_data_fetch_failed detail=\"{}\"", ex.getMessage());
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
         } catch (RuntimeException ex) {
-            count("mcp_server_policy_bundle_fetch_failed_total", channel, "error");
-            LOG.error("event=policy_bundle_fetch_failed channel={} detail=\"{}\"",
-                    channel.name().toLowerCase(java.util.Locale.ROOT), ex.getClass().getName());
+            count("mcp_server_policy_data_fetch_failed_total", "error");
+            LOG.error("event=policy_data_fetch_failed detail=\"{}\"", ex.getClass().getName());
         }
     }
 
-    private Optional<String> loadedRevision(Channel channel) {
-        return store.current().flatMap(snapshot -> channel == Channel.MAIN ? Optional.of(snapshot.main().revision())
-                : snapshot.overrides().map(PolicyBundle::revision));
+    /** For a log line: no quote, no line break, bounded; the text may come from the data of an administrator. */
+    private static String clean(String text) {
+        String flat = text == null ? "" : text.replaceAll("[\\p{Cntrl}\"]", "'");
+        return flat.length() > 300 ? flat.substring(0, 300) : flat;
     }
 
-    private void count(String name, Channel channel, String reason) {
+    private void count(String name, String reason) {
         if (meters != null) {
-            meters.counter(name, "channel", channel.name().toLowerCase(java.util.Locale.ROOT), "reason", reason).increment();
+            meters.counter(name, "reason", reason).increment();
         }
     }
 
     /**
-     * The policy to decide with.
+     * The snapshot to decide with.
      *
-     * @throws PolicyUnavailableException when there is none yet, or the overrides bundle is awaited
+     * @throws PolicyUnavailableException when no policy data has been loaded yet
      */
-    public Snapshot snapshot() {
-        Snapshot current = store.current().orElseThrow(() -> new PolicyUnavailableException("no policy bundle is loaded"));
-        if (store.awaitingOverrides()) {
-            if (System.nanoTime() - startedNanos < overridesGrace.toNanos()) {
-                throw new PolicyUnavailableException("the emergency overrides bundle that was active before the restart has not been loaded again");
-            }
-            if (graceAlarmRaised.compareAndSet(false, true)) {
-                LOG.error("event=policy_overrides_missing_alarm detail=\"serving without the overrides bundle that was active before the restart\"");
-            }
+    public PolicySnapshot snapshot() {
+        PolicySnapshot snapshot = current;
+        if (snapshot == null) {
+            throw new PolicyUnavailableException("no policy data is loaded");
         }
-        return current;
+        return snapshot;
     }
 
-    /** Revision of the main bundle in use, empty before the first load. */
-    public Optional<String> mainRevision() {
-        return loadedRevision(Channel.MAIN);
+    /** Revision of the policy data in use, empty before the first load. */
+    public OptionalLong revision() {
+        PolicySnapshot snapshot = current;
+        return snapshot == null ? OptionalLong.empty() : OptionalLong.of(snapshot.revision());
     }
 
-    /** The Cedar authorizer over {@code snapshot}: only a clean allow counts, see {@link ResultFilter#cedarAuthorizer}. */
-    public ResultFilter.Authorizer authorizer(Snapshot snapshot) {
-        return ResultFilter.cedarAuthorizer(new BasicAuthorizationEngine(), snapshot.policies(), snapshot.schema());
+    /** The resource types of this server, from its own policies: they do not change while it runs. */
+    public ResourceTypes resourceTypes() {
+        return policies.resourceTypes();
+    }
+
+    /** The policies of this server's jar. */
+    public ServerPolicies policies() {
+        return policies;
     }
 
     /**
-     * Asks for a pull of the main bundle when the caller's token names a newer revision than the loaded one (at most every
-     * two seconds), and returns at once: the pull runs on a thread of the engine, so the call that carries the hint is decided
-     * with the bundle loaded now. The all-zero revision of a gateway without a bundle never triggers it.
+     * Whether a call may be evaluated, by {@link PolicyDataGate#decide}: data is held, it approves the {@code policiesHash} of this server's
+     * policies, and its overrides validate. When {@code prv} of the token is newer than the data held, the engine asks the gateway before
+     * it decides (the call waits for it, at most {@code read-timeout}) and decides with the answer, or refuses when the answer is not at
+     * least as new. The all-zero {@code prv} of a gateway without data forces nothing.
      */
-    public void hintRevision(String policyRevision) {
-        if (policyRevision == null || ZERO_REVISION.equals(policyRevision) || !Revisions.isValid(policyRevision)) {
-            return;
-        }
-        Optional<String> loaded = mainRevision();
-        if (loaded.isPresent() && !Revisions.isNewer(policyRevision, loaded.get())) {
-            return;
-        }
-        long now = System.nanoTime();
-        long last = lastHintPull.get();
-        ScheduledExecutorService pool = scheduler;
-        if (pool != null && now - last >= HINT_PULL_MIN_NANOS && lastHintPull.compareAndSet(last, now)
-                && !locks.get(Channel.MAIN).isLocked()) {
-            // Not on the request thread: a repository that answers slowly must not hold up the calls. tryLock, not lock: when
-            // the scheduled pull of the channel has just taken it, this one is not needed and must not wait on it.
-            pool.execute(() -> {
-                ReentrantLock lock = locks.get(Channel.MAIN);
-                if (lock.tryLock()) {
-                    try {
-                        pull(Channel.MAIN);
-                    } finally {
-                        lock.unlock();
-                    }
+    public PolicyDataGate.Decision gate(OptionalLong prv) {
+        PolicySnapshot held = current;
+        OptionalLong asked = prv.isPresent() && prv.getAsLong() > 0 ? prv : OptionalLong.empty();
+        PolicyDataGate.Data refreshed = null;
+        if (asked.isPresent() && (held == null || asked.getAsLong() > held.revision()) && client != null) {
+            pulling.lock();
+            try {
+                PolicySnapshot now = current;
+                if (now == null || now.revision() < asked.getAsLong()) {
+                    pull();
+                    now = current;
                 }
-            });
+                refreshed = now == null ? null : now.gateData();
+            } finally {
+                pulling.unlock();
+            }
         }
+        return PolicyDataGate.decide(policies.policiesHash(), held == null ? null : held.gateData(), asked, refreshed);
     }
 
     @Override
     public void close() {
-        if (scheduler != null) {
-            scheduler.shutdownNow();
+        ScheduledExecutorService pool = scheduler;
+        if (pool != null) {
+            pool.shutdownNow();
         }
     }
 }

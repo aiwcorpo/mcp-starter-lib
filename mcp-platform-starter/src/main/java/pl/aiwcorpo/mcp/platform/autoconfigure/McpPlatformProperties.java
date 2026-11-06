@@ -26,16 +26,10 @@ import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
  *         allowed-client-names: [mcp-gateway]
  *       credential:
  *         connect-url: http://localhost:18090/connections?system={system}   # portal in the dev stack
- *       policy:
- *         main:
- *           url: https://policies.internal/policies/main/latest.json   # C7, pulled with ETag
- *           key-id: policies-main-2026
- *           public-key-file: /etc/mcp/policies-main.pub.pem            # Ed25519, SPKI PEM
- *         overrides:                                                   # optional emergency bundle
- *           url: https://policies.internal/policies/overrides/latest.json
- *           key-id: policies-overrides-2026
- *           public-key-file: /etc/mcp/policies-overrides.pub.pem
- *         state-dir: /var/lib/mcp/policy-state                         # rollback protection across restarts
+ *       policy-data:                         # C7: scope mapping, allowed clients and overrides from the gateway
+ *         url: https://mcp-gateway.internal:8443/internal/v1/policy-data
+ *         tls-name: mcp-gateway.internal     # when the certificate of the gateway does not name the host of url
+ *         ssl-bundle: mcp-internal           # the server's own certificate and the internal CA; default: server.ssl.bundle
  * </pre>
  */
 @ConfigurationProperties("aiwcorpo.mcp.platform")
@@ -61,7 +55,7 @@ public class McpPlatformProperties {
     private final Credential credential = new Credential();
     private final DevPat devPat = new DevPat();
     private final Tools tools = new Tools();
-    private final Policy policy = new Policy();
+    private final PolicyData policyData = new PolicyData();
     private final Manifest manifest = new Manifest();
     private final Paging paging = new Paging();
     private final Capability capability = new Capability();
@@ -335,26 +329,42 @@ public class McpPlatformProperties {
         }
     }
 
-    /** One policy bundle channel (C7): where it is pulled from and the key that signs it. */
-    public static class PolicyChannel {
+    /**
+     * {@code aiwcorpo.mcp.platform.policy-data.*}: the administrator data the server evaluates its own policies with (scope mapping,
+     * allowed AI clients, emergency overrides), read from the gateway's internal port over mTLS (C7). The policies themselves are in
+     * the server's jar ({@code mcp/policies/}).
+     */
+    public static class PolicyData {
 
-        /** URL of {@code latest.json}; {@code url} and {@code sigUrl} in it are file names next to it. */
+        /**
+         * URL of {@code GET /internal/v1/policy-data} on the gateway's internal TLS port, for example
+         * {@code https://<gateway address>:8443/internal/v1/policy-data}. Required outside the {@code dev} profile, https there.
+         */
         private String url;
 
-        /** Id of the signing key; {@code test-*} only with {@code policy.allow-test-keys} in the dev profile. */
-        private String keyId;
+        /**
+         * The name the gateway's certificate must carry when it is not the host of {@code url} (an address, a service name of the
+         * cluster). Checked against the subject alternative names. Unset: the host of {@code url}.
+         */
+        private String tlsName;
 
-        /** The Ed25519 public key as SPKI PEM text. */
-        private String publicKey;
+        /**
+         * Name of the Spring SSL bundle with the server's own key and certificate (the gateway reads the {@code serverId} from its CN) and
+         * the internal CA. Unset: the bundle of {@code server.ssl.bundle}. Required outside the {@code dev} profile.
+         */
+        private String sslBundle;
 
-        /** File with the public key, used when {@code public-key} is not set. */
-        private String publicKeyFile;
+        /** How often the data is asked for once it is loaded; a newer {@code prv} in a token asks at once. */
+        private Duration refreshInterval = Duration.ofSeconds(30);
 
-        /** Lowest revision ever accepted on this channel (CC-066), for example raised after an incident. */
-        private String minimumRevision;
+        /** How often it is asked for while none is loaded (the gateway was down at start, or the server is not registered yet). */
+        private Duration retryInterval = Duration.ofSeconds(5);
 
-        /** How often the channel is pulled; the platform default is 30 s for main and 5 s for overrides. */
-        private Duration refreshInterval;
+        /** How long the start waits for the first data. The server starts after it all the same and refuses calls until it has some. */
+        private Duration startupTimeout = Duration.ofSeconds(10);
+
+        private Duration connectTimeout = Duration.ofSeconds(2);
+        private Duration readTimeout = Duration.ofSeconds(10);
 
         public String getUrl() {
             return url;
@@ -364,36 +374,20 @@ public class McpPlatformProperties {
             this.url = url;
         }
 
-        public String getKeyId() {
-            return keyId;
+        public String getTlsName() {
+            return tlsName;
         }
 
-        public void setKeyId(String keyId) {
-            this.keyId = keyId;
+        public void setTlsName(String tlsName) {
+            this.tlsName = tlsName;
         }
 
-        public String getPublicKey() {
-            return publicKey;
+        public String getSslBundle() {
+            return sslBundle;
         }
 
-        public void setPublicKey(String publicKey) {
-            this.publicKey = publicKey;
-        }
-
-        public String getPublicKeyFile() {
-            return publicKeyFile;
-        }
-
-        public void setPublicKeyFile(String publicKeyFile) {
-            this.publicKeyFile = publicKeyFile;
-        }
-
-        public String getMinimumRevision() {
-            return minimumRevision;
-        }
-
-        public void setMinimumRevision(String minimumRevision) {
-            this.minimumRevision = minimumRevision;
+        public void setSslBundle(String sslBundle) {
+            this.sslBundle = sslBundle;
         }
 
         public Duration getRefreshInterval() {
@@ -403,60 +397,13 @@ public class McpPlatformProperties {
         public void setRefreshInterval(Duration refreshInterval) {
             this.refreshInterval = refreshInterval;
         }
-    }
 
-    /** {@code aiwcorpo.mcp.platform.policy.*}: the policy bundle the server evaluates resources with (C7). */
-    public static class Policy {
-
-        private final PolicyChannel main = new PolicyChannel();
-        private final PolicyChannel overrides = new PolicyChannel();
-
-        /**
-         * Directory for the rollback protection across restarts (CC-066): the last revision and archive hash per
-         * channel. One directory per instance. Required outside the {@code dev} profile.
-         */
-        private String stateDir;
-
-        /** Accept bundles signed with the published test keys. Allowed only with the {@code dev} profile. */
-        private boolean allowTestKeys = false;
-
-        /** How long the start waits for the first main bundle (and for the overrides bundle, if one is configured). */
-        private Duration startupTimeout = Duration.ofSeconds(30);
-
-        /**
-         * After a restart in which the overrides bundle was active, how long calls are refused until it is loaded again
-         * (the emergency forbid rules must not vanish silently). After that the server serves with an alarm in the log.
-         */
-        private Duration overridesGrace = Duration.ofMinutes(2);
-
-        private Duration connectTimeout = Duration.ofSeconds(2);
-        private Duration readTimeout = Duration.ofSeconds(10);
-
-        /** Name of a Spring SSL bundle that trusts the bundle repository; JVM default when unset. */
-        private String sslBundle;
-
-        public PolicyChannel getMain() {
-            return main;
+        public Duration getRetryInterval() {
+            return retryInterval;
         }
 
-        public PolicyChannel getOverrides() {
-            return overrides;
-        }
-
-        public String getStateDir() {
-            return stateDir;
-        }
-
-        public void setStateDir(String stateDir) {
-            this.stateDir = stateDir;
-        }
-
-        public boolean isAllowTestKeys() {
-            return allowTestKeys;
-        }
-
-        public void setAllowTestKeys(boolean allowTestKeys) {
-            this.allowTestKeys = allowTestKeys;
+        public void setRetryInterval(Duration retryInterval) {
+            this.retryInterval = retryInterval;
         }
 
         public Duration getStartupTimeout() {
@@ -465,14 +412,6 @@ public class McpPlatformProperties {
 
         public void setStartupTimeout(Duration startupTimeout) {
             this.startupTimeout = startupTimeout;
-        }
-
-        public Duration getOverridesGrace() {
-            return overridesGrace;
-        }
-
-        public void setOverridesGrace(Duration overridesGrace) {
-            this.overridesGrace = overridesGrace;
         }
 
         public Duration getConnectTimeout() {
@@ -489,14 +428,6 @@ public class McpPlatformProperties {
 
         public void setReadTimeout(Duration readTimeout) {
             this.readTimeout = readTimeout;
-        }
-
-        public String getSslBundle() {
-            return sslBundle;
-        }
-
-        public void setSslBundle(String sslBundle) {
-            this.sslBundle = sslBundle;
         }
     }
 
@@ -733,8 +664,8 @@ public class McpPlatformProperties {
         return tools;
     }
 
-    public Policy getPolicy() {
-        return policy;
+    public PolicyData getPolicyData() {
+        return policyData;
     }
 
     public Manifest getManifest() {
