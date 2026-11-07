@@ -6,7 +6,7 @@ all of that. The library verifies the gateway's internal JWT, receives the crede
 makes sure that only safe errors leave a tool.
 
 Stack: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), `mcp-contracts` 7.0.0.
-Version: **4.0.0** (state and plan in `STATUS.md`, changes since 3.x in the `CHANGELOG.md` entry for 4.0.0, changes since 2.x in `MIGRATION-3.0.md`).
+Version: **4.0.0** (state and plan in `STATUS.md`, changes since 3.x in the `CHANGELOG.md` entry for 4.0.0).
 
 ## Who this is for and how to start
 
@@ -20,7 +20,7 @@ This file is the reference for what the starter does and how it is configured. T
 template, writing tools, choosing the credential type, registering the manifest, testing, putting a foreign server behind the
 platform, migrations) are in the developer guide of the platform documentation (`mcp-docs`, directory `docs/developer`). Within
 this file: the first tool is "First server", running without the gateway is "Running locally", tests are "Server tests without the
-gateway", settings are "Configuration", and moving from an earlier version is `MIGRATION-3.0.md`.
+gateway", settings are "Configuration", and moving from 3.x is the "Migracja serwera" part of the 4.0.0 entry in `CHANGELOG.md`.
 
 ### Using the artifacts
 
@@ -292,7 +292,7 @@ the policy data and keys are fetched by platform beans (an explicit call at the 
 `jtiReplayStore` and `internalJwtVerifier`, also with `spring.main.lazy-initialization=true`); a server's own `GatewayKeys` and
 `JtiReplayStore` are created before `internalJwtVerifier` but after the guard, as long as they do no I/O in the constructor. The
 starter version in a server comes from the property `mcp-platform.version` (the template) or the `<version>` of the
-`mcp-platform-bom` import (described in `MIGRATION-3.0.md`). It must be the only active profile. Every start logs `WARN
+`mcp-platform-bom` import. It must be the only active profile. Every start logs `WARN
 event=devstack_profile`, the metric `mcp_server_devstack_active` is 1, and the C6 manifest gets `"environment": "dev"` (CC-138; a
 gateway in production mode rejects such a manifest: `422 manifest_rejected`, reason `environment_mismatch`; the field does not
 enter `definitionHash` and is absent in other profiles, which means production). `test-*` keys under a profile other than `dev` and
@@ -399,7 +399,7 @@ arrives.
 Start (the starter's dependencies must be in `~/.m2`: `./mvnw install` in the starter repository, or a released version):
 
 ```bash
-export JAVA_HOME=/path/to/jdk-25   # any JDK 25; ci/run.sh finds one by itself
+export JAVA_HOME=/path/to/jdk-25   # any JDK 25
 mvn spring-boot:run -Dspring-boot.run.profiles=dev -Dspring-boot.run.arguments=--server.port=18600
 # or after mvn package (a jar with finalName `mcp-jira`; Java 25, not the `java` on PATH if it is older):
 $JAVA_HOME/bin/java -jar target/mcp-jira.jar --spring.profiles.active=dev --server.port=18600
@@ -1107,7 +1107,7 @@ class DevProfileLoopbackTest extends ServerTestSupport {
 ```
 
 `ServerTestSupport` is the base class of the server tests (`@SpringBootTest`, `@ActiveProfiles("dev")`), in the same package. Moving
-from earlier versions step by step: `MIGRATION-3.0.md`, the section "Moving from alpha-11 (or alpha-12) to 3.0.0-alpha-14".
+from 3.x: the "Migracja serwera" part of the 4.0.0 entry in `CHANGELOG.md`.
 
 `assertServerIsGuarded(context)` requires that the server context contains all the beans from `PlatformPresenceCheck.REQUIRED_BEANS`
 (the guard, the verifier and the JWT filter, the audit post-processor, the MCP server customizer) and that `server.address` is a
@@ -1216,31 +1216,19 @@ test gateway starts with (`TestGateway.DEFAULT_POLICY_REVISION`). A test of the 
 ## Build
 
 ```bash
-./mvnw install          # JDK 25 in JAVA_HOME or on PATH; ci/run.sh verify finds one itself; needs Docker (Testcontainers: Redis with an ACL as in the dev stack)
+./mvnw install          # JDK 25 in JAVA_HOME or on PATH; needs Docker (Testcontainers: Redis with an ACL as in the dev stack)
 ```
 
 ### CI
 
-One entry point: `ci/run.sh` (`make ci` calls `ci/run.sh verify`). The same script runs in a developer shell and in the
-`maven:3.9.12-eclipse-temurin-25` image; `.gitlab-ci.yml` is a thin overlay, and a Jenkinsfile and a GitHub Actions workflow should
-call only this script.
-
-| Command | What it does |
-|---|---|
-| `ci/run.sh verify` (default) | a text check of the sources (non-ASCII quotes and spaces, tool traces), then `mvnw verify` |
-| `ci/run.sh hygiene` | the text check only |
-| `ci/run.sh release` | `verify` and `install` into the local Maven repository; refuses for `-SNAPSHOT`, for a version already installed and for a HEAD without the tag `v<version>` |
-
-Overlays that call only this script: `.gitlab-ci.yml`, `Jenkinsfile`, `.github/workflows/ci.yml`. `verify` does `clean verify`, fails
-when Maven fails and when no test ran; an unknown command is exit code 2. Code from a change (a merge request, a pull request) does not
-get the Docker socket or main's secrets: the change job has `MCP_CI_NO_DOCKER=true` (without `RedisJtiReplayStoreTest`),
-the main job runs on a runner with the socket, and the change cache has a separate key and `policy: pull`.
-Tests that assume a developer's machine skip themselves on a host with a deployment signal (container, pod, systemd; the same
-detector as in the starter); in a container 16 tests are skipped and the other 915 run. The number of skipped tests is in the log, and
-`release` refuses when anything was skipped or `MCP_CI_NO_DOCKER` is set. Verified: a local run and a run in the
+`.gitlab-ci.yml`, `Jenkinsfile` and `.github/workflows/ci.yml` call `./mvnw -B verify` in the `maven:3.9.12-eclipse-temurin-25`
+image. Code from a change (a merge request, a pull request) does not get the Docker socket or main's secrets: the change job runs
+`./mvnw -B verify '-Dtest=!RedisJtiReplayStoreTest'`, the main job runs on a runner with the socket, and the change cache has a
+separate key and `policy: pull`. Tests that assume a developer's machine skip themselves on a host with a deployment signal
+(container, pod, systemd; the same detector as in the starter); in a container 16 tests are skipped and the other 915 run. The
+release workflow refuses a run in which any test was skipped. Verified: a local run and a run in the
 `maven:3.9.12-eclipse-temurin-25` image; not on a real GitLab, Jenkins or GitHub runner. With Docker that has no route to the host,
-set `TESTCONTAINERS_HOST_OVERRIDE`. `MAVEN_REPO_LOCAL` is the one Maven repository for build, install and the check of an existing
-version.
+set `TESTCONTAINERS_HOST_OVERRIDE`.
 
 The `mcp-contracts` 7.0.0 artifacts come from Maven Central; until they are released they must be in `~/.m2`. `RedisJtiReplayStoreTest` starts
 Redis through Testcontainers, so access to a container environment is needed (the Docker socket mounted into the CI container, or
@@ -1256,7 +1244,7 @@ Per release (a maintainer):
 1. Release `mcp-contracts` first and publish its deployment in the Central Portal: this repository depends on its artifacts
    (`mcp-contracts`, `mcp-cedar-entities`, `mcp-manifest`), which Maven resolves from Central. Until then the
    build works only with them in `~/.m2`.
-2. Version without `-SNAPSHOT` in all poms (`4.0.0`), `CHANGELOG.md` entry, `ci/run.sh verify` green, and
+2. Version without `-SNAPSHOT` in all poms (`4.0.0`), `CHANGELOG.md` entry, `./mvnw -B verify` green, and
    `./mvnw -Prelease -Dgpg.skip verify` (builds the sources and javadoc jars Central requires; javadoc must pass doclint).
 3. Commit, tag `vX.Y.Z`, and push only that one tag (`git push origin vX.Y.Z`, never `git push --tags`: the local
    `v3.0.0-beta-N` tags are not meant to be published). The workflow reacts to `vX.Y.Z` only; pre-release tags do not start it.
@@ -1294,4 +1282,4 @@ One-time setup (a human):
 ## Versioning
 
 SemVer, one version for all modules. Pre-releases: `3.0.0-alpha-N`, `3.0.0-beta-N` (Maven ordering: `alpha-1 < alpha-2 < beta-1 <
-3.0.0`). A breaking change is a new major version and a description in `MIGRATION-<version>.md`.
+3.0.0`). A breaking change is a new major version and a "Migracja serwera" part in its CHANGELOG entry.

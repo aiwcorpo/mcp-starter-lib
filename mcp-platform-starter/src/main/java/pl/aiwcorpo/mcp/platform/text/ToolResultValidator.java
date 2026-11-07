@@ -72,7 +72,6 @@ public final class ToolResultValidator {
             }
         }
         throw new ToolResultRejectedException("The result of tool '" + tool + "' does not match its outputSchema at "
-                + String.join(", ", problems) + ". A result component that can be null needs @Nullable "
-                + "(see MIGRATION-3.0.md, alpha-8).");
+                + String.join(", ", problems) + ". A result component that can be null needs @Nullable.");
     }
 }

@@ -66,7 +66,7 @@ public class ForeignToolPolicyCheck implements BeanFactoryPostProcessor, Environ
             throw new IllegalStateException("Bean(s) " + weakened + " replace the configuration guard, the internal "
                     + "JWT check or the policy engine and the resource checks. They are not extension points in any profile: the 'dev' relaxations are tied to the "
                     + "guard's loopback check and the JWT check is what every request passes. Replace GatewayKeys or "
-                    + "JtiReplayStore instead. See MIGRATION-3.0.md.");
+                    + "JtiReplayStore instead.");
         }
         if (List.of(environment.getActiveProfiles()).equals(List.of(PlatformConfigurationGuard.DEV_PROFILE))) {
             return;
@@ -81,7 +81,7 @@ public class ForeignToolPolicyCheck implements BeanFactoryPostProcessor, Environ
                     + "pipeline (input policy, audit wrapper, registered-tools check, hints post-processor). Outside the "
                     + "'dev' profile they would switch off the bounded-schema rule, the argument validation and audit of "
                     + "every tool or the check that every tool went through the wrapper; remove them (extra behaviour belongs in a "
-                    + "ToolCallInterceptor). See MIGRATION-3.0.md.");
+                    + "ToolCallInterceptor).");
         }
     }
 

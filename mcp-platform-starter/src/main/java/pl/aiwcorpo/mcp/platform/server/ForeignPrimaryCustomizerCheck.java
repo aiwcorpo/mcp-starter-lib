@@ -33,7 +33,7 @@ public class ForeignPrimaryCustomizerCheck implements BeanFactoryPostProcessor {
                     + "replace the starter's customizer, which sets immediateExecution(true) (tools on the request "
                     + "thread, where the credential is) and validateToolInputs(false) (arguments validated by the "
                     + "starter, with C10 errors and C8 audit). Remove @Primary: a customizer without it is applied "
-                    + "together with the starter's. See MIGRATION-3.0.md.");
+                    + "together with the starter's.");
         }
     }
 }

@@ -38,7 +38,7 @@ class InternalJwtVectorsTest {
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final String ROOT = "mcp-contracts/test-vectors/";
 
-    /** Files in test-vectors/jwt of mcp-contracts 6.3.2. */
+    /** Files in test-vectors/jwt of mcp-contracts 7.0.0. */
     private static final int EXPECTED_VECTORS = 66;
 
     record Vector(String name, JsonNode data) {

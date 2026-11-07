@@ -204,7 +204,7 @@ public class PlatformConfigurationGuard implements InitializingBean {
         credentialTypeProblems(properties.getManifest(), problems);
         if (environment.containsProperty("aiwcorpo.mcp.platform.credential-type")) {
             problems.add("aiwcorpo.mcp.platform.credential-type was removed in 3.0.0-beta-7 (CC-166, CC-168): delete it and put the default type of "
-                    + "the system first in aiwcorpo.mcp.platform.manifest.accepted-credential-types (see MIGRATION-3.0.md, 'Z beta-6 na beta-7')");
+                    + "the system first in aiwcorpo.mcp.platform.manifest.accepted-credential-types");
         }
 
         if (!dev) {
@@ -231,7 +231,7 @@ public class PlatformConfigurationGuard implements InitializingBean {
         Binder binder = Binder.get(environment);
         if (binder.bind("aiwcorpo.mcp.platform.guard", Bindable.mapOf(String.class, Object.class)).isBound()) {
             problems.add("aiwcorpo.mcp.platform.guard.* was removed in 3.0 (identity, privileges and confirmations "
-                    + "moved to the gateway); remove it, see MIGRATION-3.0.md");
+                    + "moved to the gateway); remove it");
         }
         if (binder.bind("aiwcorpo.mcp.platform.policy", Bindable.mapOf(String.class, Object.class)).isBound()) {
             problems.add("aiwcorpo.mcp.platform.policy.* (the signed policy bundles, their keys and state directory) was removed in 4.0.0: "
@@ -240,7 +240,7 @@ public class PlatformConfigurationGuard implements InitializingBean {
         }
         if (environment.containsProperty("aiwcorpo.mcp.platform.pat-header-prefix")) {
             problems.add("aiwcorpo.mcp.platform.pat-header-prefix was removed in 3.0; use auth-mode=dev-pat with "
-                    + "dev-pat.header-prefix (dev profile only), see MIGRATION-3.0.md");
+                    + "dev-pat.header-prefix (dev profile only)");
         }
 
         if (!problems.isEmpty()) {

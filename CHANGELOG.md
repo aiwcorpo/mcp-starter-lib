@@ -1,7 +1,7 @@
 # Changelog
 
 Format: wersje SemVer; kolejność od najnowszej. Przed 3.0.0 wersje `alpha` i `beta` (tagi `v3.0.0-alpha-N`,
-`v3.0.0-beta-N`) nie gwarantują zgodności między sobą; kroki migracji każdej z nich są w `MIGRATION-3.0.md`.
+`v3.0.0-beta-N`) nie gwarantują zgodności między sobą.
 Linia `mcp-platform` (3.x, 4.x) nie ma związku z wersją `mcp-contracts` (BOM zarządza obiema).
 
 ## 4.0.0 - 2026-11-06

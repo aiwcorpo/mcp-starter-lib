@@ -164,7 +164,7 @@ public record UntrustedText(String kind, String format, String text, boolean tru
         String clean = TextHygiene.normalize(raw);
         if (raw != null && !clean.equals(raw)) {
             // The text changed here, after the server's own filter had looked at it: the filter saw something else
-            // than the client will, typically because entities were decoded after normalize() (MIGRATION-3.0.md).
+            // than the client will, typically because entities were decoded after normalize().
             LOG.warn("event=untrusted_text_not_normalized tool={} detail=\"normalize() before the filter, then the "
                     + "factory\"", CallerContext.current().map(CallerContext::tool).map(TextHygiene::normalize).orElse("-"));
         }
