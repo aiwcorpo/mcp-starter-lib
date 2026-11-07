@@ -1,7 +1,5 @@
-# Thin wrapper: all logic is in ci/run.sh, which also runs in a developer's shell.
-#
 # Two jobs, because code from a merge request must not get the Docker socket or the main secrets:
-#   verify-change  merge requests; plain runner without the socket, MCP_CI_NO_DOCKER=true (Redis test left out).
+#   verify-change  merge requests; plain runner without the socket, the Redis test left out.
 #   verify-main    default branch; runner tagged docker-socket (the socket mounted, for Testcontainers), environment
 #                  ci-main (protected).
 # The cache of a merge request is a separate key and pull-only, so a merge request cannot plant files for the main job.
@@ -12,18 +10,16 @@ default:
   image: maven:3.9.12-eclipse-temurin-25
 
 variables:
-  MAVEN_REPO_LOCAL: "$CI_PROJECT_DIR/.m2/repository"
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
 
 verify-change:
   stage: verify
-  variables:
-    MCP_CI_NO_DOCKER: "true"
   cache:
     key: maven-change
     policy: pull
     paths: [.m2/repository]
   script:
-    - ci/run.sh verify
+    - ./mvnw -B verify '-Dtest=!RedisJtiReplayStoreTest'
   artifacts:
     when: always
     reports:
@@ -41,7 +37,7 @@ verify-main:
     policy: pull-push
     paths: [.m2/repository]
   script:
-    - ci/run.sh verify
+    - ./mvnw -B verify
   artifacts:
     when: always
     reports:

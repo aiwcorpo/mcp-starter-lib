@@ -1,4 +1,4 @@
-# Thin wrapper: all logic is in ci/run.sh. Code from a pull request gets no secrets and no Docker socket; only the push to main gets
+# Code from a pull request gets no secrets and no Docker socket; only the push to main gets
 # the socket (RedisJtiReplayStoreTest starts Redis with Testcontainers). No secrets are used at all: the mcp-contracts artifacts are
 # resolved from Maven Central, so a run needs no registry account.
 name: ci
@@ -18,14 +18,11 @@ jobs:
     timeout-minutes: 30
     container:
       image: maven:3.9.12-eclipse-temurin-25@sha256:4f82a03a7d6679281952d628131299b1be88d7030a49c6a2b7d2ba2642e44e3e
-    env:
-      MCP_CI_NO_DOCKER: "true"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - run: ci/run.sh verify
+      - run: ./mvnw -B verify '-Dtest=!RedisJtiReplayStoreTest'
   verify-main:
     if: github.event_name == 'push'
     runs-on: ubuntu-24.04
@@ -38,5 +35,4 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
-      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-      - run: ci/run.sh verify
+      - run: ./mvnw -B verify

@@ -63,11 +63,14 @@ jobs:
           done
           true
       # The hosted runner is a systemd service, so INVOCATION_ID is set in its steps and the tests that expect a developer's machine
-      # skip themselves; ci/run.sh release refuses a run with skipped tests. Only the variable of the runner service is removed for
+      # skip themselves; a run with skipped tests is refused below. Only the variable of the runner service is removed for
       # this one process, and only here: the starter reads the real environment of the server it protects, and a production
       # server keeps its signal. A container or a pod signal would still make the run refuse, which is intended.
       - name: Verify (tests with the Redis container, no skipped test)
-        run: env -u INVOCATION_ID ci/run.sh release
+        run: |
+          env -u INVOCATION_ID ./mvnw -B verify
+          skipped="$(find . -path '*/target/surefire-reports/TEST-*.xml' -exec cat {} + | grep -o '<testsuite [^>]*' | grep -o ' skipped="[0-9]*"' | tr -dc '0-9\n' | awk '{ n += $1 } END { print n + 0 }')"
+          if [ "$skipped" -ne 0 ]; then echo "$skipped tests were skipped; release on a plain runner" >&2; exit 1; fi
 
   build:
     needs: verify
