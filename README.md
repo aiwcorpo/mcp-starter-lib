@@ -6,7 +6,7 @@ all of that. The library verifies the gateway's internal JWT, receives the crede
 makes sure that only safe errors leave a tool.
 
 Stack: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), `mcp-contracts` 7.0.0.
-Version: **4.0.0** (state and plan in `STATUS.md`, changes since 3.x in the `CHANGELOG.md` entry for 4.0.0).
+Version: **4.0.0** (changes since 3.x in the `CHANGELOG.md` entry for 4.0.0).
 
 ## Who this is for and how to start
 

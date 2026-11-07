@@ -84,7 +84,7 @@
             </dependency>
             <!-- Cedar entity builder (C7, C9), version managed so the starter, the gateway and a server that needs
                  it use one. It brings the native cedar-java library: servers must not add it only for identifier
-                 patterns (ArgumentLimits.contractPattern reads them from mcp-contracts), see STATUS.md. -->
+                 patterns (ArgumentLimits.contractPattern reads them from mcp-contracts). -->
             <dependency>
                 <groupId>pl.aiwcorpo.mcp</groupId>
                 <artifactId>mcp-cedar-entities</artifactId>

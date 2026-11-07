@@ -30,7 +30,7 @@ public enum InternalJwtRejection {
      * The header of a token whose {@code kid} resolved to a gateway key carries {@code crit} or a {@code typ} other than
      * {@code JWT}. Not a parse failure and never capped: it takes a token that got past the key lookup. Reported with the
      * closest existing code of C8, {@code alg_not_allowed} (a header parameter the verifier does not accept); a code of its
-     * own is a proposal in STATUS.
+     * own would need a contract change.
      */
     HEADER_NOT_ALLOWED("alg_not_allowed"),
     /** mTLS: no client certificate, or one with a name that is not the gateway's. */

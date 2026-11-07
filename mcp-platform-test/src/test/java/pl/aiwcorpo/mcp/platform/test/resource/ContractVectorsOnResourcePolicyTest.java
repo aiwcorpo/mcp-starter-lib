@@ -46,7 +46,7 @@ import tools.jackson.databind.json.JsonMapper;
  * The vectors {@code resource-checks/} and {@code result-filter/} of mcp-contracts, run on {@link ResourcePolicy} with the
  * fragment, the declarations and the scope mapping the vector names: a vector added to the contracts is run here without a line of code.
  * The vectors that give a tool with {@code resourceRefs} and no arguments (the result filters) exercise the filter and the query
- * scope, not {@code authorizeCall}: the starter refuses such a call as {@code no_resource} on purpose (STATUS, deviations).
+ * scope, not {@code authorizeCall}: the starter refuses such a call as {@code no_resource} on purpose.
  */
 class ContractVectorsOnResourcePolicyTest {
 
