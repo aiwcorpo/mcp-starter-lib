@@ -1225,7 +1225,7 @@ test gateway starts with (`TestGateway.DEFAULT_POLICY_REVISION`). A test of the 
 image. Code from a change (a merge request, a pull request) does not get the Docker socket or main's secrets: the change job runs
 `./mvnw -B verify '-Dtest=!RedisJtiReplayStoreTest'`, the main job runs on a runner with the socket, and the change cache has a
 separate key and `policy: pull`. Tests that assume a developer's machine skip themselves on a host with a deployment signal
-(container, pod, systemd; the same detector as in the starter); in a container 16 tests are skipped and the other 915 run. The
+(container, pod, systemd; the same detector as in the starter), so a run in a container reports them as skipped. The
 release workflow refuses a run in which any test was skipped. Verified: a local run and a run in the
 `maven:3.9.12-eclipse-temurin-25` image; not on a real GitLab, Jenkins or GitHub runner. With Docker that has no route to the host,
 set `TESTCONTAINERS_HOST_OVERRIDE`.
