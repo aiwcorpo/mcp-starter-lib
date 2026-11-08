@@ -11,6 +11,28 @@ administratora (mapowanie grup, dozwoleni klienci, nadpisania) serwer pobiera od
 (`approvedPoliciesHash`) jest warunkiem, żeby serwer w ogóle decydował. Wydanie **major**. Kontrakty `mcp-contracts` 7.0.0 (CC-229 ... CC-237).
 Kontrakty 7.0.0 usuwają `mcp-policy-bundle`: starter nie zależy już od paczek polityk, ich kluczy ani katalogu stanu.
 
+- CC-249 (English entry; the bullets below on the policy data client and mTLS are superseded by it): the gateway connects to the server by
+  address and pulls and pushes everything itself, the server connects to nothing of the platform but the public JWKS of the gateway.
+  - Added: `GET /.well-known/mcp-manifest` (the manifest the build produces; 503 until it is built) and `POST /.well-known/mcp-policy-data`
+    (C14), both at the origin. The policy data pushed by the gateway replaces what the server holds only with a strictly newer revision; the answer is
+    `{revision, accepted, gate}`. The fail-closed gate answers `409 policy_data_stale` with `heldRevision` and `requiredRevision` (`PolicyDataStaleFilter`,
+    right after the JWT filter, ahead of every other refusal), following `PolicyDataGate.decide(ownHash, held, prv)`; reason `policy_data_unavailable` is now `policy_data_stale`.
+  - The internal JWT claim `use` (`call`, `manifest`, `policy-data`) is checked for every request, after the one-time `jti`: a mismatch is
+    `401 wrong_purpose`, before the variant and the tool are looked at. The 401 body carries the `reason`. 83 jwt vectors pass.
+  - TLS of the server port from `MCP_TLS_KEYSTORE` with `MCP_TLS_STORE_PASSWORD`, or `MCP_TLS_CERT` and `MCP_TLS_KEY`, or `MCP_PLAIN_HTTP=true`; otherwise
+    a self-signed certificate (EC P-256, 10 years) is generated once into `MCP_STATE_DIR` (`/var/lib/mcp/state`, `tls/server.crt`, `tls/server.key`) and reused.
+    The start logs `event=tls_certificate source=<generated|pem|keystore> fingerprint=sha256:<hex over the DER>`, the format of `CertificateFingerprint`, so the author
+    can compare it with the portal. No client certificate is asked for on the port.
+  - The one-time `jti` store is the bounded memory of the process by default (entries end with the token), Redis only when `MCP_REDIS_HOST` is set. The key of paging cursors is generated once into the
+    state directory unless `MCP_PAGING_CURSOR_KEY` is given; several instances need both Redis and an explicit key. `MCP_GATEWAY_JWKS_URI` is the public https JWKS of the gateway.
+  - `mcp-platform-test`: `TestGateway` pushes the policy data (`PolicyDataEndpoint.attach`, `push`, `pushTo`; a listener attaches the server of a Spring test when its web server
+    starts), mints tokens with `use` (`Token.use`, `manifestToken()`), serves the JWKS at `/.well-known/mcp-jwks.json`; `LocalGateway` pushes to the server at the origin of `--upstream`
+    every 3 s and repeats a call answered `409 policy_data_stale` once after a push.
+  - `manifest.internal-url` is optional and informational. `server.ssl.client-auth` is refused.
+  - Removed: the policy data pull client (`PolicyDataClient`), `GatewayTls`, `policy-data.*` (`MCP_GATEWAY_POLICY_DATA_URL`, `MCP_GATEWAY_TLS_NAME`), `mtls.*` and the check of the
+    gateway client certificate (`client_certificate_rejected`), `internal-jwt.jwks-ssl-bundle`, `GET /mcp-manifest`. The removed settings stop the start with a pointer to this entry.
+    Java API: `InternalJwtFilter` constructors lose the client certificate arguments, `PolicyEngine.create(policies, meters)`, `PolicyEngine.accept(data)`, `PolicyDataGate.Decision` reasons.
+
 - Polityki z jara serwera: `src/main/resources/mcp/policies/` (`schema.cedarschema`, `*.cedar`, `resource-types.json`). Starter ładuje je i waliduje
   przy starcie (`PolicyFragments.validateFragment`, ten sam test co w gatewayu przy rejestracji) i przy generowaniu manifestu; serwer z niepoprawnymi
   plikami nie startuje, a komunikat wylicza wszystkie powody.

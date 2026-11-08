@@ -71,34 +71,45 @@ To work on the library itself, `./mvnw install` installs the modules into `~/.m2
 | --- | --- | --- |
 | `pl.aiwcorpo.mcp:mcp-platform-bom` | versions: starter, test, `mcp-contracts`, Spring AI | `import` |
 | `pl.aiwcorpo.mcp:mcp-platform-starter` | auto-configuration (below) and the MCP transport (streamable HTTP) | `compile` |
-| `pl.aiwcorpo.mcp:mcp-platform-test` | `TestGateway`: a JWKS and internal JWTs from the contracts' test keys | **`test` only** |
+| `pl.aiwcorpo.mcp:mcp-platform-test` | `TestGateway`: a JWKS, internal JWTs from the contracts' test keys and the push of policy data; `LocalGateway` for one server alone | **`test` only** |
 
 The version of the `mcp-platform` line (3.x) has nothing to do with the contracts version (the BOM manages both).
 
 ## What the starter does on every request
 
 ```
-gateway --mTLS + JWT C2 + X-MCP-Credential--> SecurityHeadersFilter
+gateway --TLS (any certificate) + JWT C2 + X-MCP-Credential--> SecurityHeadersFilter
   -> CorrelationIdFilter     X-Request-Id -> MDC requestId
-  -> InternalJwtFilter       gateway certificate, JWT C2 bound to the request -> CallerContext; otherwise 401
+  -> InternalJwtFilter       JWT C2 of the right purpose, bound to the request -> CallerContext; otherwise 401
+  -> PolicyDataStaleFilter   tools/call only: no policy data, or older than prv of the token -> 409 policy_data_stale
   -> CredentialHeaderFilter  X-MCP-Credential(-Type) -> CredentialContext; the headers are hidden from the rest
   -> MCP transport -> AuditingToolCallback -> argument validation -> ResourcePolicy (Cedar: call, resources from @ResourceRef)
                                            -> [ToolCallInterceptor...] -> the server's @Tool -> result filter
-  GET /mcp-manifest (JWT C2, no tool) -> the C6 manifest built from the server at startup
+  GET  /.well-known/mcp-manifest     (JWT use=manifest)    -> the C6 manifest built from the server at startup, 503 until it is built
+  POST /.well-known/mcp-policy-data  (JWT use=policy-data) -> the gateway replaces the policy data this server holds
 ```
 
-**`InternalJwtFilter` (C2).** It lets through only a request with a client certificate of CN `mcp-gateway` and a correct internal
-JWT: ES256, `kid` from the gateway JWKS, `iss`, `aud` == `server-id`, `exp`/`iat` with a tolerance of up to 30 s, `exp - iat` up to
+The gateway connects to the server by the address an administrator gave it in the portal and pulls and pushes everything itself (CC-249);
+the server connects to nothing of the platform but the public JWKS of the gateway. There is no client certificate on the server port and
+nothing for the author to register: the two `/.well-known/` paths are at the origin of the server address, next to the MCP endpoint, and they are
+the contract C14 (`openapi/mcp-server.v1.yaml`).
+
+**`InternalJwtFilter` (C2).** It lets through only a request with a correct internal JWT: ES256, `kid` from the gateway JWKS, `iss`,
+`aud` == `server-id`, `exp`/`iat` with a tolerance of up to 30 s, `exp - iat` up to
 60 s, claims matching `schemas/internal-jwt.schema.json` (validated with the schema from the contracts jar; the claims `vs` and
-`vsc` no longer exist, and a token with either is `401 invalid_claims`), a `jti` used for the first time (Redis), `rid` ==
+`vsc` no longer exist, and a token with either is `401 invalid_claims`), a `jti` used for the first time (every purpose; in memory, or Redis
+when `MCP_REDIS_HOST` is set), the purpose `use`, `rid` ==
 `X-Request-Id`, `tool` present exactly for `tools/call` and equal to `params.name`, and the service variant only for `initialize`,
-`server/discover`, `tools/list`, `ping` and `GET /mcp-manifest`. Keys with an identifier `test-*` and the published test keys
+`server/discover`, `tools/list`, `ping`, `GET /.well-known/mcp-manifest` and `POST /.well-known/mcp-policy-data`. **The purpose:** `use` is
+`call` for the MCP endpoint, `manifest` for the manifest and `policy-data` for the push, and a token of one purpose is refused for another
+(`401`, reason `wrong_purpose`), checked before the variant: a policy-data token presented to `tools/call` is `wrong_purpose`, not `service_token_not_allowed`.
+Keys with an identifier `test-*` and the published test keys
 (recognized by SPKI from `mcp-contracts/security/published-test-keys.json`) are rejected unless `allow-test-keys=true` in the `dev`
-profile. The order of checks and the rejection reasons are those of the contracts' reference receiver, so all 57 vectors of
+profile. The order of checks and the rejection reasons are those of the contracts' reference receiver, so all 83 vectors of
 `test-vectors/jwt` give the same result and reason.
 
-A rejection is `401 {"error":"unauthenticated",...}` with `WWW-Authenticate: Bearer`, the reason only in the log
-(`event=internal_jwt_rejected reason=<code>`). An unavailable JWKS or Redis is `503 upstream_unavailable`, never a pass. The request
+A rejection is `401 {"error":"unauthenticated","reason":"<code>",...}` with `WWW-Authenticate: Bearer` (the reason is also in the log,
+`event=internal_jwt_rejected reason=<code>`). An unavailable JWKS or Redis is `503 upstream_unavailable`, never a pass. The request
 body is read once (limit `max-request-body`, otherwise 413) and must be a single JSON object without repeated keys (otherwise 400),
 because the method and the tool name come from it: a JSON-RPC array or `{"name":"a","name":"b"}` could be read differently by the
 MCP transport.
@@ -168,59 +179,73 @@ wrapper does not start (`RegisteredToolsCheck`).
 aiwcorpo.mcp.platform:
   server-id: mcp-jira                                     # required
   auth-mode: gateway                                      # gateway | dev-pat (dev profile only)
+  state-dir: /var/lib/mcp/state                           # MCP_STATE_DIR: the generated certificate and the cursor key live here
   internal-jwt:
     issuer: https://mcp-gateway.internal                  # default
-    jwks-uri: https://mcp-gateway.internal:8443/.well-known/jwks.json   # required
-    jwks-ssl-bundle: mcp-internal-ca                      # Spring SSL bundle with the internal CA
+    jwks-uri: https://mcp.example.org/.well-known/mcp-jwks.json   # required; MCP_GATEWAY_JWKS_URI; the public https JWKS of the gateway
     jwks-cache-ttl: 10m
     jwks-max-stale: 1h                                    # longer without a JWKS -> 503
     jwks-refresh-min-interval: 30s                        # an unknown kid fetches the JWKS at most once per 30 s
     clock-skew: 30s                                       # at most 30 s
     max-lifetime: 60s                                     # at most 60 s
-    replay-store: redis                                   # redis | memory (dev profile only)
+    replay-store: memory                                  # optional, memory | redis; unset: Redis when MCP_REDIS_HOST is set, else memory
     receiver-mode: native                                 # native | adapter (adapter sidecar, CC-226)
     allow-test-keys: false                                # true only in the dev profile
     max-request-body: 4MB
     unauthenticated-paths: [/actuator/health, /actuator/health/liveness, /actuator/health/readiness]
-  mtls:
-    required: true                                        # false only in the dev profile
-    allowed-client-names: [mcp-gateway]
   credential:
     connect-url: http://localhost:18090/connections?system={system}   # required, for credential_required
-  policy-data:                                            # C7: scope mapping, allowed clients and overrides from the gateway (see "Policies of the server")
-    url: https://mcp-gateway.internal:8443/internal/v1/policy-data   # required; https outside dev; the gateway's internal TLS port
-    tls-name: mcp-gateway.internal                        # optional: the name the gateway's certificate carries when it is not the host of url
-    ssl-bundle: mcp-jira                                  # the server's own certificate (mTLS) and the internal CA; default: server.ssl.bundle
-    refresh-interval: 30s                                 # default 30 s; a newer prv in a token asks at once
-    retry-interval: 5s                                    # default 5 s while no data is loaded
-    startup-timeout: 10s                                  # how long startup waits for the first data; the server then starts and refuses calls until it has some
-    connect-timeout: 2s
-    read-timeout: 10s                                     # time of one whole request, body included (a hung gateway does not block threads)
-  manifest:                                               # the C6 manifest (GET /mcp-manifest)
+  manifest:                                               # the C6 manifest (GET /.well-known/mcp-manifest)
     version: 1.4.0                                        # required, the server's SemVer
-    internal-url: https://mcp-jira.internal:8443/mcp      # required, https; informational (the gateway has its own configuration)
+    internal-url: https://mcp-jira.corp.test:8443/mcp     # optional and informational: the gateway connects to the address the administrator gave it
     credential-required: true
     accepted-credential-types: [user-oauth, user-secret]  # required; the first is the default type (context.credentialType in Cedar); or service-account alone
-    output-file: target/mcp-manifest.json                 # optional: write the manifest at startup (registration in the gateway)
+    output-file: target/mcp-manifest.json                 # optional: write the manifest at startup (the build keeps it as an artifact)
   tools.unclassified: fail                                # fail | destructive
   tools.max-filtered-elements: 200                        # the longest list in a result checked by policy (longer = internal_error)
   tools.max-result-size: 1MB                              # a larger tool result = internal_error
   paging:                                                 # cursors of paging tools (CursorCodec)
-    cursor-key: ${MCP_CURSOR_KEY}                         # Base64, at least 32 bytes; the same on every server instance
+    cursor-key: ${MCP_PAGING_CURSOR_KEY}                  # optional: Base64, at least 32 bytes; unset: generated once into the state directory
     cursor-validity: 15m
   capability:                                             # the server's CapabilityProbe (optional)
     timeout: 10s
     interval: 5m                                          # interval between probes of a working system
     retry-interval: 30s                                   # interval when the system does not answer
 spring.ai.mcp.server.name: mcp-jira                      # protocol/type/endpoint are set by the starter
-spring.data.redis:                                        # the jti store
-  host: redis
-  username: mcp-jira                                      # keys jti:mcp-jira:*, SET (NX PX) only
-  password: ${REDIS_MCP_JIRA_PASSWORD}
-server.ssl:                                               # the server terminates mTLS
-  bundle: mcp-jira
-  client-auth: need
 ```
+
+The policy data (scope mapping, allowed clients, overrides) is not configured: the gateway pushes it (see "Policies of the server").
+Everything else of a deployment comes from environment variables, which the starter reads itself:
+
+| Variable | Default | What it does |
+| --- | --- | --- |
+| `MCP_GATEWAY_JWKS_URI` | none, required | `internal-jwt.jwks-uri`: `https://<domain>/.well-known/mcp-jwks.json`, the public key set of the gateway, trusted with the JVM's own trust store |
+| `MCP_TLS_KEYSTORE`, `MCP_TLS_STORE_PASSWORD` | none | the author's own certificate as a PKCS12 (or `.jks`) keystore; the password is required with it |
+| `MCP_TLS_CERT`, `MCP_TLS_KEY` | none | the author's own certificate and private key as PEM files (PKCS#8, not encrypted); both or neither |
+| `MCP_PLAIN_HTTP` | `false` | `true`: no TLS, for a server inside the Docker network of the platform (the administrator must also allow `http` for it at the gateway) |
+| `MCP_STATE_DIR` | `/var/lib/mcp/state` | where the self-signed certificate (`tls/server.crt`, `tls/server.key`) and the cursor key (`paging-cursor.key`) are kept between starts |
+| `MCP_REDIS_HOST`, `_PORT`, `_USER`, `_PASSWORD` | none | the one-time `jti` store is Redis only when the host is set |
+| `MCP_PAGING_CURSOR_KEY` | none | the key of paging cursors, Base64 of at least 32 bytes |
+
+**TLS of the server port.** With none of the first four rows set, the starter generates a self-signed certificate (EC P-256, valid
+ten years, a leaf for `serverAuth`, names `localhost` and the host name) the first time, writes it (`server.key` mode 0600) and reuses it at every
+start, so the fingerprint the operator approved stays the same. The state directory must therefore be a volume. Whatever the source of
+the certificate, the start logs its fingerprint in the format of the contracts, so the author can compare it with what the portal shows when the connection is
+approved:
+
+```
+INFO ... event=tls_certificate source=generated fingerprint=sha256:9f2c...e1 detail="self-signed certificate in the state directory ...; the portal shows this fingerprint when the connection is approved: compare them"
+```
+
+`source` is `generated`, `pem` or `keystore`; `fingerprint` is `sha256:` and 64 lower-case hex digits of the SHA-256 of the DER encoding. A
+generated certificate that has expired is replaced at the next start (a new fingerprint to approve). The gateway asks for no client certificate and the
+server does not ask for one: `server.ssl.client-auth` is refused. An application that sets `server.ssl.bundle` or `server.ssl.key-store` itself keeps
+its own configuration, and the `MCP_TLS_*` variables are not read.
+
+**Several instances behind a balancer** need both Redis (`MCP_REDIS_HOST`, otherwise a token could be used once on each instance) **and** an explicit
+`MCP_PAGING_CURSOR_KEY` (otherwise each instance generates a key of its own and refuses the cursors of the others). Each instance also has its
+own state directory and so its own self-signed certificate; give them the same certificate (`MCP_TLS_CERT`, `MCP_TLS_KEY`) so that the gateway
+sees one.
 
 The server does not start when:
 - `server-id`, `jwks-uri` or `connect-url` is missing, or `clock-skew`/`max-lifetime` exceed the C2 limits;
@@ -228,18 +253,19 @@ The server does not start when:
   read from `common.schema.json` in the contracts jar). The systems themselves are not a list: a new system needs no change here;
 - `unauthenticated-paths` contains anything other than `/actuator/health`, `/actuator/health/liveness`,
   `/actuator/health/readiness`; the MCP protocol is anything other than `STREAMABLE`;
-- `policy-data.url` is missing (a native server; an adapter has none), `manifest.version` (SemVer),
-  `manifest.internal-url` (https) is missing, or `manifest.accepted-credential-types` is missing with `credential-required`;
+- `manifest.version` (SemVer) is missing, `manifest.internal-url` is set and is not an http(s) URL, or
+  `manifest.accepted-credential-types` is missing with `credential-required`;
   `accepted-credential-types` is empty (also without `credential-required`) or mixes `service-account` with user types (CC-168);
-  outside `dev`, the policy data address is not https or neither `policy-data.ssl-bundle` nor `server.ssl.bundle` names the bundle with the
-  server's own certificate (the gateway serves the policy data only over mTLS);
+- outside `dev` the port has no TLS (an own certificate, or none given so that one is generated) and `MCP_PLAIN_HTTP` is not `true`, or
+  `server.ssl.client-auth` is `need` or `want`;
+- `replay-store: redis` without `MCP_REDIS_HOST`;
 - the policies in the jar (`src/main/resources/mcp/policies/`) are missing or are not valid (see "Policies of the server"): the message
   lists every reason, the same ones the gateway would give at registration;
 - the server manifest fails `server-manifest.schema.json` or the mcp-manifest rules (outside `dev`, where it is a warning
   `event=manifest_rejected_by_rules`): for example a tool without `@ToolTitle`, a schema without a limit, `confirmation_code` among
   the arguments;
-- leftover settings that were removed: `guard.*`, `pat-header-prefix` (2.x) and `policy.*` of the signed bundles (3.x; the policies are in the jar
-  and the data comes from `policy-data`);
+- leftover settings that were removed: `guard.*`, `pat-header-prefix` (2.x), `policy.*` of the signed bundles (3.x; the policies are in the jar
+  and the data is pushed by the gateway) and, since 4.0.0, `policy-data.*`, `mtls.*` and `internal-jwt.jwks-ssl-bundle` (CC-249);
 - in the `dev` profile, `server.address` is not a loopback address (`127.0.0.1`, `::1`, `localhost`); the starter sets `127.0.0.1`
   by default in `dev`, so the refusal concerns an explicit override (for example `SERVER_ADDRESS=0.0.0.0`). A server in a container
   that the gateway connects to therefore cannot run in the `dev` profile. The same for a separate management server: with
@@ -248,11 +274,11 @@ The server does not start when:
   Cloud Foundry and so on; `spring.main.cloud-platform=none` is not a platform), `KUBERNETES_SERVICE_HOST` and
   `KUBERNETES_SERVICE_PORT` are set, `INVOCATION_ID` is set (a systemd unit), or the process runs in a container (`/.dockerenv`,
   `/run/.containerenv`, the variable `container`, a cgroup path with `docker`, `kubepods`, `libpod`, `crio`, `containerd`). `dev`
-  removes TLS, mTLS and Redis from the server, so `SPRING_PROFILES_ACTIVE=dev` in an `.env` file, a compose template, an image or a
+  removes TLS and Redis from the server, so `SPRING_PROFILES_ACTIVE=dev` in an `.env` file, a compose template, an image or a
   systemd unit stops startup (before the socket is opened) instead of silently leaving a server protected by the JWT alone. Run
   `dev` from a terminal on a developer workstation. A VS Code devcontainer, Codespaces, Toolbox and Distrobox are containers too:
   the refusal names them and gives three ways out (run the server outside the container; run it from a test, because the test
-  context is not checked; or use a profile other than `dev` with TLS, mTLS and Redis configured as in a deployment). The starter
+  context is not checked; or use a profile other than `dev` with TLS configured as in a deployment). The starter
   does not allow `dev` in a container on the strength of developer environment markers (`REMOTE_CONTAINERS`, `CODESPACES`): that is
   a threat model decision not yet taken. This is a net for copied configuration, not a security boundary: whoever controls the
   process environment can hide the signals (an empty `SPRING_MAIN_CLOUD_PLATFORM`, a file in another layout); process variables
@@ -272,23 +298,23 @@ The server does not start when:
   context is checked by `DevProfileGuardAssertions.assertServerIsGuarded(context)` (see "Server tests without the gateway");
 - the `dev` profile is active together with another profile (also through a profile group). The relaxations work only when `dev` is
   the **only active** profile; `spring.profiles.default=dev` does not count;
-- outside such a `dev` profile: `dev-pat`, `allow-test-keys`, `replay-store: memory` or `mtls.required: false` is on; `jwks-uri` is
-  not an absolute `https` URL; `server.ssl.client-auth=need` is missing; `management.server.port` is set and differs from
-  `server.port` (a separate management server does not pass through the JWT/mTLS filter).
+- outside such a `dev` profile: `dev-pat` or `allow-test-keys` is on; `jwks-uri` is
+  not an absolute `https` URL; `management.server.port` is set and differs from
+  `server.port` (a separate management server does not pass through the JWT filter).
 
 The starter's default values (lowest priority): `management.health.redis.enabled=false` (the Redis health check uses `INFO`, which
-the user `mcp-<system>` in the dev stack may not run), `spring.data.redis.timeout=2s` (a hung Redis quickly gives 503), the
-MCP transport as in "First server", `spring.ai.mcp.server.annotation-scanner.enabled=false`.
+the user `mcp-<system>` may not run), `spring.data.redis.timeout=2s` (a hung Redis quickly gives 503), the
+MCP transport as in "First server", `spring.ai.mcp.server.annotation-scanner.enabled=false`, and the properties behind the variables of the table above.
 
 **The `devstack` profile (a shared development stack in containers).** `dev` is forbidden in a container, while the dev stack
 runs servers in containers with `test-*` signing keys. The `devstack` profile is for it: it keeps **everything** from
-production (TLS and mTLS, Redis, https, no `dev-pat`, `replay-store: memory`, `mtls.required: false`) except that it
+production (TLS, https, no `dev-pat`) except that it
 accepts `test-*` keys and the published test keys (`internal-jwt.allow-test-keys`). It needs two
 consents at once, so that a copied configuration does not reach production: the property
 `aiwcorpo.mcp.platform.devstack.acknowledged=true` **and** the environment variable `MCP_DEVSTACK_ACKNOWLEDGED=true` (both in the
 development stack's configuration, not in the server image). The variable is read only from the process environment: a property of
 that name from `application.yml`, the command line or `SPRING_APPLICATION_JSON` is not enough. The configuration guard runs before
-the policy data and keys are fetched by platform beans (an explicit call at the start of `policyEngine`, `gatewayKeys`,
+the keys are fetched and the policy engine exists (an explicit call at the start of `policyEngine`, `gatewayKeys`,
 `jtiReplayStore` and `internalJwtVerifier`, also with `spring.main.lazy-initialization=true`); a server's own `GatewayKeys` and
 `JtiReplayStore` are created before `internalJwtVerifier` but after the guard, as long as they do no I/O in the constructor. The
 starter version in a server comes from the property `mcp-platform.version` (the template) or the `<version>` of the
@@ -319,10 +345,9 @@ those from "Using the artifacts", `<finalName>mcp-jira</finalName>` sets the jar
 executable jar. `mcp-server-template` has the complete file.
 
 `src/main/resources/application.yml`: the configuration from "Configuration" above. To run in `dev`, `server-id`,
-`internal-jwt.jwks-uri`, `credential.connect-url`, `policy-data.url` and `manifest.*` (version, `internal-url`, credential types) are
+`internal-jwt.jwks-uri`, `credential.connect-url` and `manifest.*` (version, credential types) are
 enough; the rest has defaults or is removed in `dev`. The policies themselves are files in the jar (`mcp/policies/`, see "Policies of the
-server"); the scope mapping and the allowed clients come from the gateway (`policy-data.url`; the dev stack serves them at
-`http://127.0.0.1:18747/internal/v1/policy-data`, in tests `TestGateway` does it, and `LocalGateway` for a server run alone).
+server"); the scope mapping and the allowed clients are pushed by the gateway (in tests `TestGateway` does it, and `LocalGateway` for a server run alone).
 
 `src/main/resources/mcp/policies/`: the server's own Cedar policies and resource types, four files for the smallest server. They are
 described in "Policies of the server"; the starter refuses to start without them. The Jira fragment of the contracts is a complete
@@ -379,18 +404,15 @@ public class JiraServer {
 
 ## Running locally
 
-A server with the configuration from "Configuration" (with `server.ssl`, the internal CA bundle and Redis) starts on a developer
-workstation without certificates, a CA or Redis if `dev` is the **only** active profile. In that profile the starter sets, above
+A server with the configuration from "Configuration" starts on a developer
+workstation without a certificate or Redis if `dev` is the **only** active profile. In that profile the starter sets, above
 the server's `application*.yml` (the command line, system properties and environment variables still win):
 
 | Property | Value in `dev` | Why |
 | --- | --- | --- |
 | `server.address` | `127.0.0.1` (default; a non-loopback address stops startup) | the `dev` relaxations do not leave the machine |
-| `server.ssl.enabled` | `false` | no `server.ssl.bundle` and no server certificate (no `NoSuchSslBundleException`) |
-| `aiwcorpo.mcp.platform.mtls.required` | `false` | no gateway client certificate |
-| `aiwcorpo.mcp.platform.internal-jwt.replay-store` | `memory` | no Redis |
-| `aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle` | empty | no internal CA bundle (the JWKS over plain https or http) |
-| `aiwcorpo.mcp.platform.policy-data.ssl-bundle` | empty | no server certificate for mTLS (the policy data over plain http) |
+| `server.ssl.enabled` | `false` | no certificate is generated and none is needed: the port speaks plain http on loopback |
+| `aiwcorpo.mcp.platform.internal-jwt.replay-store` | `memory` | no Redis, whatever `MCP_REDIS_HOST` says |
 
 `internal-jwt.allow-test-keys` is not forced: set `true` in the server's `application-dev.yml` when the local gateway
 (the dev stack or `TestGateway`) signs with test keys. `jwks-uri` stays required but is not fetched until a request with a JWT
@@ -407,7 +429,7 @@ $JAVA_HOME/bin/java -jar target/mcp-jira.jar --spring.profiles.active=dev --serv
 
 In a devcontainer, Codespaces, Toolbox or Distrobox (a developer container) `dev` will not start: the starter sees the container and
 refuses (the same check protects an image with `SPRING_PROFILES_ACTIVE=dev`). Run the server outside the container, from a test (a
-`@SpringBootTest` with `TestGateway` is not checked), or in a profile other than `dev` with TLS, mTLS and Redis configured as in a
+`@SpringBootTest` with `TestGateway` is not checked), or in a profile other than `dev` with TLS configured as in a
 deployment (section "Configuration"). Whether to allow `dev` in a developer container is undecided.
 
 Check:
@@ -426,9 +448,10 @@ gateway's JWT (headers as in the test in "Server tests without the gateway").
 ### One server with your own token: `LocalGateway`
 
 To call a server's tools against a real system without the platform, run the local gateway of `mcp-platform-test` in front of
-it. It serves the test JWKS and the policy data (scope mapping, allowed clients and the approval of the hash of the server's policies from
-`--policies-dir`, default `src/main/resources/mcp/policies`), and forwards `/mcp` with an internal JWT for a local user and your
-`Authorization` header as the backend credential (C3).
+it. It serves the test JWKS, pushes the policy data (scope mapping, allowed clients and the approval of the hash of the server's policies from
+`--policies-dir`, default `src/main/resources/mcp/policies`) to the server at the origin of `--upstream` like the gateway does (at once and every
+3 seconds, so a server started later or restarted gets it, and a call the server answers `409 policy_data_stale` is repeated once after a push), and forwards `/mcp` with an internal
+JWT (purpose `call`) for a local user and your `Authorization` header as the backend credential (C3).
 
 ```bash
 # in this repository: ./mvnw -DskipTests package gives mcp-platform-test/target/mcp-platform-test-<version>-local-gateway.jar
@@ -450,9 +473,9 @@ the `dev` profile accepts, and `dev` refuses to start in a container or under sy
 installation.
 
 Outside `dev`, configuration errors appear one after another, because Spring checks them in different phases: first the HTTP server
-starts (a missing SSL bundle, certificate or CA), then `PlatformConfigurationGuard` (all violations at once in one message), and
-last the tools (a missing argument limit, `@ToolRisk`). A fixed SSL error can therefore expose the next one from a later phase (a
-missing argument limit is reported only after the SSL error is gone, because the HTTP server starts before the tool beans are
+starts (a certificate or key that cannot be read), then `PlatformConfigurationGuard` (all violations at once in one message), and
+last the tools (a missing argument limit, `@ToolRisk`). A fixed TLS error can therefore expose the next one from a later phase (a
+missing argument limit is reported only after the TLS error is gone, because the HTTP server starts before the tool beans are
 created). In `dev` the first phase is off, and a missing argument limit is the warning `event=tool_schema_open` instead of an error.
 
 ## Tool arguments: schema, limits, validation
@@ -529,11 +552,11 @@ is `required` and does not accept `null`, a component with `@Nullable` accepts `
 the audit write: a mismatch is the C10 `internal_error`, a C8 event with `outcome=error` and an ERROR line with the field path
 (`/assignee (type)`), without values. The SDK message (`output validation failed`) does not reach the client.
 
-**Audit of rejections.** A rejected request (a missing or bad JWT, a certificate, an unavailable JWKS or Redis) leaves in the C8
-audit an `authentication` event (`outcome=denied`, `reason` = the rejection code) with only the fields allowed in contracts 2.2.5
-(CC-071, CC-120), without `sub`, `client`, `tool` from an unverified token. The reasons are the codes from the JWT vectors plus
-`client_certificate_rejected` (the gateway certificate) and, with `errorCode: upstream_unavailable` (a 503 response),
-`jwks_unavailable` and `replay_store_unavailable` (the `jti` store). For requests whose token cannot be parsed (`missing_token`: a
+**Audit of rejections.** A rejected request (a missing or bad JWT, a token of the wrong purpose, an unavailable JWKS or jti store) leaves in the C8
+audit an `authentication` event (`outcome=denied`, `reason` = the rejection code) with only the fields allowed in the contracts
+(CC-071, CC-120), without `sub`, `client`, `tool` from an unverified token. The reasons are the codes from the JWT vectors (`wrong_purpose`
+included) and, with `errorCode: upstream_unavailable` (a 503 response),
+`jwks_unavailable` and `replay_store_unavailable` (the `jti` store, Redis or the bounded memory when it is full). For requests whose token cannot be parsed (`missing_token`: a
 missing or empty header; `malformed`: a foreign scheme, not three segments, a JWT header that is not an object), the process
 writes events (and a log line) separately for each of the two reasons, at most
 `aiwcorpo.mcp.platform.internal-jwt.missing-token-events-per-second` per second (default 20, minimum 1; the gateway has the same
@@ -602,21 +625,27 @@ and of every container it lies in: `ResolvedResource.withScopes`) and a policy t
 `Scopes.pathPrefixes("team-a/sub")` and `Scopes.dashPrefixes("logs-team-a")` of `mcp-cedar-entities` give the two derivations that several
 systems need (every path prefix, every name prefix before a dash).
 
-`PolicyEngine` asks the gateway for `GET /internal/v1/policy-data` over mTLS with the server's own certificate (the gateway reads the
-`serverId` from its CN) and keeps `If-None-Match` polling (`policy-data.refresh-interval`, 30 s). The answer is the `revision` (a counter),
-the `approvedPoliciesHash`, the scope mapping (already limited to the namespace of the server), the allowed AI clients (`azp`) and the
-emergency overrides that target this server or all servers. The starter makes one snapshot from it and from the server's policies and
-swaps it atomically. The policies evaluated are, merged by `PolicyFragments.merge` (a duplicate policy id is an error, never a merge): the
-generated platform policies for the declared types (`PlatformServerPolicies`: a `forbid` for restricted data through the classification
-attribute of the type and of its parents, and one for the service account outside the user's scopes), the server's own fragment and the
-overrides. A server therefore does not write the restricted rule itself, and cannot leave it out.
+The gateway pushes the policy data to the server (`POST /.well-known/mcp-policy-data`, C14); the server fetches nothing. `PolicyEngine` holds
+what was pushed. The document is the `revision` (a counter), the `approvedPoliciesHash`, the scope mapping (already limited to the namespace of
+the server), the allowed AI clients (`azp`) and the emergency overrides that target this server or all servers. The starter makes one snapshot
+from it and from the server's policies and swaps it atomically. The policies evaluated are, merged by `PolicyFragments.merge` (a duplicate policy
+id is an error, never a merge): the generated platform policies for the declared types (`PlatformServerPolicies`: a `forbid` for restricted
+data through the classification attribute of the type and of its parents, and one for the service account outside the user's scopes), the
+server's own fragment and the overrides. A server therefore does not write the restricted rule itself, and cannot leave it out.
 
-A call is evaluated only when the gate of the contracts (`PolicyDataGate`, `mcp-manifest`) lets it through; otherwise it is
-`upstream_unavailable` and the audit event has the reason of the gate:
+The push needs a service token of the purpose `policy-data`. The answer is `200 {"revision", "accepted", "gate"}`: `revision` is what the server
+holds afterwards, `accepted` says whether the pushed data replaced what it held (only a strictly higher revision does; an equal or lower one is
+`accepted: false` with the revision kept), and `gate` is what the server now does with `tools/call`. Data that makes the gate refuse is still taken
+(and `gate` names the reason), so that the administrator sees why the server refuses; a body that is not the document of C14 is `400
+{"error":"invalid_request"}` (`413` above `max-request-body`) and changes nothing. A server that is restarted holds nothing until the next push.
+
+A call is evaluated only when the gate of the contracts (`PolicyDataGate.decide(ownHash, held, prv)`, `mcp-manifest`) lets it through. The first
+two refusals are `409 policy_data_stale`, answered by `PolicyDataStaleFilter` before anything else is done with the request and ahead of every other
+refusal; the gateway then pushes and repeats the call once. The others are `upstream_unavailable`, final, and the audit event has the reason of the gate:
 
 | Reason | When |
 | --- | --- |
-| `policy_data_unavailable` | no data is loaded (the gateway is down, or this server is not registered), or the token's `prv` is newer than the data and the refresh did not bring data at least that new |
+| `policy_data_stale` | no data is held, or the token's `prv` is newer than the revision held. The answer is `409 {"error":"policy_data_stale","heldRevision":N or null,"requiredRevision":M}` (`M` is `prv`); nothing is fetched |
 | `policies_not_approved` | the data has no `approvedPoliciesHash`: an administrator has not approved the policies of this server |
 | `policies_differ` | the approved hash is not the `policiesHash` of this server's own policies and `resourceTypes` (the jar was deployed before the new policies were approved) |
 | `overrides_invalid` | an override does not validate against the composed schema of the server (`validateOverride`, target `SERVER`) or the policies cannot be merged: a forbid that cannot be applied must not be dropped, so every call is refused |
@@ -624,29 +653,21 @@ A call is evaluated only when the gate of the contracts (`PolicyDataGate`, `mcp-
 - The AI client of a call must be in `allowedClients`; this is checked in code, before any policy, and a client that is not allowed gets
   `access_denied`. An empty list allows no one.
 - The `revision` is a counter that only grows. The server never takes data whose revision is not higher than the one it holds (the log has
-  `event=policy_data_rejected`, the counter `mcp_server_policy_data_rejected_total{reason="older"}` counts an older one). When the `prv` of a
-  token is newer than the data held, the server asks the gateway before it decides (the call waits for the answer, at most `read-timeout`) and
-  refuses the call when the answer is not at least that new. Calls that wait for the same revision share one request, none waits longer than
-  `read-timeout`, and a request that failed is not repeated for 3 seconds. A newer revision whose document is malformed (an override with a duplicate
-  id, a scope mapping that is not an array) is taken as a snapshot that refuses every call, not ignored in favour of the older data. A `prv` of `0` (a gateway without data) forces nothing.
+  `event=policy_data_not_newer`, the counter `mcp_server_policy_data_rejected_total{reason="older"}` counts an older one and `reason="same"` an equal one). A `prv` of `0` (a
+  gateway without data) forces nothing.
 - Overrides have ids `override-<name>`, are `forbid` only and are validated against the server's composed schema.
 - Scope ids the server cannot use (a type it does not declare, a local part that does not match its `scopePattern`) are skipped and
   reported, not hidden: `event=policy_data_scope_ignored` and `mcp_server_policy_data_scope_ignored_total{reason}`. The rest of the data is used.
-- The server starts without data (the gateway may be down, or the server not registered yet) and keeps asking every `retry-interval`.
-  Data that cannot be used at all (a scope mapping that is not an array) is rejected as a whole and the previous snapshot stays
-  (`mcp_server_policy_data_rejected_total{reason="unusable"}`); a failure to fetch is `event=policy_data_fetch_failed` and
-  `mcp_server_policy_data_fetch_failed_total{reason}`.
-- Outside `dev` the connection always has the server's own certificate and the internal CA: without a usable SSL bundle the start fails, there is
-  no fallback to the JVM default trust. `policy-data.tls-name` is the name the gateway's certificate must carry when the address in `url` is not in it. It is checked against
-  the subject alternative names (an `iPAddress` entry for an address), after the chain has been checked against the internal CA of the SSL
-  bundle.
+- Data that cannot be used by this server at all is `400` and the previous snapshot stays (`mcp_server_policy_data_rejected_total{reason="unusable"}`).
+- An adapter (`receiver-mode: adapter`) has no policies of the platform: its `POST /.well-known/mcp-policy-data` checks the shape of the document, remembers the
+  highest revision and answers `gate: ok`.
 
 The decision on `call` on a tool is the gateway's, and the server repeats it as defence in depth: for every tool call it evaluates the platform
 call policies of the contracts (`McpCedarSchema.platformPolicies()`) with the `Tool` built from its own manifest (`requiredGroup` is
 `mcp-<system>-read`, `-write` or `-destructive` by the risk; `context.refs` come from the arguments of the types declared `earlyScopeCheck`),
 with the same snapshot as every other decision of the call. A deny is `access_denied`, as at the gateway. The gate, the client check, the call
 decision and the resource decisions of one call all use the one snapshot the gate returned (`PolicyEngine.gate` gives it with the decision, and
-it is kept in the `ResourceContext`), so a swap of the data during a call changes nothing for that call and a gate refusal in the middle of a
+it is kept in the `ResourceContext`), so a push during a call changes nothing for that call and a gate refusal in the middle of a
 tool is `upstream_unavailable` (it is not turned into a denial or a `false`).
 
 ### Testing your policies
@@ -1035,15 +1056,16 @@ contract proposal (`CC-208`), and until it is decided the log line and the metri
 
 ## The C6 manifest and DESTRUCTIVE tools
 
-`GET /mcp-manifest` (JWT C2 in the user or service variant, without `tool`) returns the server manifest. The starter builds it after
+`GET /.well-known/mcp-manifest` (a service token of the purpose `manifest`, C14) returns the server manifest. The starter builds it after
 startup from **what the server really publishes**: the definitions are exactly the `tools/list` entries (so `definitionHash` is the
 hash of what the client sees and the gateway pins), `risk`, `action` and `resourceRefs` come from annotations, the rest from
 `aiwcorpo.mcp.platform.manifest.*`; in the `devstack` profile with `"environment": "dev"` (CC-138). The manifest to register in the
-gateway is a build-stage artifact of the reviewed commit (`manifest.output-file`, for example `target/mcp-manifest.json`), never the
-answer of a running server (CC-133, CC-140). Before it is served, the manifest passes `server-manifest.schema.json` and the
+gateway is the document the gateway pulls from the running server; the file of the build (`manifest.output-file`, for example `target/mcp-manifest.json`) is the same
+document, kept as a build artifact so that a reviewer can read what the commit publishes (CC-249 replaced the registration by the pipeline). Before it is served, the manifest passes `server-manifest.schema.json` and the
 `mcp-manifest` rules (a closed and bounded `inputSchema`, `title`, existing `resourceRefs` arguments, the hash), which are the
-gateway's registration checks; a manifest that would not pass them stops the server (in `dev`, a warning). With `output-file` it is
-also written to a file for the registration step.
+gateway's intake checks; a manifest that would not pass them stops the server (in `dev`, a warning). With `output-file` it is
+also written to a file. Pulling it approves nothing: every tool of a first manifest, `READ_ONLY` ones included, waits for an administrator. A server
+that serves `source: adapter` (an adapter, CC-193) is marked as one by that field.
 
 Requirements for a tool: `@ToolTitle` (CC-115, non-empty, up to 100 characters, no hidden characters), `@ToolRisk`, a schema without
 `$ref`, union types and maps (`SchemaLimitedToolCallbacks` generates such a schema), and no argument named `confirmation_code` (the
@@ -1130,7 +1152,7 @@ calls a tool through the real MCP transport.
 
 ```java
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@ActiveProfiles("dev")                              // test keys, jti in memory, no mTLS: dev only
+@ActiveProfiles("dev")                              // test keys, no TLS: dev only
 class JiraToolsTest {
 
     static final TestGateway GATEWAY = TestGateway.start("mcp-jira");   // server-id of the server under test
@@ -1191,27 +1213,34 @@ Single tokens for rejection tests: `GATEWAY.user().tool("get_issue").mint().head
 `audience`, `lifetime`, `requestId`, `jti`, ... The result of a tool that returns a `String` arrives in `TextContent` as a JSON string
 (in quotes), hence the `contains` in the example.
 
-**The policy data in tests.** `GATEWAY.serverProperties()` already contains `policy-data.url` (the endpoint of the test gateway, plain http on
-loopback, refresh every second) and `manifest.*`. `GATEWAY.policyData()` is the endpoint `GET /internal/v1/policy-data`: it serves the
-policies of the project under test (its `mcp/policies/` on the test classpath) as approved, the scope mapping of
+**The policy data in tests.** `GATEWAY.serverProperties()` already contains the settings of the test gateway and `manifest.*`, and a property that names
+the gateway: when the web server of the test context starts, `mcp-platform-test` (a listener in its `META-INF/spring.factories`) attaches the server to
+it and the first push of policy data goes out before the first test call, as the real gateway does when it connects a server. `GATEWAY.policyData()` is the
+document: the policies of the project under test (its `mcp/policies/` on the test classpath) as approved, the scope mapping of
 `test-vectors/fixtures/scope-mapping.json` of the contracts (limited to the namespace of the server, like the gateway does) and the clients
-`claude-code`, `claude-ai` and `local-gateway`. Change it in a test, and the server follows at its next refresh (or at once when a token
-names the new revision):
+`claude-code`, `claude-ai` and `local-gateway`. Every change is a new revision that is pushed to the attached server at once, so the server follows
+before the next line of the test:
 
 ```java
 GATEWAY.policyData().scopeMapping(Map.of("mcp-jira-proj-ABC", List.of("Jira::Project/ABC")));
 GATEWAY.policyData().allowedClients("claude-code");
 GATEWAY.policyData().override("override-no-delete", "forbid (principal, action == Jira::Action::\"delete\", resource);");
 GATEWAY.policyData().unapproved();          // the server then refuses every call: policies_not_approved
-GATEWAY.policyData().offline(true);         // the gateway is down; the data in use stays
+GATEWAY.policyData().pushing(false);        // changes are held back; pushTo(origin) sends the document and returns the answer of C14
 ```
 
+A server that is not a Spring test (run by hand, or started with `SpringApplicationBuilder`) is attached with `GATEWAY.policyData().attach(URI.create("http://127.0.0.1:8080"))`,
+which also makes the first push. For the purpose of a token, `GATEWAY.service().use(TestGateway.USE_POLICY_DATA)` and `GATEWAY.manifestToken()` mint the
+service tokens of the two well-known endpoints; a token with the default purpose is a `call` token.
+
 A resource test through the real transport with a resolver on an artificial system:
-`mcp-platform-test/src/test/java/pl/aiwcorpo/mcp/platform/test/resource/ResourcePolicyTest.java`; a manifest test: `ManifestTest`.
-`PolicyEngine.create(config, ServerPolicies.load(loader), null, meterRegistry)` lets you test the fetching alone (`PolicyEngineTest`), and
-`PolicyEngine.fixed(policies, data)` gives an engine without a gateway. The server does not decide `call` any more, so a token needs only
+`mcp-platform-test/src/test/java/pl/aiwcorpo/mcp/platform/test/resource/ResourcePolicyTest.java`; a manifest test: `ManifestTest`; the push, the
+gate and the purposes over the real transport: `PolicyDataPushTest`, `PolicyDataNotPushedTest`; TLS as a deployment has it: `TlsStartTest`.
+`PolicyEngine.create(policies, meterRegistry)` with `accept(data)` lets you test the holding alone (`PolicyEngineTest`), and
+`PolicyEngine.fixed(policies, data)` gives an engine with data and no gateway. The server does not decide `call` any more, so a token needs only
 the groups the policies of the resource name (`user.groups(List.of("mcp-jira-read"))`), and the test token's `prv` is the revision the
-test gateway starts with (`TestGateway.DEFAULT_POLICY_REVISION`). A test of the policies alone needs no gateway: "Testing your policies".
+test gateway starts with (`TestGateway.DEFAULT_POLICY_REVISION`); a larger `policyRevision(n)` on the token is how a test makes the server answer
+`409 policy_data_stale`. A test of the policies alone needs no gateway: "Testing your policies".
 
 ## Build
 
