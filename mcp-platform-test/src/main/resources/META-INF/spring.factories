@@ -1,0 +1,2 @@
+org.springframework.context.ApplicationListener=\
+pl.aiwcorpo.mcp.platform.test.TestGatewayAttach

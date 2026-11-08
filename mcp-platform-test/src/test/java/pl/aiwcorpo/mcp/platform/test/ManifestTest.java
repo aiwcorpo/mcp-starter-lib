@@ -59,7 +59,7 @@ class ManifestTest {
     }
 
     private JsonNode manifest() throws Exception {
-        HttpResponse<String> response = get("/mcp-manifest", GATEWAY.service().mint().headers());
+        HttpResponse<String> response = get("/.well-known/mcp-manifest", GATEWAY.manifestToken().mint().headers());
         assertThat(response.statusCode()).isEqualTo(200);
         assertThat(response.headers().firstValue("Cache-Control")).hasValueSatisfying(value -> assertThat(value).contains("no-store"));
         return JSON.readTree(response.body());
@@ -151,15 +151,36 @@ class ManifestTest {
     }
 
     @Test
-    void theManifestFileIsWrittenForTheRegistrationStep() throws Exception {
+    void theManifestFileOfTheBuildIsTheDocumentTheEndpointServes() throws Exception {
         assertThat(JSON.readTree(Files.readString(FILE))).isEqualTo(manifest());
     }
 
     @Test
-    void theManifestNeedsTheInternalJwt() throws Exception {
-        assertThat(get("/mcp-manifest", Map.of()).statusCode()).isEqualTo(401);
-        assertThat(get("/mcp-manifest", GATEWAY.user().tool("get_issue").mint().headers()).statusCode())
+    void theManifestNeedsAnInternalJwtOfThePurposeManifest() throws Exception {
+        String path = "/.well-known/mcp-manifest";
+        assertThat(get(path, Map.of()).statusCode()).isEqualTo(401);
+        assertThat(get(path, GATEWAY.user().tool("get_issue").mint().headers()).statusCode())
                 .as("the manifest is not a tool call").isEqualTo(401);
+
+        HttpResponse<String> callToken = get(path, GATEWAY.service().mint().headers());
+        assertThat(callToken.statusCode()).as("a token minted for calls").isEqualTo(401);
+        assertThat(callToken.body()).contains("\"reason\":\"wrong_purpose\"");
+        HttpResponse<String> policyDataToken = get(path, GATEWAY.service().use(TestGateway.USE_POLICY_DATA).mint().headers());
+        assertThat(policyDataToken.body()).contains("\"reason\":\"wrong_purpose\"");
+        TestGateway.Minted once = GATEWAY.manifestToken().mint();
+        assertThat(get(path, once.headers()).statusCode()).isEqualTo(200);
+        HttpResponse<String> replay = get(path, once.headers());
+        assertThat(replay.statusCode()).as("the jti is one-time for this purpose too").isEqualTo(401);
+        assertThat(replay.body()).contains("\"reason\":\"replayed_jti\"");
+    }
+
+    @Test
+    void theOldManifestRouteIsGone() throws Exception {
+        assertThat(get("/mcp-manifest", GATEWAY.manifestToken().mint().headers()).statusCode())
+                .as("a token of the right purpose for another path is refused before the path is looked at").isEqualTo(401);
+        assertThat(get("/mcp-manifest", GATEWAY.service().mint().headers()).statusCode())
+                .as("the service variant is for the well-known paths and the protocol only").isEqualTo(401);
+        assertThat(get("/mcp-manifest", GATEWAY.user().mint().headers()).statusCode()).as("nothing serves it").isEqualTo(404);
     }
 
     private static JsonNode tool(JsonNode manifest, String name) {

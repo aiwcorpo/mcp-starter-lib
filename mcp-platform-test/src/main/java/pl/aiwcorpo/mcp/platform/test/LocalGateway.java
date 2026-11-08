@@ -25,9 +25,11 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Runs one MCP server alone, without the platform: stands in for the gateway on the developer's machine. It serves the
- * test JWKS and the policy data (scope mapping, allowed clients) of {@link TestGateway} and forwards {@code /mcp} to the server, turning the client's
- * {@code Authorization} header (the user's own PAT or token) into the backend credential (C3) and adding an internal JWT
- * (C2) for a fixed local user.
+ * test JWKS, pushes the policy data (scope mapping, allowed clients) of {@link TestGateway} to the server like the gateway does
+ * ({@code POST /.well-known/mcp-policy-data}, at once and every few seconds, so a server that is started later or restarted gets it too)
+ * and forwards {@code /mcp} to the server, turning the client's {@code Authorization} header (the user's own PAT or token) into the
+ * backend credential (C3) and adding an internal JWT (C2, purpose {@code call}) for a fixed local user. A call that the server answers
+ * {@code 409 policy_data_stale} is repeated once after a push, as the gateway does.
  *
  * <p>Everything here is signed with the published test keys of mcp-contracts, which only the {@code dev} profile accepts,
  * and the {@code dev} profile refuses to start in a container or under systemd. So this cannot stand in for the gateway of
@@ -41,6 +43,9 @@ import tools.jackson.databind.json.JsonMapper;
 public final class LocalGateway {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
+
+    /** How often the policy data is pushed again: the gateway does it at most every 60 s, a local run is quicker so a restarted server is not left waiting. */
+    private static final Duration PUSH_INTERVAL = Duration.ofSeconds(3);
 
     /** Request headers of the MCP Streamable HTTP transport that the server needs to see. */
     private static final List<String> FORWARDED_REQUEST_HEADERS = List.of("Content-Type", "Accept", "Mcp-Session-Id",
@@ -97,11 +102,26 @@ public final class LocalGateway {
         }
         Map<String, String> properties = new LinkedHashMap<>(gateway.serverProperties());
         properties.put("aiwcorpo.mcp.platform.manifest.accepted-credential-types", credentialType);
+        // The server of this run is not a Spring test: it is attached here, by its address, not by the test property.
+        properties.remove("aiwcorpo.mcp.platform.test.gateway");
         Files.writeString(envFile, "SPRING_PROFILES_ACTIVE=dev\nSPRING_APPLICATION_JSON='"
                 + JSON.writeValueAsString(properties) + "'\n", StandardCharsets.UTF_8);
 
         LocalGateway local = new LocalGateway(gateway, upstream, options.getOrDefault("user", "local-user"), groups,
                 credentialType);
+        gateway.policyData().attach(upstream);
+        Thread pusher = Thread.ofVirtual().name("local-gateway-push").unstarted(() -> {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    Thread.sleep(PUSH_INTERVAL.toMillis());
+                } catch (InterruptedException ex) {
+                    return;
+                }
+                gateway.policyData().push();
+            }
+        });
+        pusher.setDaemon(true);
+        pusher.start();
         HttpServer server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), listen), 0);
         server.createContext("/mcp", local::forward);
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
@@ -136,31 +156,21 @@ public final class LocalGateway {
                 return;
             }
             byte[] body = exchange.getRequestBody().readAllBytes();
-            TestGateway.Token token = gateway.user().username(username).groups(groups).client("local-gateway")
-                    .mfaAgeSeconds(0);
             String tool = toolCalled(body);
-            if (tool != null) {
-                token.tool(tool);
-            }
-            TestGateway.Minted minted = token.mint();
-
-            HttpRequest.Builder request = HttpRequest.newBuilder(upstream).timeout(Duration.ofHours(1))
-                    .method(exchange.getRequestMethod(), body.length == 0
-                            ? HttpRequest.BodyPublishers.noBody()
-                            : HttpRequest.BodyPublishers.ofByteArray(body));
-            for (String name : FORWARDED_REQUEST_HEADERS) {
-                String value = exchange.getRequestHeaders().getFirst(name);
-                if (value != null) {
-                    request.header(name, value);
-                }
-            }
-            minted.headers().forEach(request::header);
-            request.header("X-MCP-Credential", credential);
-            request.header("X-MCP-Credential-Type", credentialType);
 
             HttpResponse<InputStream> response;
             try {
-                response = client.send(request.build(), HttpResponse.BodyHandlers.ofInputStream());
+                response = send(exchange, body, credential, tool);
+                if (tool != null && response.statusCode() == 409) {
+                    byte[] refusal = response.body().readAllBytes();
+                    if (new String(refusal, StandardCharsets.UTF_8).contains("\"policy_data_stale\"")) {
+                        // C14: the server is behind (restarted, or it missed a push): push, then repeat the call once with a new token.
+                        gateway.policyData().push();
+                        response = send(exchange, body, credential, tool);
+                    } else {
+                        response = new Replayed(response, refusal);
+                    }
+                }
             } catch (IOException ex) {
                 reply(exchange, 502, "{\"error\":\"the server at " + upstream + " does not answer: " + ex.getMessage() + "\"}");
                 return;
@@ -185,6 +195,74 @@ public final class LocalGateway {
                     out.flush();
                 }
             }
+        }
+    }
+
+    /** One request to the server with a fresh internal JWT: every attempt has a new {@code jti}, and the request id of the token is the header. */
+    private HttpResponse<InputStream> send(HttpExchange exchange, byte[] body, String credential, String tool)
+            throws IOException, InterruptedException {
+        TestGateway.Token token = gateway.user().username(username).groups(groups).client("local-gateway").mfaAgeSeconds(0);
+        if (tool != null) {
+            token.tool(tool);
+        }
+        TestGateway.Minted minted = token.mint();
+        HttpRequest.Builder request = HttpRequest.newBuilder(upstream).timeout(Duration.ofHours(1))
+                .method(exchange.getRequestMethod(), body.length == 0
+                        ? HttpRequest.BodyPublishers.noBody()
+                        : HttpRequest.BodyPublishers.ofByteArray(body));
+        for (String name : FORWARDED_REQUEST_HEADERS) {
+            String value = exchange.getRequestHeaders().getFirst(name);
+            if (value != null) {
+                request.header(name, value);
+            }
+        }
+        minted.headers().forEach(request::header);
+        request.header("X-MCP-Credential", credential);
+        request.header("X-MCP-Credential-Type", credentialType);
+        return client.send(request.build(), HttpResponse.BodyHandlers.ofInputStream());
+    }
+
+    /** An answer whose body was already read (to look at it) and is given back to the client as it was. */
+    private record Replayed(HttpResponse<InputStream> original, byte[] content) implements HttpResponse<InputStream> {
+
+        @Override
+        public int statusCode() {
+            return original.statusCode();
+        }
+
+        @Override
+        public HttpRequest request() {
+            return original.request();
+        }
+
+        @Override
+        public java.util.Optional<HttpResponse<InputStream>> previousResponse() {
+            return java.util.Optional.empty();
+        }
+
+        @Override
+        public java.net.http.HttpHeaders headers() {
+            return original.headers();
+        }
+
+        @Override
+        public InputStream body() {
+            return new java.io.ByteArrayInputStream(content);
+        }
+
+        @Override
+        public java.util.Optional<javax.net.ssl.SSLSession> sslSession() {
+            return java.util.Optional.empty();
+        }
+
+        @Override
+        public URI uri() {
+            return original.uri();
+        }
+
+        @Override
+        public HttpClient.Version version() {
+            return original.version();
         }
     }
 

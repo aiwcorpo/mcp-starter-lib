@@ -37,7 +37,6 @@ class AdapterModeStartTest {
         Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
         properties.put("spring.ai.mcp.server.name", "adapter-mode-test");
         properties.put("aiwcorpo.mcp.platform.internal-jwt.receiver-mode", "adapter");
-        properties.remove("aiwcorpo.mcp.platform.policy-data.url");
 
         try (ConfigurableApplicationContext context = new SpringApplicationBuilder(AdapterServer.class).web(WebApplicationType.SERVLET)
                 .properties(properties).properties("server.port=0").profiles("dev").run()) {
@@ -48,6 +47,14 @@ class AdapterModeStartTest {
             assertThat(manifest.get("resourceTypes")).isEmpty();
             assertThat(manifest.has("policies")).isFalse();
             assertThat(manifest.has("policiesHash")).isFalse();
+
+            // The gateway pushes to every server alike (C14): the adapter takes the document and keeps the highest revision, with no gate to refuse.
+            java.net.URI origin = java.net.URI.create("http://127.0.0.1:"
+                    + ((org.springframework.boot.web.server.context.WebServerApplicationContext) context).getWebServer().getPort());
+            PolicyDataEndpoint.Ack again = GATEWAY.policyData().attach(origin);
+            assertThat(again).as("the first push went out when the web server started").extracting(PolicyDataEndpoint.Ack::status,
+                    PolicyDataEndpoint.Ack::accepted, PolicyDataEndpoint.Ack::gate).containsExactly(200, false, "ok");
+            assertThat(again.revision()).isEqualTo(GATEWAY.policyData().revision());
         }
     }
 

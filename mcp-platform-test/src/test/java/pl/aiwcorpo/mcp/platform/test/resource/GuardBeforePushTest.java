@@ -18,13 +18,12 @@ import pl.aiwcorpo.mcp.platform.security.PlatformSecurityAutoConfiguration;
 import pl.aiwcorpo.mcp.platform.test.TestGateway;
 
 /**
- * The configuration guard refuses before anything is asked of the gateway: the engine creates the guard in the first line of its bean method
- * (stated in code, not an accident of bean order), so it holds with lazy initialization too. The keys of the internal JWT are
- * fetched lazily and the extension points ({@code GatewayKeys}, {@code JtiReplayStore}) are created after the guard in
- * {@code internalJwtVerifier}; that order has no observable effect to count here. The test gateway counts the requests; a refused configuration leaves the
- * count where it was, and the same configuration under {@code dev} (the control) pulls.
+ * The configuration guard refuses before the policy engine exists: the engine creates the guard in the first line of its bean method
+ * (stated in code, not an accident of bean order), so it holds with lazy initialization too. The failure is the guard's message, and no
+ * {@code PolicyEngine} bean is left behind; the same configuration under {@code dev} (the control) starts an engine that holds no data until
+ * the gateway pushes some.
  */
-class GuardBeforePullTest {
+class GuardBeforePushTest {
 
     /** The application of the context: the policies must come from the classpath root of its code (here the test classes). */
     @org.springframework.boot.SpringBootConfiguration
@@ -43,7 +42,7 @@ class GuardBeforePullTest {
                         PlatformObservabilityAutoConfiguration.class, PlatformPolicyAutoConfiguration.class))
                 .withUserConfiguration(Application.class)
                 .withInitializer(context -> TestPropertyValues.of(properties).applyTo(context))
-                .withPropertyValues("server.address=127.0.0.1", "server.ssl.client-auth=need");
+                .withPropertyValues("server.address=127.0.0.1", "server.ssl.bundle=mcp-server");
     }
 
     @AfterEach
@@ -52,27 +51,19 @@ class GuardBeforePullTest {
     }
 
     @Test
-    void testKeysOutsideDevAndDevstackAreRefusedBeforeTheFirstRequestToTheGateway() {
-        int before = gateway.policyData().requests();
-
+    void testKeysOutsideDevAndDevstackAreRefusedBeforeAnEngineExists() {
         runner.withPropertyValues("spring.profiles.active=prod").run(context -> {
             assertThat(context).hasFailed();
             assertThat(context.getStartupFailure()).hasStackTraceContaining("allow-test-keys=true is allowed only with the 'dev' or the 'devstack' profile");
         });
-
-        assertThat(gateway.policyData().requests()).isEqualTo(before);
     }
 
     @Test
     void theSameHoldsWithLazyInitialization() {
-        int before = gateway.policyData().requests();
-
         runner.withPropertyValues("spring.profiles.active=prod", "spring.main.lazy-initialization=true").run(context -> {
             assertThat(context).hasFailed();
             assertThat(context.getStartupFailure()).hasStackTraceContaining("allow-test-keys=true is allowed only with the 'dev' or the 'devstack' profile");
         });
-
-        assertThat(gateway.policyData().requests()).isEqualTo(before);
     }
 
     /**
@@ -85,26 +76,20 @@ class GuardBeforePullTest {
     void devstackWithBothAcknowledgementsAsPropertiesButNotInTheProcessEnvironmentIsRefused() {
         assumeThat(System.getenv(PlatformConfigurationGuard.DEVSTACK_ACK_ENVIRONMENT))
                 .as("the test needs a process without the variable").isNull();
-        int before = gateway.policyData().requests();
 
         runner.withPropertyValues("spring.profiles.active=devstack", PlatformConfigurationGuard.DEVSTACK_ACK_PROPERTY + "=true",
                 PlatformConfigurationGuard.DEVSTACK_ACK_ENVIRONMENT + "=true").run(context -> {
             assertThat(context).hasFailed();
             assertThat(context.getStartupFailure()).hasStackTraceContaining("two acknowledgements");
         });
-
-        assertThat(gateway.policyData().requests()).isEqualTo(before);
     }
 
     @Test
-    void underDevTheEngineIsStartedAndAsksAsTheControl() {
-        int before = gateway.policyData().requests();
-
+    void underDevTheEngineIsStartedAndHoldsNothingUntilThePushAsTheControl() {
         runner.withPropertyValues("spring.profiles.active=dev").run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context).hasSingleBean(PolicyEngine.class);
+            assertThat(context.getBean(PolicyEngine.class).revision()).isEmpty();
         });
-
-        assertThat(gateway.policyData().requests()).isGreaterThan(before);
     }
 }

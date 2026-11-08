@@ -26,8 +26,18 @@ class StartupRefusalTest {
         GATEWAY.close();
     }
 
-    private static void start(Map<String, Object> overrides, String... profiles) {
+    /**
+     * The properties of the test gateway, and plain http: these starts are not in a Spring test context, so outside {@code dev} the starter
+     * would generate a certificate into its state directory, which is not what the refusals under test are about.
+     */
+    private static Map<String, Object> properties() {
         Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
+        properties.put("MCP_PLAIN_HTTP", "true");
+        return properties;
+    }
+
+    private static void start(Map<String, Object> overrides, String... profiles) {
+        Map<String, Object> properties = properties();
         properties.put("spring.ai.mcp.server.name", "startup-refusal-test");
         properties.putAll(overrides);
         new SpringApplicationBuilder(ProbeServer.class).web(WebApplicationType.SERVLET).properties(properties)
@@ -38,15 +48,14 @@ class StartupRefusalTest {
     void testKeysWithoutTheDevProfile() {
         assertThatThrownBy(() -> start(Map.of(), "prod")).rootCause()
                 .hasMessageContaining("allow-test-keys=true is allowed only with the 'dev' or the 'devstack' profile")
-                .hasMessageContaining("replay-store=memory").hasMessageContaining("mtls.required=false");
+                .hasMessageContaining("jwks-uri must be an absolute https URL");
     }
 
     @Test
     void devPatWithoutTheDevProfile() {
         assertThatThrownBy(() -> start(Map.of("aiwcorpo.mcp.platform.auth-mode", "dev-pat",
                 "aiwcorpo.mcp.platform.internal-jwt.allow-test-keys", "false",
-                "aiwcorpo.mcp.platform.internal-jwt.replay-store", "redis",
-                "aiwcorpo.mcp.platform.mtls.required", "true")))
+                "aiwcorpo.mcp.platform.internal-jwt.replay-store", "memory")))
                 .rootCause().hasMessageContaining("auth-mode=dev-pat is allowed only with the 'dev' profile");
     }
 
@@ -66,7 +75,7 @@ class StartupRefusalTest {
     @Test
     void devOnANetworkAddress() {
         DeploymentSignalAssumption.assumeDeveloperMachine();
-        Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
+        Map<String, Object> properties = properties();
         properties.put("spring.ai.mcp.server.name", "startup-refusal-test");
         assertThatThrownBy(() -> new SpringApplicationBuilder(ProbeServer.class).web(WebApplicationType.SERVLET)
                 .properties(properties).properties("server.port=0").profiles("dev")
@@ -78,7 +87,7 @@ class StartupRefusalTest {
 
     @Test
     void devOnANetworkAddressOnAPodUnderSystemdIsStillRefused() {
-        Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
+        Map<String, Object> properties = properties();
         properties.put("spring.ai.mcp.server.name", "startup-refusal-test");
         properties.put("INVOCATION_ID", "7f3a9c1e5b2d4e8f");
         properties.put("KUBERNETES_SERVICE_HOST", "10.96.0.1");
@@ -110,14 +119,13 @@ class StartupRefusalTest {
         assertThatThrownBy(() -> start(Map.of("spring.autoconfigure.exclude",
                 "pl.aiwcorpo.mcp.platform.security.PlatformSecurityAutoConfiguration",
                 "aiwcorpo.mcp.platform.internal-jwt.allow-test-keys", "false",
-                "aiwcorpo.mcp.platform.internal-jwt.replay-store", "redis",
-                "aiwcorpo.mcp.platform.mtls.required", "true"), "prod"))
+                "aiwcorpo.mcp.platform.internal-jwt.replay-store", "memory"), "prod"))
                 .hasMessageContaining("spring.autoconfigure.exclude lists");
     }
 
     @Test
     void excludingThePlatformInCodeOutsideDev() {
-        Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
+        Map<String, Object> properties = properties();
         properties.put("spring.ai.mcp.server.name", "startup-refusal-test");
         assertThatThrownBy(() -> new SpringApplicationBuilder(ExcludingServer.class).web(WebApplicationType.SERVLET)
                 .properties(properties).properties("server.port=0").profiles("prod").run().close())
@@ -126,7 +134,7 @@ class StartupRefusalTest {
 
     @Test
     void excludingThePlatformServerCustomizerInCodeOutsideDev() {
-        Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
+        Map<String, Object> properties = properties();
         properties.put("spring.ai.mcp.server.name", "startup-refusal-test");
         assertThatThrownBy(() -> new SpringApplicationBuilder(ExcludingMcpServer.class).web(WebApplicationType.SERVLET)
                 .properties(properties).properties("server.port=0").profiles("prod").run().close())
@@ -143,7 +151,7 @@ class StartupRefusalTest {
                 "pl.aiwcorpo.mcp.platform.security.PlatformSecurityAutoConfiguration"), "dev"))
                 .hasMessageContaining("spring.autoconfigure.exclude lists").hasMessageContaining("'dev' profile either");
 
-        Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
+        Map<String, Object> properties = properties();
         properties.put("spring.ai.mcp.server.name", "startup-refusal-test");
         assertThatThrownBy(() -> new SpringApplicationBuilder(ExcludingServer.class).web(WebApplicationType.SERVLET)
                 .properties(properties).properties("server.port=0").profiles("dev").run("--server.address=0.0.0.0").close())
@@ -162,7 +170,7 @@ class StartupRefusalTest {
     @Test
     void lazyInitializationDoesNotSwitchTheGuardsOff() {
         for (String address : new String[] {"0.0.0.0", "::"}) {
-            Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
+            Map<String, Object> properties = properties();
             properties.put("spring.ai.mcp.server.name", "startup-refusal-test");
             properties.put("spring.main.lazy-initialization", "true");
             assertThatThrownBy(() -> new SpringApplicationBuilder(OwnFilterServer.class).web(WebApplicationType.SERVLET)
@@ -172,15 +180,14 @@ class StartupRefusalTest {
                             cause -> assertThat(cause).hasStackTraceContaining("must be a loopback address"),
                             cause -> assertThat(cause).hasStackTraceContaining(DEPLOYMENT_REFUSAL));
         }
-        Map<String, Object> prod = new HashMap<>(GATEWAY.serverProperties());
+        Map<String, Object> prod = properties();
         prod.put("spring.ai.mcp.server.name", "startup-refusal-test");
         prod.put("spring.main.lazy-initialization", "true");
         assertThatThrownBy(() -> new SpringApplicationBuilder(OwnFilterServer.class).web(WebApplicationType.SERVLET)
                 .properties(prod).properties("server.port=0").profiles("prod").run().close()).rootCause()
                 .hasMessageContaining("allow-test-keys=true is allowed only with the 'dev' or the 'devstack' profile")
-                .hasMessageContaining("replay-store=memory").hasMessageContaining("mtls.required=false")
                 .hasMessageContaining("jwks-uri must be an absolute https URL");
-        Map<String, Object> async = new HashMap<>(GATEWAY.serverProperties());
+        Map<String, Object> async = properties();
         async.put("spring.ai.mcp.server.name", "startup-refusal-test");
         async.put("spring.main.lazy-initialization", "true");
         assertThatThrownBy(() -> new SpringApplicationBuilder(OwnFilterServer.class).web(WebApplicationType.SERVLET)
@@ -193,7 +200,7 @@ class StartupRefusalTest {
     /** The address the server really listens on, not the property: set in code by a web server customizer. */
     @Test
     void aWildcardAddressSetInCodeStopsTheStartInDev() {
-        Map<String, Object> properties = new HashMap<>(GATEWAY.serverProperties());
+        Map<String, Object> properties = properties();
         properties.put("spring.ai.mcp.server.name", "startup-refusal-test");
         assertThatThrownBy(() -> new SpringApplicationBuilder(WideAddressServer.class).web(WebApplicationType.SERVLET)
                 .properties(properties).properties("server.port=0").profiles("dev").run().close())

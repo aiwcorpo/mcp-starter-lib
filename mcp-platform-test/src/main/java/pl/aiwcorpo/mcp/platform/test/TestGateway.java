@@ -32,9 +32,9 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Stands in for the platform gateway in a server's tests: serves the published test JWKS of mcp-contracts and the policy data
- * ({@code GET /internal/v1/policy-data}, {@link #policyData()}) on {@code 127.0.0.1} and mints internal JWTs (C2) signed with the
- * published test key A.
+ * Stands in for the platform gateway in a server's tests: serves the published test JWKS of mcp-contracts on {@code 127.0.0.1}, pushes the
+ * policy data ({@link #policyData()}) to the server like the gateway does ({@code POST /.well-known/mcp-policy-data}, C14) and mints
+ * internal JWTs (C2, with their purpose {@code use}) signed with the published test key A.
  *
  * <pre>{@code
  * static final TestGateway GATEWAY = TestGateway.start("mcp-jira");
@@ -58,24 +58,34 @@ public final class TestGateway implements AutoCloseable {
     /** The {@code prv} of a token: the revision a test gateway starts with, so a call asks the server for no refresh. */
     public static final long DEFAULT_POLICY_REVISION = PolicyDataEndpoint.INITIAL_REVISION;
 
+    /** Purposes of a token (C2, claim {@code use}). */
+    public static final String USE_CALL = "call";
+    public static final String USE_MANIFEST = "manifest";
+    public static final String USE_POLICY_DATA = "policy-data";
+
+    /** Test property that names the gateway of a server under test, so that the server is attached when its web server starts. */
+    static final String GATEWAY_PROPERTY = "aiwcorpo.mcp.platform.test.gateway";
+
+    private static final Map<String, TestGateway> GATEWAYS = new java.util.concurrent.ConcurrentHashMap<>();
+
     private static final String KEYS = "mcp-contracts/test-vectors/keys/";
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     private final String serverId;
     private final HttpServer server;
     private final ECKey signingKey;
-    private final PolicyDataEndpoint policyData;
+    private final String key = UUID.randomUUID().toString();
+    private PolicyDataEndpoint policyData;
 
-    private TestGateway(String serverId, HttpServer server, ECKey signingKey, PolicyDataEndpoint policyData) {
-        this.policyData = policyData;
+    private TestGateway(String serverId, HttpServer server, ECKey signingKey) {
         this.serverId = serverId;
         this.server = server;
         this.signingKey = signingKey;
     }
 
     /**
-     * The policy data the server pulls from {@code GET /internal/v1/policy-data}: the scope mapping (group to scopes), the allowed
-     * AI clients and the emergency overrides. Change it in a test to see the server follow.
+     * The policy data this gateway pushes to the server: the scope mapping (group to scopes), the allowed AI clients and the emergency
+     * overrides. Change it in a test to see the server follow: every change is pushed at once.
      */
     public PolicyDataEndpoint policyData() {
         return policyData;
@@ -96,15 +106,16 @@ public final class TestGateway implements AutoCloseable {
             ECKey key = ECKey.parse(new String(resource(KEYS + "test-gateway-jwt-a.NOT-FOR-PRODUCTION.private.jwk.json"),
                     StandardCharsets.UTF_8));
             HttpServer server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 0);
-            server.createContext("/.well-known/jwks.json", exchange -> {
+            server.createContext("/.well-known/mcp-jwks.json", exchange -> {
                 exchange.getResponseHeaders().set("Content-Type", "application/json");
                 exchange.sendResponseHeaders(200, jwks.length);
                 try (OutputStream out = exchange.getResponseBody()) {
                     out.write(jwks);
                 }
             });
-            TestGateway gateway = new TestGateway(serverId, server, key, new PolicyDataEndpoint(ownPolicies()));
-            server.createContext("/internal/v1/policy-data", gateway.policyData::handle);
+            TestGateway gateway = new TestGateway(serverId, server, key);
+            gateway.policyData = new PolicyDataEndpoint(gateway, ownPolicies());
+            GATEWAYS.put(gateway.key, gateway);
             server.setExecutor(java.util.concurrent.Executors.newCachedThreadPool(task -> {
                 Thread thread = new Thread(task, "test-gateway");
                 thread.setDaemon(true);
@@ -133,13 +144,13 @@ public final class TestGateway implements AutoCloseable {
     }
 
     public String jwksUri() {
-        return "http://127.0.0.1:" + server.getAddress().getPort() + "/.well-known/jwks.json";
+        return "http://127.0.0.1:" + server.getAddress().getPort() + "/.well-known/mcp-jwks.json";
     }
 
     /**
      * Properties for the server under test: server id, issuer, this JWKS, test keys allowed, in-memory jti
-     * store, no client certificate, a portal link for {@code credential_required}, the policy data endpoint of this gateway
-     * ({@link #policyData()}) and the manifest data.
+     * store, a portal link for {@code credential_required}, the manifest data and the name of this gateway, by which the server is
+     * attached (and gets its first policy data) when its web server starts.
      */
     public Map<String, String> serverProperties() {
         Map<String, String> properties = new LinkedHashMap<>();
@@ -148,14 +159,9 @@ public final class TestGateway implements AutoCloseable {
         properties.put("aiwcorpo.mcp.platform.internal-jwt.jwks-uri", jwksUri());
         properties.put("aiwcorpo.mcp.platform.internal-jwt.allow-test-keys", "true");
         properties.put("aiwcorpo.mcp.platform.internal-jwt.replay-store", "memory");
-        properties.put("aiwcorpo.mcp.platform.mtls.required", "false");
         properties.put("aiwcorpo.mcp.platform.credential.connect-url", "http://localhost:18090/connections?system={system}");
-        properties.put("aiwcorpo.mcp.platform.policy-data.url",
-                "http://127.0.0.1:" + server.getAddress().getPort() + "/internal/v1/policy-data");
-        properties.put("aiwcorpo.mcp.platform.policy-data.refresh-interval", "PT1S");
-        properties.put("aiwcorpo.mcp.platform.policy-data.startup-timeout", "PT10S");
         properties.put("aiwcorpo.mcp.platform.manifest.version", "1.0.0");
-        properties.put("aiwcorpo.mcp.platform.manifest.internal-url", "https://" + serverId + ".internal:8443/mcp");
+        properties.put(GATEWAY_PROPERTY, key);
         properties.put("aiwcorpo.mcp.platform.manifest.accepted-credential-types", "user-secret,user-oauth");
         return properties;
     }
@@ -165,9 +171,19 @@ public final class TestGateway implements AutoCloseable {
         return new Token(this, false);
     }
 
-    /** A token of the service variant ({@code sub=system:mcp-gateway}, no user, no tool). */
+    /** A token of the service variant ({@code sub=system:mcp-gateway}, no user, no tool); its purpose is {@code call} unless {@link Token#use} says otherwise. */
     public Token service() {
         return new Token(this, true);
+    }
+
+    /** A service token for {@code GET /.well-known/mcp-manifest}: the purpose {@code manifest}. */
+    public Token manifestToken() {
+        return service().use(USE_MANIFEST);
+    }
+
+    /** The gateway of the server whose properties carry {@code key}, empty when no gateway of this JVM has it. */
+    static java.util.Optional<TestGateway> byKey(String key) {
+        return java.util.Optional.ofNullable(key == null ? null : GATEWAYS.get(key));
     }
 
     /**
@@ -222,6 +238,7 @@ public final class TestGateway implements AutoCloseable {
 
     @Override
     public void close() {
+        GATEWAYS.remove(key);
         server.stop(0);
     }
 
@@ -262,6 +279,7 @@ public final class TestGateway implements AutoCloseable {
         private Instant issuedAt = Instant.now();
         private Duration lifetime = Duration.ofSeconds(60);
         private long policyRevision = DEFAULT_POLICY_REVISION;
+        private String use = USE_CALL;
 
         private Token(TestGateway gateway, boolean service) {
             this.gateway = gateway;
@@ -343,6 +361,15 @@ public final class TestGateway implements AutoCloseable {
             return this;
         }
 
+        /**
+         * The purpose of the token ({@code use}): {@link #USE_CALL} (the default) for the MCP endpoint, {@link #USE_MANIFEST} and
+         * {@link #USE_POLICY_DATA} for the two well-known endpoints, both only with a service token. Any other value is for a test of the refusal.
+         */
+        public Token use(String value) {
+            use = value;
+            return this;
+        }
+
         public Minted mint() {
             JWTClaimsSet.Builder claims = new JWTClaimsSet.Builder();
             extraClaims.forEach(claims::claim);
@@ -351,6 +378,7 @@ public final class TestGateway implements AutoCloseable {
                     .issueTime(Date.from(issuedAt))
                     .expirationTime(Date.from(issuedAt.plus(lifetime)))
                     .jwtID(jti)
+                    .claim("use", use)
                     .claim("rid", requestId)
                     .claim("prv", policyRevision);
             if (service) {
