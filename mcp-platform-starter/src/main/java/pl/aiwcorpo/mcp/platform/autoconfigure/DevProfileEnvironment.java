@@ -12,7 +12,7 @@ import org.springframework.boot.cloud.CloudPlatform;
 import org.springframework.core.env.Environment;
 
 /**
- * Recognizes a runtime where the {@code dev} profile can only be a mistake. The profile takes TLS, mTLS and Redis
+ * Recognizes a runtime where the {@code dev} profile can only be a mistake. The profile takes TLS and Redis
  * off the server, so a stray {@code SPRING_PROFILES_ACTIVE=dev} copied into a deployment would leave a production
  * server with the gateway's internal JWT as its only protection. A deployment is recognized by what a developer's
  * terminal does not have: a cloud platform Spring Boot detects (Kubernetes, Cloud Foundry, ...), the Kubernetes
@@ -138,13 +138,13 @@ final class DevProfileEnvironment {
     }
 
     static String refusal(String signal) {
-        String message = "the 'dev' profile is active in " + signal + ": it removes TLS, mTLS and Redis from the server and is "
+        String message = "the 'dev' profile is active in " + signal + ": it removes TLS and Redis from the server and is "
                 + "meant for a developer's machine; remove SPRING_PROFILES_ACTIVE=dev (and 'dev' from any .env or unit "
                 + "file) from this deployment";
         if (signal.startsWith("a container")) {
             message += ". A devcontainer, Codespaces, Toolbox or Distrobox is a container too: run the server outside "
                     + "the container, run it from a test (TestGateway starts it in the test context, which is not "
-                    + "checked), or use a profile other than 'dev' with TLS, mTLS and Redis configured as in a "
+                    + "checked), or use a profile other than 'dev' with TLS and the settings of a "
                     + "deployment (see 'Running locally' in the starter's README)";
         }
         return message;

@@ -7,3 +7,4 @@ pl.aiwcorpo.mcp.platform.policy.PlatformPolicyAutoConfiguration
 pl.aiwcorpo.mcp.platform.manifest.PlatformManifestAutoConfiguration
 pl.aiwcorpo.mcp.platform.paging.PlatformPagingAutoConfiguration
 pl.aiwcorpo.mcp.platform.capability.PlatformCapabilityAutoConfiguration
+pl.aiwcorpo.mcp.platform.policy.PlatformAdapterPolicyAutoConfiguration

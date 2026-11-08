@@ -13,7 +13,7 @@ import org.springframework.core.env.Environment;
 import pl.aiwcorpo.mcp.platform.observability.PlatformObservabilityAutoConfiguration;
 import pl.aiwcorpo.mcp.platform.policy.ServerPolicies;
 
-/** The C6 manifest: built and checked at startup, served at {@code GET /mcp-manifest}. */
+/** The C6 manifest: built and checked at startup, served at {@code GET /.well-known/mcp-manifest}. */
 @AutoConfiguration
 @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
 @EnableConfigurationProperties(McpPlatformProperties.class)

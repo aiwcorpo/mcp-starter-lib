@@ -15,7 +15,7 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 /**
- * The administrator data of the gateway a server evaluates with: the answer of {@code GET /internal/v1/policy-data} (C7). The
+ * The administrator data of the gateway a server evaluates with: the body of {@code POST /.well-known/mcp-policy-data} (C14). The
  * shape is checked here; what the scope mapping and the overrides mean for this server is checked when a {@link PolicySnapshot} is
  * made from them.
  *
@@ -68,31 +68,6 @@ public record PolicyData(long revision, Optional<String> approvedPoliciesHash, S
             scopes.forEach(list::add);
         });
         return new PolicyData(revision, approvedPoliciesHash, mapping.toString(), allowedClients, overrides);
-    }
-
-    /**
-     * The document, or when it is malformed but names a valid revision, a document with that revision, nothing granted and the problem
-     * listed: a newer revision that cannot be used must refuse every call, not leave the older data in force.
-     *
-     * @throws IllegalArgumentException when not even the revision can be read (the document cannot be ordered, so it is ignored)
-     */
-    public static PolicyData parseOrRefuse(byte[] body) {
-        try {
-            return parse(body);
-        } catch (IllegalArgumentException ex) {
-            JsonNode root;
-            try {
-                root = JSON.readTree(body);
-            } catch (JacksonException unreadable) {
-                throw ex;
-            }
-            JsonNode revision = root == null ? null : root.path("revision");
-            if (revision == null || !revision.isIntegralNumber() || !revision.canConvertToLong() || revision.asLong() < 1
-                    || revision.asLong() > MAX_REVISION) {
-                throw ex;
-            }
-            return new PolicyData(revision.asLong(), Optional.empty(), "[]", List.of(), List.of(), List.of(ex.getMessage()));
-        }
     }
 
     /**

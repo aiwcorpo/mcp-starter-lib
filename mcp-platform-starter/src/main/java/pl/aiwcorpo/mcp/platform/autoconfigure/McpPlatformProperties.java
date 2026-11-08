@@ -16,27 +16,31 @@ import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
  *     platform:
  *       server-id: mcp-jira                  # required: aud of the internal JWT, componentId in audit
  *       auth-mode: gateway                   # gateway | dev-pat (dev profile only)
+ *       state-dir: /var/lib/mcp/state        # MCP_STATE_DIR: self-signed certificate, paging cursor key
  *       internal-jwt:
  *         issuer: https://mcp-gateway.internal
- *         jwks-uri: https://mcp-gateway.internal:8443/.well-known/jwks.json
- *         jwks-ssl-bundle: mcp-internal-ca   # Spring SSL bundle that trusts the internal CA
- *         replay-store: redis                # redis | memory (dev profile only); Redis: spring.data.redis.*
- *       mtls:
- *         required: true                     # false only in the dev profile
- *         allowed-client-names: [mcp-gateway]
+ *         jwks-uri: https://mcp.example.org/.well-known/mcp-jwks.json   # MCP_GATEWAY_JWKS_URI, public https
+ *         replay-store: redis                # optional: redis | memory; unset: Redis when spring.data.redis.host is set, else memory
  *       credential:
  *         connect-url: http://localhost:18090/connections?system={system}   # portal in the dev stack
- *       policy-data:                         # C7: scope mapping, allowed clients and overrides from the gateway
- *         url: https://mcp-gateway.internal:8443/internal/v1/policy-data
- *         tls-name: mcp-gateway.internal     # when the certificate of the gateway does not name the host of url
- *         ssl-bundle: mcp-internal           # the server's own certificate and the internal CA; default: server.ssl.bundle
  * </pre>
+ * The gateway pushes the policy data (scope mapping, allowed clients, overrides) to {@code POST /.well-known/mcp-policy-data}, so there is
+ * nothing to configure for it. TLS of the server port comes from {@code MCP_TLS_KEYSTORE}, {@code MCP_TLS_CERT} and {@code MCP_TLS_KEY},
+ * {@code MCP_PLAIN_HTTP} or a certificate the starter generates (see {@code PlatformTlsEnvironment}).
  */
 @ConfigurationProperties("aiwcorpo.mcp.platform")
 public class McpPlatformProperties {
 
     /** Id of this server ({@code mcp-<system>}): expected {@code aud}, Redis key prefix, audit componentId. */
     private String serverId;
+
+    /**
+     * Directory for what the server keeps between starts: the self-signed certificate ({@code tls/}) and the key of paging cursors. Set
+     * from {@code MCP_STATE_DIR}; {@value #DEFAULT_STATE_DIR} when that is not set.
+     */
+    private String stateDir = DEFAULT_STATE_DIR;
+
+    public static final String DEFAULT_STATE_DIR = "/var/lib/mcp/state";
 
     /** Source of the backend credential. The internal JWT is required in every mode. */
     private AuthMode authMode = AuthMode.GATEWAY;
@@ -51,11 +55,9 @@ public class McpPlatformProperties {
     private boolean requireSyncTransport = true;
 
     private final InternalJwt internalJwt = new InternalJwt();
-    private final Mtls mtls = new Mtls();
     private final Credential credential = new Credential();
     private final DevPat devPat = new DevPat();
     private final Tools tools = new Tools();
-    private final PolicyData policyData = new PolicyData();
     private final Manifest manifest = new Manifest();
     private final Paging paging = new Paging();
     private final Capability capability = new Capability();
@@ -71,7 +73,7 @@ public class McpPlatformProperties {
         /** Expected {@code iss}. */
         private String issuer = "https://mcp-gateway.internal";
 
-        /** The gateway's JWKS, {@code https://<gateway-internal>/.well-known/jwks.json}. Required. */
+        /** The gateway's public JWKS, {@code https://<domain>/.well-known/mcp-jwks.json} ({@code MCP_GATEWAY_JWKS_URI}). Required; https outside the dev profile. */
         private String jwksUri;
 
         /**
@@ -81,9 +83,6 @@ public class McpPlatformProperties {
          * it could fill the audit stream. At least 1 (the same default as the gateway's).
          */
         private int missingTokenEventsPerSecond = 20;
-
-        /** Name of a Spring SSL bundle used to trust the gateway's internal endpoint; JVM default when unset. */
-        private String jwksSslBundle;
 
         /** How long a fetched JWKS is used before it is fetched again. */
         private Duration jwksCacheTtl = Duration.ofMinutes(10);
@@ -127,8 +126,12 @@ public class McpPlatformProperties {
             this.receiverMode = receiverMode;
         }
 
-        /** Where used {@code jti} values are kept. {@code memory} only with the {@code dev} profile. */
-        private ReplayStore replayStore = ReplayStore.REDIS;
+        /**
+         * Where used {@code jti} values are kept. Unset: Redis when {@code spring.data.redis.host} is set ({@code MCP_REDIS_HOST}), otherwise
+         * the bounded memory of the process, which is right for one instance. Several instances behind a balancer need Redis, or a token
+         * could be used once on each of them.
+         */
+        private ReplayStore replayStore;
 
         /** Largest request body read to bind the token to the JSON-RPC method; larger requests get 413. */
         private DataSize maxRequestBody = DataSize.ofMegabytes(4);
@@ -154,14 +157,6 @@ public class McpPlatformProperties {
 
         public void setJwksUri(String jwksUri) {
             this.jwksUri = jwksUri;
-        }
-
-        public String getJwksSslBundle() {
-            return jwksSslBundle;
-        }
-
-        public void setJwksSslBundle(String jwksSslBundle) {
-            this.jwksSslBundle = jwksSslBundle;
         }
 
         public Duration getJwksCacheTtl() {
@@ -266,36 +261,6 @@ public class McpPlatformProperties {
         MEMORY
     }
 
-    /** {@code aiwcorpo.mcp.platform.mtls.*}: the client certificate of the gateway (C3). */
-    public static class Mtls {
-
-        /**
-         * Require a client certificate on every request that needs the internal JWT. TLS itself and
-         * {@code server.ssl.client-auth=need} are configured by the server; this checks who presented it.
-         * May be false only with the {@code dev} profile.
-         */
-        private boolean required = true;
-
-        /** Accepted subject CN of the client certificate. */
-        private List<String> allowedClientNames = new ArrayList<>(List.of("mcp-gateway"));
-
-        public boolean isRequired() {
-            return required;
-        }
-
-        public void setRequired(boolean required) {
-            this.required = required;
-        }
-
-        public List<String> getAllowedClientNames() {
-            return allowedClientNames;
-        }
-
-        public void setAllowedClientNames(List<String> allowedClientNames) {
-            this.allowedClientNames = allowedClientNames;
-        }
-    }
-
     /** {@code aiwcorpo.mcp.platform.credential.*}. */
     public static class Credential {
 
@@ -329,115 +294,13 @@ public class McpPlatformProperties {
         }
     }
 
-    /**
-     * {@code aiwcorpo.mcp.platform.policy-data.*}: the administrator data the server evaluates its own policies with (scope mapping,
-     * allowed AI clients, emergency overrides), read from the gateway's internal port over mTLS (C7). The policies themselves are in
-     * the server's jar ({@code mcp/policies/}).
-     */
-    public static class PolicyData {
-
-        /**
-         * URL of {@code GET /internal/v1/policy-data} on the gateway's internal TLS port, for example
-         * {@code https://<gateway address>:8443/internal/v1/policy-data}. Required outside the {@code dev} profile, https there.
-         */
-        private String url;
-
-        /**
-         * The name the gateway's certificate must carry when it is not the host of {@code url} (an address, a service name of the
-         * cluster). Checked against the subject alternative names. Unset: the host of {@code url}.
-         */
-        private String tlsName;
-
-        /**
-         * Name of the Spring SSL bundle with the server's own key and certificate (the gateway reads the {@code serverId} from its CN) and
-         * the internal CA. Unset: the bundle of {@code server.ssl.bundle}. Required outside the {@code dev} profile.
-         */
-        private String sslBundle;
-
-        /** How often the data is asked for once it is loaded; a newer {@code prv} in a token asks at once. */
-        private Duration refreshInterval = Duration.ofSeconds(30);
-
-        /** How often it is asked for while none is loaded (the gateway was down at start, or the server is not registered yet). */
-        private Duration retryInterval = Duration.ofSeconds(5);
-
-        /** How long the start waits for the first data. The server starts after it all the same and refuses calls until it has some. */
-        private Duration startupTimeout = Duration.ofSeconds(10);
-
-        private Duration connectTimeout = Duration.ofSeconds(2);
-        private Duration readTimeout = Duration.ofSeconds(10);
-
-        public String getUrl() {
-            return url;
-        }
-
-        public void setUrl(String url) {
-            this.url = url;
-        }
-
-        public String getTlsName() {
-            return tlsName;
-        }
-
-        public void setTlsName(String tlsName) {
-            this.tlsName = tlsName;
-        }
-
-        public String getSslBundle() {
-            return sslBundle;
-        }
-
-        public void setSslBundle(String sslBundle) {
-            this.sslBundle = sslBundle;
-        }
-
-        public Duration getRefreshInterval() {
-            return refreshInterval;
-        }
-
-        public void setRefreshInterval(Duration refreshInterval) {
-            this.refreshInterval = refreshInterval;
-        }
-
-        public Duration getRetryInterval() {
-            return retryInterval;
-        }
-
-        public void setRetryInterval(Duration retryInterval) {
-            this.retryInterval = retryInterval;
-        }
-
-        public Duration getStartupTimeout() {
-            return startupTimeout;
-        }
-
-        public void setStartupTimeout(Duration startupTimeout) {
-            this.startupTimeout = startupTimeout;
-        }
-
-        public Duration getConnectTimeout() {
-            return connectTimeout;
-        }
-
-        public void setConnectTimeout(Duration connectTimeout) {
-            this.connectTimeout = connectTimeout;
-        }
-
-        public Duration getReadTimeout() {
-            return readTimeout;
-        }
-
-        public void setReadTimeout(Duration readTimeout) {
-            this.readTimeout = readTimeout;
-        }
-    }
-
     /** {@code aiwcorpo.mcp.platform.manifest.*}: what the C6 manifest says about this server. */
     public static class Manifest {
 
         /** SemVer of the server, {@code version} of the manifest. Required. */
         private String version;
 
-        /** {@code https://} URL of the MCP endpoint as the gateway reaches it; informational (the gateway has its own). Required. */
+        /** URL of the MCP endpoint as the gateway reaches it; informational and optional (the gateway connects to the address an administrator gave it). */
         private String internalUrl;
 
         /** {@code credential.required}: whether every tool needs a backend credential. */
@@ -446,7 +309,7 @@ public class McpPlatformProperties {
         /** {@code credential.acceptedTypes}: {@code user-oauth}, {@code user-secret}, {@code token-exchange}, {@code service-account}. */
         private List<String> acceptedCredentialTypes = new ArrayList<>();
 
-        /** Where to write the manifest at startup (for the registration step of a build or deployment); unset = nowhere. */
+        /** Where to write the manifest at startup (the build keeps it as {@code target/mcp-manifest.json}); unset = nowhere. */
         private String outputFile;
 
         public String getVersion() {
@@ -541,9 +404,9 @@ public class McpPlatformProperties {
     public static class Paging {
 
         /**
-         * Base64 of the HMAC key of cursors, at least 32 bytes. All instances of one server must have the same key,
-         * otherwise a cursor issued by one is refused by another. Unset: a random key per process (cursors then do not
-         * survive a restart and are not valid across instances; logged at startup).
+         * Base64 of the key of cursors, at least 32 bytes ({@code MCP_PAGING_CURSOR_KEY}). All instances of one server must have the same key,
+         * otherwise a cursor issued by one is refused by another. Unset: a key generated once into {@code paging-cursor.key} of the state
+         * directory and reused at every start, which is enough for one instance; several instances need this property.
          */
         private String cursorKey;
 
@@ -620,6 +483,14 @@ public class McpPlatformProperties {
         this.serverId = serverId;
     }
 
+    public String getStateDir() {
+        return stateDir;
+    }
+
+    public void setStateDir(String stateDir) {
+        this.stateDir = stateDir;
+    }
+
     public AuthMode getAuthMode() {
         return authMode;
     }
@@ -648,10 +519,6 @@ public class McpPlatformProperties {
         return internalJwt;
     }
 
-    public Mtls getMtls() {
-        return mtls;
-    }
-
     public Credential getCredential() {
         return credential;
     }
@@ -662,10 +529,6 @@ public class McpPlatformProperties {
 
     public Tools getTools() {
         return tools;
-    }
-
-    public PolicyData getPolicyData() {
-        return policyData;
     }
 
     public Manifest getManifest() {

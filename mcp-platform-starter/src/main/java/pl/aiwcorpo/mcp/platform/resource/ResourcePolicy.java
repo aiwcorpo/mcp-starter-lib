@@ -44,7 +44,7 @@ import tools.jackson.databind.node.ObjectNode;
  * <p>Before the tool runs, in this order:
  * <ol>
  *   <li>The gate of the contracts lets the call through with one policy snapshot ({@link PolicyEngine#gate}): data loaded, own policies
- *       approved, overrides valid; a {@code prv} newer than the data held is fetched first. Every decision of the call, the
+ *       approved, overrides valid, at least as new as {@code prv}. Every decision of the call, the
  *       per-element ones included, is made with that one snapshot.</li>
  *   <li>The AI client ({@code azp}) of the token must be one the policy data allows, checked in code: a client that is not is
  *       {@code access_denied}.</li>
@@ -632,8 +632,8 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
 
     /**
      * The snapshot to decide with for the call in progress: the one the gate of the contracts let the call through with (data is loaded,
-     * its approved hash is the hash of this server's own policies, its overrides validate; a {@code prv} newer than the data held is
-     * fetched first). It is taken once per call and kept in the {@link ResourceContext}, so a swap of the data during the call changes
+     * its approved hash is the hash of this server's own policies, its overrides validate, and it is at least as new as the {@code prv} of the token: the data is pushed by the
+     * gateway, and stale data is refused by {@code PolicyDataStaleFilter} before the call gets here). It is taken once per call and kept in the {@link ResourceContext}, so a swap of the data during the call changes
      * nothing, and a gate refusal ends the call as {@code upstream_unavailable} (audited once, with the reason of the gate).
      */
     private PolicySnapshot snapshot() {

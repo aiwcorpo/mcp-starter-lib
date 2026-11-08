@@ -22,18 +22,17 @@ import tools.jackson.databind.json.JsonMapper;
  *
  * <ul>
  *   <li>{@code server-id}, {@code internal-jwt.jwks-uri} and {@code credential.connect-url} are set.</li>
- *   <li>The development relaxations ({@code auth-mode=dev-pat}, {@code internal-jwt.allow-test-keys},
- *       {@code internal-jwt.replay-store=memory}, {@code mtls.required=false}, plain-http JWKS, a separate
+ *   <li>The development relaxations ({@code auth-mode=dev-pat}, {@code internal-jwt.allow-test-keys}, plain-http JWKS, a separate
  *       management port) only when {@code dev} is the one and only active profile; {@code dev} next to another
  *       profile, through a profile group or as a default profile does not count and, when active with others,
  *       stops the server.</li>
- *   <li>Outside {@code dev}: {@code server.ssl.client-auth=need}, https JWKS, no separate management port.</li>
+ *   <li>Outside {@code dev}: TLS on the server port (an SSL bundle or key store; the starter derives one from {@code MCP_TLS_*} or generates a
+ *       certificate) or {@code MCP_PLAIN_HTTP=true}, https JWKS, no separate management port. Never a client certificate on the port (CC-249).</li>
  *   <li>Unauthenticated paths only from {@link #ALLOWED_UNAUTHENTICATED_PATHS}; MCP transport STREAMABLE.</li>
- *   <li>A native server names the gateway's policy data ({@code policy-data.url}); outside {@code dev} it is https and an SSL bundle
- *       with the server's own certificate (mTLS) is set.</li>
  *   <li>Clock skew at most 30 s and token lifetime at most 60 s (C2).</li>
- *   <li>No removed settings ({@code guard.*}, {@code pat-header-prefix}, the 3.x {@code policy.*} of the signed bundles): left in place they would be ignored
- *       while the operator believes they still protect the server.</li>
+ *   <li>No removed settings ({@code guard.*}, {@code pat-header-prefix}, the 3.x {@code policy.*} of the signed bundles, and from 4.0.0 {@code mtls.*},
+ *       {@code policy-data.*}, {@code internal-jwt.jwks-ssl-bundle}): left in place they would be ignored while the operator believes they still
+ *       protect the server.</li>
  * </ul>
  */
 public class PlatformConfigurationGuard implements InitializingBean {
@@ -42,7 +41,7 @@ public class PlatformConfigurationGuard implements InitializingBean {
     public static final String DEV_PROFILE = "dev";
 
     /**
-     * The profile of a shared development stack (containers of the dev stack): everything is as in production (TLS, mTLS,
+     * The profile of a shared development stack (containers of the dev stack): everything is as in production (TLS,
      * Redis, https, state directory) except that signing keys named {@code test-*} and the published test keys are accepted.
      * Allowed in a container, but only with the explicit acknowledgement below, and it is never combined with another profile.
      */
@@ -132,12 +131,12 @@ public class PlatformConfigurationGuard implements InitializingBean {
         if (dev && !loopback(environment.getProperty("server.address"))) {
             problems.add("with the 'dev' profile server.address must be a loopback address (127.0.0.1, ::1, localhost), "
                     + "not '" + environment.getProperty("server.address") + "': the dev relaxations (test keys, no "
-                    + "mTLS, in-memory jti) must not be reachable from the network");
+                    + "TLS, in-memory jti) must not be reachable from the network");
         }
 
         if (dev) {
-            LOG.warn("event=dev_profile_overrides overridden=[{}] detail=\"server.ssl disabled, mtls.required=false, "
-                    + "replay-store=memory, jwks-ssl-bundle ignored (profile dev, loopback only)\"",
+            LOG.warn("event=dev_profile_overrides overridden=[{}] detail=\"server.ssl disabled, replay-store=memory "
+                    + "(profile dev, loopback only)\"",
                     environment.getProperty(PlatformDefaultsEnvironmentPostProcessor.OVERRIDDEN_KEY, ""));
             DevProfileEnvironment.deploymentSignal(environment)
                     .ifPresent(signal -> problems.add(DevProfileEnvironment.refusal(signal)));
@@ -145,7 +144,7 @@ public class PlatformConfigurationGuard implements InitializingBean {
                 problems.add("with the 'dev' profile and a separate management.server.port the management server "
                         + "must listen on a loopback address (management.server.address=127.0.0.1), not '"
                         + environment.getProperty("management.server.address") + "': it is outside the internal JWT "
-                        + "and mTLS checks and would expose the actuator endpoints to the network");
+                        + "check and would expose the actuator endpoints to the network");
             }
         }
 
@@ -156,7 +155,8 @@ public class PlatformConfigurationGuard implements InitializingBean {
         }
 
         if (isBlank(jwt.getJwksUri())) {
-            problems.add("aiwcorpo.mcp.platform.internal-jwt.jwks-uri must point at the gateway's JWKS");
+            problems.add("aiwcorpo.mcp.platform.internal-jwt.jwks-uri (MCP_GATEWAY_JWKS_URI) must point at the public JWKS of the gateway, "
+                    + "https://<domain>/.well-known/mcp-jwks.json");
         } else if (!dev && !absoluteUrl(jwt.getJwksUri(), Set.of("https"))) {
             problems.add("aiwcorpo.mcp.platform.internal-jwt.jwks-uri must be an absolute https URL outside the 'dev' profile");
         }
@@ -173,7 +173,7 @@ public class PlatformConfigurationGuard implements InitializingBean {
         }
         if (!dev && separateManagementServer()) {
             problems.add("management.server.port must be unset or equal to server.port outside the 'dev' profile: "
-                    + "the internal JWT and mTLS checks do not cover a separate management server");
+                    + "the internal JWT check does not cover a separate management server");
         }
         if (isBlank(jwt.getIssuer())) {
             problems.add("aiwcorpo.mcp.platform.internal-jwt.issuer must not be empty");
@@ -197,9 +197,6 @@ public class PlatformConfigurationGuard implements InitializingBean {
         if (properties.getTools().getMaxFilteredElements() < 1) {
             problems.add("aiwcorpo.mcp.platform.tools.max-filtered-elements must be at least 1");
         }
-        if (properties.getInternalJwt().getReceiverMode() == pl.aiwcorpo.mcp.platform.auth.ReceiverMode.NATIVE) {
-            policyDataProblems(properties.getPolicyData(), dev, problems);
-        }
         manifestProblems(properties.getManifest(), problems);
         credentialTypeProblems(properties.getManifest(), problems);
         if (environment.containsProperty("aiwcorpo.mcp.platform.credential-type")) {
@@ -208,11 +205,7 @@ public class PlatformConfigurationGuard implements InitializingBean {
         }
 
         if (!dev) {
-            if (properties.getMtls().isRequired()
-                    && !"need".equalsIgnoreCase(environment.getProperty("server.ssl.client-auth", "").trim())) {
-                problems.add("server.ssl.client-auth=need is required outside the 'dev' profile: the gateway's client "
-                        + "certificate is verified by the server's TLS (truststore with the internal CA)");
-            }
+            tlsProblems(problems);
             if (properties.getAuthMode() == AuthMode.DEV_PAT) {
                 problems.add("aiwcorpo.mcp.platform.auth-mode=dev-pat is allowed only with the 'dev' profile");
             }
@@ -220,12 +213,11 @@ public class PlatformConfigurationGuard implements InitializingBean {
                 problems.add("aiwcorpo.mcp.platform.internal-jwt.allow-test-keys=true is allowed only with the 'dev' or the "
                         + "'devstack' profile");
             }
-            if (jwt.getReplayStore() == McpPlatformProperties.ReplayStore.MEMORY) {
-                problems.add("aiwcorpo.mcp.platform.internal-jwt.replay-store=memory is allowed only with the 'dev' profile");
-            }
-            if (!properties.getMtls().isRequired()) {
-                problems.add("aiwcorpo.mcp.platform.mtls.required=false is allowed only with the 'dev' profile");
-            }
+        }
+        if (jwt.getReplayStore() == McpPlatformProperties.ReplayStore.REDIS && isBlank(environment.getProperty("spring.data.redis.host"))
+                && isBlank(environment.getProperty("spring.data.redis.url"))) {
+            problems.add("aiwcorpo.mcp.platform.internal-jwt.replay-store=redis needs MCP_REDIS_HOST (spring.data.redis.host); leave replay-store "
+                    + "unset to use the memory of the process, which is right for one instance");
         }
 
         Binder binder = Binder.get(environment);
@@ -235,8 +227,20 @@ public class PlatformConfigurationGuard implements InitializingBean {
         }
         if (binder.bind("aiwcorpo.mcp.platform.policy", Bindable.mapOf(String.class, Object.class)).isBound()) {
             problems.add("aiwcorpo.mcp.platform.policy.* (the signed policy bundles, their keys and state directory) was removed in 4.0.0: "
-                    + "the policies are in the server's jar (mcp/policies/) and the scope mapping comes from the gateway, set "
-                    + "aiwcorpo.mcp.platform.policy-data.url instead, see the CHANGELOG, 4.0.0");
+                    + "the policies are in the server's jar (mcp/policies/) and the scope mapping is pushed by the gateway, see the CHANGELOG, 4.0.0");
+        }
+        if (binder.bind("aiwcorpo.mcp.platform.policy-data", Bindable.mapOf(String.class, Object.class)).isBound()) {
+            problems.add("aiwcorpo.mcp.platform.policy-data.* (url, tls-name, ssl-bundle, intervals) was removed in 4.0.0 (CC-249): the server no longer "
+                    + "fetches policy data, the gateway pushes it to POST /.well-known/mcp-policy-data; remove the settings and MCP_GATEWAY_POLICY_DATA_URL, "
+                    + "MCP_GATEWAY_TLS_NAME");
+        }
+        if (binder.bind("aiwcorpo.mcp.platform.mtls", Bindable.mapOf(String.class, Object.class)).isBound()) {
+            problems.add("aiwcorpo.mcp.platform.mtls.* was removed in 4.0.0 (CC-249): the gateway presents no client certificate, it proves itself "
+                    + "with the internal JWT; remove it");
+        }
+        if (environment.containsProperty("aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle")) {
+            problems.add("aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle was removed in 4.0.0 (CC-249): the JWKS of the gateway is public https, "
+                    + "trusted by the JVM's own trust store; remove it");
         }
         if (environment.containsProperty("aiwcorpo.mcp.platform.pat-header-prefix")) {
             problems.add("aiwcorpo.mcp.platform.pat-header-prefix was removed in 3.0; use auth-mode=dev-pat with "
@@ -248,27 +252,32 @@ public class PlatformConfigurationGuard implements InitializingBean {
         }
     }
 
-    private void policyDataProblems(McpPlatformProperties.PolicyData policyData, boolean dev, List<String> problems) {
-        String prefix = "aiwcorpo.mcp.platform.policy-data";
-        if (isBlank(policyData.getUrl())) {
-            problems.add(prefix + ".url must point at GET /internal/v1/policy-data of the gateway (C7): the server decides on the resources "
-                    + "of its system with the scope mapping, the allowed clients and the overrides that endpoint serves");
-        } else if (!absoluteUrl(policyData.getUrl(), dev ? Set.of("http", "https") : Set.of("https"))) {
-            problems.add(prefix + ".url must be an absolute " + (dev ? "http(s)" : "https") + " URL" + (dev ? "" : " outside the 'dev' profile"));
+    /**
+     * What the TLS of the server port must look like outside {@code dev}: either plain http by the explicit {@code MCP_PLAIN_HTTP=true} (which
+     * the administrator also has to allow for the server at the gateway), or an SSL bundle or key store that is enabled. No client certificate.
+     */
+    private void tlsProblems(List<String> problems) {
+        String clientAuth = environment.getProperty("server.ssl.client-auth", "").trim();
+        if ("need".equalsIgnoreCase(clientAuth) || "want".equalsIgnoreCase(clientAuth)) {
+            problems.add("server.ssl.client-auth=" + clientAuth + " was removed from the model in 4.0.0 (CC-249): the gateway presents no client "
+                    + "certificate and a server that asks for one is unreachable; remove it");
         }
-        if (!dev && isBlank(policyData.getSslBundle()) && isBlank(environment.getProperty("server.ssl.bundle"))) {
-            problems.add(prefix + ".ssl-bundle (or server.ssl.bundle) must name the Spring SSL bundle with the server's own certificate and "
-                    + "the internal CA outside the 'dev' profile: the gateway serves the policy data only over mTLS, to a certificate whose "
-                    + "CN is the serverId");
+        boolean plain = PlatformTlsEnvironment.plainHttp(environment);
+        boolean tls = !"false".equalsIgnoreCase(environment.getProperty("server.ssl.enabled", "").trim())
+                && (!isBlank(environment.getProperty("server.ssl.bundle")) || !isBlank(environment.getProperty("server.ssl.key-store")));
+        if (!plain && !tls) {
+            problems.add("the server port has no TLS: give the server a certificate (MCP_TLS_KEYSTORE with MCP_TLS_STORE_PASSWORD, or MCP_TLS_CERT and "
+                    + "MCP_TLS_KEY), leave them unset so that the starter generates one into MCP_STATE_DIR, or set MCP_PLAIN_HTTP=true for a server "
+                    + "inside the Docker network of the platform");
         }
-        if (!dev && !isBlank(policyData.getTlsName()) && policyData.getTlsName().contains("/")) {
-            problems.add(prefix + ".tls-name must be a host name or an address, not a URL");
-        }
-        if (!policyData.getRefreshInterval().isPositive() || !policyData.getRetryInterval().isPositive()) {
-            problems.add(prefix + ".refresh-interval and retry-interval must be positive");
-        }
-        if (policyData.getStartupTimeout().isNegative()) {
-            problems.add(prefix + ".startup-timeout must not be negative");
+        String source = environment.getProperty(PlatformTlsEnvironment.SOURCE);
+        if (plain) {
+            LOG.warn("event=plain_http detail=\"the server port speaks http (MCP_PLAIN_HTTP=true): only for a server inside the Docker network of "
+                    + "the platform, with allowPlainHttp set for it at the gateway\"");
+        } else if (source != null) {
+            LOG.info("event=tls_certificate source={} fingerprint={} detail=\"{}; the portal shows this fingerprint when the connection is approved: "
+                    + "compare them\"", source, environment.getProperty(PlatformTlsEnvironment.FINGERPRINT, "unknown"),
+                    environment.getProperty(PlatformTlsEnvironment.DETAIL, ""));
         }
     }
 
@@ -281,8 +290,8 @@ public class PlatformConfigurationGuard implements InitializingBean {
         if (manifest.getVersion() == null || !SEMVER.matcher(manifest.getVersion()).matches()) {
             problems.add("aiwcorpo.mcp.platform.manifest.version must be the SemVer of this server (C6), for example 1.4.0");
         }
-        if (isBlank(manifest.getInternalUrl()) || !absoluteUrl(manifest.getInternalUrl(), Set.of("https"))) {
-            problems.add("aiwcorpo.mcp.platform.manifest.internal-url must be the https URL the gateway reaches this server at (C6)");
+        if (!isBlank(manifest.getInternalUrl()) && !absoluteUrl(manifest.getInternalUrl(), Set.of("http", "https"))) {
+            problems.add("aiwcorpo.mcp.platform.manifest.internal-url is informational and optional (C6); when set it must be an absolute http(s) URL");
         }
         if (manifest.isCredentialRequired() && manifest.getAcceptedCredentialTypes().isEmpty()) {
             problems.add("aiwcorpo.mcp.platform.manifest.accepted-credential-types must list at least one of "

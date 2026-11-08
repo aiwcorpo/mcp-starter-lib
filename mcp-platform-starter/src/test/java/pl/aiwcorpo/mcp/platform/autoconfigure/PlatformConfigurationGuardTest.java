@@ -14,12 +14,9 @@ class PlatformConfigurationGuardTest {
     private static McpPlatformProperties valid() {
         McpPlatformProperties props = new McpPlatformProperties();
         props.setServerId("mcp-jira");
-        props.getInternalJwt().setJwksUri("https://mcp-gateway.internal:8443/.well-known/jwks.json");
+        props.getInternalJwt().setJwksUri("https://mcp.corp.test/.well-known/mcp-jwks.json");
         props.getCredential().setConnectUrl("http://localhost:18090/connections?system={system}");
-        props.getPolicyData().setUrl("https://mcp-gateway.internal:8443/internal/v1/policy-data");
-        props.getPolicyData().setSslBundle("mcp-internal");
         props.getManifest().setVersion("1.0.0");
-        props.getManifest().setInternalUrl("https://mcp-jira.internal:8443/mcp");
         props.getManifest().setAcceptedCredentialTypes(java.util.List.of("user-secret"));
         return props;
     }
@@ -29,7 +26,7 @@ class PlatformConfigurationGuardTest {
     }
 
     private static MockEnvironment production() {
-        return new MockEnvironment().withProperty("server.ssl.client-auth", "need");
+        return new MockEnvironment().withProperty("server.ssl.bundle", "mcp-server");
     }
 
     private static MockEnvironment profiles(String... active) {
@@ -44,23 +41,19 @@ class PlatformConfigurationGuardTest {
     }
 
     @Test
-    void thePolicyDataMustBeConfiguredAndIsHardenedOutsideDev() {
-        McpPlatformProperties none = valid();
-        none.getPolicyData().setUrl(null);
-        assertThatThrownBy(() -> check(none, production())).hasMessageContaining("policy-data.url must point at GET /internal/v1/policy-data");
+    void theRemovedPolicyDataAndMtlsSettingsStopTheStartWithAPointerToTheNewModel() {
+        MockEnvironment policyData = production().withProperty("aiwcorpo.mcp.platform.policy-data.url", "https://mcp-gateway.internal:8443/internal/v1/policy-data");
+        assertThatThrownBy(() -> check(valid(), policyData)).hasMessageContaining("policy-data.* (url, tls-name")
+                .hasMessageContaining("removed in 4.0.0").hasMessageContaining("POST /.well-known/mcp-policy-data");
 
-        McpPlatformProperties http = valid();
-        http.getPolicyData().setUrl("http://mcp-gateway.internal:8080/internal/v1/policy-data");
-        assertThatThrownBy(() -> check(http, production())).hasMessageContaining("policy-data.url must be an absolute https");
+        MockEnvironment mtls = production().withProperty("aiwcorpo.mcp.platform.mtls.required", "true");
+        assertThatThrownBy(() -> check(valid(), mtls)).hasMessageContaining("mtls.* was removed in 4.0.0");
 
-        McpPlatformProperties noBundle = valid();
-        noBundle.getPolicyData().setSslBundle(null);
-        assertThatThrownBy(() -> check(noBundle, production())).hasMessageContaining("policy-data.ssl-bundle (or server.ssl.bundle)");
-        assertThatCode(() -> check(noBundle, production().withProperty("server.ssl.bundle", "server"))).doesNotThrowAnyException();
+        MockEnvironment bundle = production().withProperty("aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle", "mcp-internal-ca");
+        assertThatThrownBy(() -> check(valid(), bundle)).hasMessageContaining("jwks-ssl-bundle was removed in 4.0.0");
 
-        McpPlatformProperties interval = valid();
-        interval.getPolicyData().setRefreshInterval(java.time.Duration.ZERO);
-        assertThatThrownBy(() -> check(interval, production())).hasMessageContaining("refresh-interval and retry-interval must be positive");
+        MockEnvironment clientAuth = production().withProperty("server.ssl.client-auth", "need");
+        assertThatThrownBy(() -> check(valid(), clientAuth)).hasMessageContaining("server.ssl.client-auth=need was removed");
     }
 
     @Test
@@ -68,16 +61,41 @@ class PlatformConfigurationGuardTest {
         MockEnvironment env = production().withProperty("aiwcorpo.mcp.platform.policy.main.url", "https://policies.internal/latest.json");
 
         assertThatThrownBy(() -> check(valid(), env)).hasMessageContaining("policy.* (the signed policy bundles")
-                .hasMessageContaining("removed in 4.0.0").hasMessageContaining("policy-data.url");
+                .hasMessageContaining("removed in 4.0.0").hasMessageContaining("pushed by the gateway");
     }
 
     @Test
-    void anAdapterNeedsNoPolicyData() {
-        McpPlatformProperties adapter = valid();
-        adapter.getPolicyData().setUrl(null);
-        adapter.getInternalJwt().setReceiverMode(pl.aiwcorpo.mcp.platform.auth.ReceiverMode.ADAPTER);
+    void outsideDevThePortNeedsTlsOrAnExplicitPlainHttp() {
+        assertThatThrownBy(() -> check(valid(), new MockEnvironment())).hasMessageContaining("the server port has no TLS")
+                .hasMessageContaining("MCP_PLAIN_HTTP=true");
+        assertThatThrownBy(() -> check(valid(), production().withProperty("server.ssl.enabled", "false")))
+                .hasMessageContaining("the server port has no TLS");
+        assertThatCode(() -> check(valid(), new MockEnvironment().withProperty("server.ssl.key-store", "file:/etc/mcp/keystore.p12")))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> check(valid(), new MockEnvironment().withProperty("MCP_PLAIN_HTTP", "true"))).doesNotThrowAnyException();
+    }
 
-        assertThatCode(() -> check(adapter, production())).doesNotThrowAnyException();
+    @Test
+    void redisAsTheReplayStoreNeedsAHost() {
+        McpPlatformProperties redis = valid();
+        redis.getInternalJwt().setReplayStore(McpPlatformProperties.ReplayStore.REDIS);
+
+        assertThatThrownBy(() -> check(redis, production())).hasMessageContaining("replay-store=redis needs MCP_REDIS_HOST");
+        assertThatCode(() -> check(redis, production().withProperty("spring.data.redis.host", "redis.internal"))).doesNotThrowAnyException();
+        McpPlatformProperties memory = valid();
+        memory.getInternalJwt().setReplayStore(McpPlatformProperties.ReplayStore.MEMORY);
+        assertThatCode(() -> check(memory, production())).doesNotThrowAnyException();
+    }
+
+    @Test
+    void theInformationalInternalUrlIsOptionalButMustBeAUrlWhenSet() {
+        McpPlatformProperties none = valid();
+        none.getManifest().setInternalUrl(null);
+        assertThatCode(() -> check(none, production())).doesNotThrowAnyException();
+
+        McpPlatformProperties bad = valid();
+        bad.getManifest().setInternalUrl("not a url");
+        assertThatThrownBy(() -> check(bad, production())).hasMessageContaining("manifest.internal-url is informational and optional");
     }
 
     @Test
@@ -92,13 +110,10 @@ class PlatformConfigurationGuardTest {
     }
 
     @Test
-    void devMayUseHttpForThePolicyData() {
+    void devMayUseHttpForTheJwks() {
         DeploymentSignalAssumption.assumeDeveloperMachine();
         McpPlatformProperties props = valid();
-        props.getPolicyData().setUrl("http://127.0.0.1:18747/internal/v1/policy-data");
-        props.getPolicyData().setSslBundle(null);
         props.getInternalJwt().setJwksUri("http://127.0.0.1:9/jwks.json");
-        props.getMtls().setRequired(false);
 
         assertThatCode(() -> check(props, profiles("dev"))).doesNotThrowAnyException();
     }
@@ -107,7 +122,7 @@ class PlatformConfigurationGuardTest {
     void theManifestDataMustBeSet() {
         McpPlatformProperties props = valid();
         props.getManifest().setVersion("1.0");
-        props.getManifest().setInternalUrl("http://mcp-jira.internal/mcp");
+        props.getManifest().setInternalUrl("mcp-jira.internal/mcp");
         props.getManifest().setAcceptedCredentialTypes(java.util.List.of("password"));
 
         assertThatThrownBy(() -> check(props, production())).hasMessageContaining("manifest.version")
@@ -187,14 +202,11 @@ class PlatformConfigurationGuardTest {
     void devstackKeepsEverythingElseOfProduction() {
         McpPlatformProperties props = valid();
         props.getInternalJwt().setAllowTestKeys(true);
-        props.getInternalJwt().setReplayStore(McpPlatformProperties.ReplayStore.MEMORY);
-        props.getMtls().setRequired(false);
-        props.getPolicyData().setUrl("http://mcp-gateway.internal:8080/internal/v1/policy-data");
+        props.getInternalJwt().setJwksUri("http://mcp.corp.test/.well-known/mcp-jwks.json");
         props.setAuthMode(AuthMode.DEV_PAT);
 
         assertThatThrownBy(() -> checkWithProcessEnvironment(props, devstack(true), true))
-                .hasMessageContaining("replay-store=memory").hasMessageContaining("mtls.required=false")
-                .hasMessageContaining("policy-data.url must be an absolute https")
+                .hasMessageContaining("jwks-uri must be an absolute https URL")
                 .hasMessageContaining("dev-pat");
     }
 
@@ -249,13 +261,13 @@ class PlatformConfigurationGuardTest {
     }
 
     @Test
-    void outsideDevJwksMustBeHttpsAndClientAuthNeed() {
+    void outsideDevJwksMustBeHttpsAndThePortNeedsTls() {
         DeploymentSignalAssumption.assumeDeveloperMachine();
         McpPlatformProperties props = valid();
-        props.getInternalJwt().setJwksUri("http://mcp-gateway.internal:8080/.well-known/jwks.json");
+        props.getInternalJwt().setJwksUri("http://mcp.corp.test/.well-known/mcp-jwks.json");
 
         assertThatThrownBy(() -> check(props, new MockEnvironment()))
-                .hasMessageContaining("absolute https URL").hasMessageContaining("client-auth=need");
+                .hasMessageContaining("absolute https URL").hasMessageContaining("the server port has no TLS");
         assertThatCode(() -> check(props, profiles("dev"))).doesNotThrowAnyException();
     }
 
@@ -275,12 +287,9 @@ class PlatformConfigurationGuardTest {
         McpPlatformProperties props = valid();
         props.setAuthMode(AuthMode.DEV_PAT);
         props.getInternalJwt().setAllowTestKeys(true);
-        props.getInternalJwt().setReplayStore(McpPlatformProperties.ReplayStore.MEMORY);
-        props.getMtls().setRequired(false);
 
         assertThatThrownBy(() -> check(props, profiles("prod")))
-                .hasMessageContaining("dev-pat").hasMessageContaining("allow-test-keys")
-                .hasMessageContaining("replay-store=memory").hasMessageContaining("mtls.required=false");
+                .hasMessageContaining("dev-pat").hasMessageContaining("allow-test-keys");
 
         MockEnvironment dev = new MockEnvironment().withProperty("server.address", "127.0.0.1");
         dev.setActiveProfiles("dev");
@@ -334,7 +343,7 @@ class PlatformConfigurationGuardTest {
         new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(dev, null);
         assertThat(dev.getProperty("server.address")).isEqualTo("127.0.0.1");
 
-        MockEnvironment prod = new MockEnvironment();
+        MockEnvironment prod = new MockEnvironment().withProperty("MCP_PLAIN_HTTP", "true");
         prod.setActiveProfiles("prod");
         new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(prod, null);
         assertThat(prod.getProperty("server.address")).isNull();
@@ -346,23 +355,19 @@ class PlatformConfigurationGuardTest {
         env.getPropertySources().addFirst(new MapPropertySource("commandLineArgs", Map.of()));
         env.getPropertySources().addLast(new MapPropertySource(
                 "Config resource 'class path resource [application.yml]' via location 'optional:classpath:/'",
-                Map.of("server.ssl.bundle", "mcp-jira", "server.ssl.client-auth", "need",
-                        "aiwcorpo.mcp.platform.mtls.required", "true",
-                        "aiwcorpo.mcp.platform.internal-jwt.replay-store", "redis",
-                        "aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle", "mcp-internal-ca")));
+                Map.of("server.ssl.bundle", "mcp-jira",
+                        "aiwcorpo.mcp.platform.internal-jwt.replay-store", "redis")));
         return env;
     }
 
     @Test
-    void devRunsTheServersOwnConfigurationWithoutCertificatesRedisOrInternalCa() {
+    void devRunsTheServersOwnConfigurationWithoutCertificatesOrRedis() {
         DeploymentSignalAssumption.assumeDeveloperMachine();
         MockEnvironment dev = serverConfigAsInTheReadme("dev");
         new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(dev, null);
 
         assertThat(dev.getProperty("server.ssl.enabled")).isEqualTo("false");
-        assertThat(dev.getProperty("aiwcorpo.mcp.platform.mtls.required")).isEqualTo("false");
         assertThat(dev.getProperty("aiwcorpo.mcp.platform.internal-jwt.replay-store")).isEqualTo("memory");
-        assertThat(dev.getProperty("aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle")).isEmpty();
         assertThat(dev.getProperty("server.ssl.bundle")).isEqualTo("mcp-jira");
     }
 
@@ -385,8 +390,7 @@ class PlatformConfigurationGuardTest {
             new PlatformDefaultsEnvironmentPostProcessor().postProcessEnvironment(env, null);
 
             assertThat(env.getProperty("server.ssl.enabled")).as(String.join(",", profiles)).isNull();
-            assertThat(env.getProperty("aiwcorpo.mcp.platform.mtls.required")).isEqualTo("true");
-            assertThat(env.getProperty("aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle")).isEqualTo("mcp-internal-ca");
+            assertThat(env.getProperty("aiwcorpo.mcp.platform.internal-jwt.replay-store")).isEqualTo("redis");
         }
     }
 
@@ -451,8 +455,7 @@ class PlatformConfigurationGuardTest {
             String line = pl.aiwcorpo.mcp.platform.CapturedLogs.snapshot(appender).stream()
                     .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
                     .filter(m -> m.contains("dev_profile_overrides")).findFirst().orElseThrow();
-            assertThat(line).contains("aiwcorpo.mcp.platform.mtls.required").contains("replay-store")
-                    .contains("jwks-ssl-bundle");
+            assertThat(line).contains("replay-store");
         } finally {
             logger.detachAppender(appender);
         }

@@ -10,7 +10,7 @@ import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
 /**
  * In the {@code dev} profile, stops the start when a web server (the main one or the management one) listens on an
  * address other than loopback, whatever {@code server.address} says: the guard checks the property, this checks the
- * connectors that exist. The dev relaxations (test keys, no mTLS, in-memory jti) must not be reachable from the network.
+ * connectors that exist. The dev relaxations (test keys, no TLS, in-memory jti) must not be reachable from the network.
  */
 public class DevListenAddressCheck implements ApplicationListener<WebServerInitializedEvent> {
 

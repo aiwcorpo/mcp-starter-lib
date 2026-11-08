@@ -69,7 +69,10 @@ public final class ManifestGenerator {
         manifest.put("serverId", props.getServerId());
         manifest.put("version", props.getManifest().getVersion());
         manifest.put("system", props.system());
-        manifest.put("internalUrl", props.getManifest().getInternalUrl());
+        String internalUrl = props.getManifest().getInternalUrl();
+        if (internalUrl != null && !internalUrl.isBlank()) {
+            manifest.put("internalUrl", internalUrl);
+        }
         if (devEnvironment) {
             manifest.put("environment", "dev");
         }

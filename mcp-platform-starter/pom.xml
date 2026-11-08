@@ -2,8 +2,8 @@
 <!--
   mcp-platform-starter: Spring Boot auto-configuration for an MCP server behind the platform gateway.
   A server adds this one dependency and gets:
-    - InternalJwtFilter: the gateway's internal JWT (C2) on every request, jti replay protection in Redis,
-      CallerContext for the rest of the request
+    - InternalJwtFilter: the gateway's internal JWT (C2) on every request, one-time jti (memory, or Redis),
+      the well-known manifest and policy data endpoints (C14), CallerContext for the rest of the request
     - CredentialContext: the backend credential the gateway injected (C3), or X-PAT-<system> in dev-pat mode
     - AuditingToolCallback: audit events (C8) and safe tool errors (C10) around every tool
     - CorrelationIdFilter (X-Request-Id), SecurityHeadersFilter, CredentialTransportGuard

@@ -27,8 +27,12 @@ import org.springframework.core.env.MapPropertySource;
  *       anyway.</li>
  *   <li>{@code spring.data.redis.timeout=2s}: a hung Redis answers 503 quickly instead of holding request
  *       threads for the client's default minute.</li>
+ *   <li>The environment variables of a deployment that map onto a platform property, when they are set and not blank:
+ *       {@code MCP_STATE_DIR} ({@code aiwcorpo.mcp.platform.state-dir}), {@code MCP_GATEWAY_JWKS_URI}, {@code MCP_PAGING_CURSOR_KEY} and
+ *       {@code MCP_REDIS_HOST}, {@code _PORT}, {@code _USER}, {@code _PASSWORD} ({@code spring.data.redis.*}: the jti store is Redis only when
+ *       the host is set). A value in the server's own {@code application.yml} wins.</li>
  *   <li>With the {@code dev} profile active only: {@code server.address=127.0.0.1}. The dev relaxations (test
- *       keys, no mTLS) must not be reachable from the network; {@code PlatformConfigurationGuard} refuses any
+ *       keys, no TLS) must not be reachable from the network; {@code PlatformConfigurationGuard} refuses any
  *       non-loopback address in dev, and for a separate management port it requires a loopback
  *       {@code management.server.address} (Spring Boot rejects that property without a separate port, so it cannot
  *       be defaulted here).</li>
@@ -36,14 +40,16 @@ import org.springframework.core.env.MapPropertySource;
  *
  * <p>With {@code dev} as the only active profile the platform also forces, above the server's own
  * {@code application*.yml} (command line, system properties and environment variables still win), what a local run
- * on a developer's machine cannot have: {@code server.ssl.enabled=false} (no certificates), {@code mtls.required=false},
- * {@code internal-jwt.replay-store=memory} (no Redis) and empty {@code internal-jwt.jwks-ssl-bundle} and
- * {@code policy-data.ssl-bundle} (no internal CA, no server certificate). So the configuration of a real server starts in {@code dev} as it is, without per-run overrides. This is safe
+ * on a developer's machine cannot have: {@code server.ssl.enabled=false} (no certificates) and
+ * {@code internal-jwt.replay-store=memory} (no Redis). So the configuration of a real server starts in {@code dev} as it is, without per-run overrides. This is safe
  * for the same reason the rest of {@code dev} is: the guard refuses a non-loopback {@code server.address} in {@code dev}.
  * {@code allow-test-keys} is not forced; set it where the gateway signs with the published test keys.
  *
  * With {@code dev} as the only profile in a deployment (a cloud platform or a systemd service, see
  * {@link DevProfileEnvironment}) the server does not start at all.
+ *
+ * Outside {@code dev} it also derives the TLS properties of the server port from {@code MCP_TLS_*}, {@code MCP_PLAIN_HTTP} and the state
+ * directory ({@link PlatformTlsEnvironment}).
  *
  * Runs after the config data (application*.yml, profiles) is loaded, so the active profiles are known.
  */
@@ -72,6 +78,13 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
             if (Arrays.asList(environment.getActiveProfiles()).contains(PlatformConfigurationGuard.DEV_PROFILE)) {
                 defaults.put("server.address", "127.0.0.1");
             }
+            fromVariable(environment, defaults, "MCP_STATE_DIR", "aiwcorpo.mcp.platform.state-dir");
+            fromVariable(environment, defaults, "MCP_GATEWAY_JWKS_URI", "aiwcorpo.mcp.platform.internal-jwt.jwks-uri");
+            fromVariable(environment, defaults, "MCP_PAGING_CURSOR_KEY", "aiwcorpo.mcp.platform.paging.cursor-key");
+            fromVariable(environment, defaults, "MCP_REDIS_HOST", "spring.data.redis.host");
+            fromVariable(environment, defaults, "MCP_REDIS_PORT", "spring.data.redis.port");
+            fromVariable(environment, defaults, "MCP_REDIS_USER", "spring.data.redis.username");
+            fromVariable(environment, defaults, "MCP_REDIS_PASSWORD", "spring.data.redis.password");
             environment.getPropertySources().addLast(new MapPropertySource(SOURCE_NAME, defaults));
         }
         List<String> active = Arrays.asList(environment.getActiveProfiles());
@@ -83,10 +96,7 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
             });
             Map<String, Object> overrides = new HashMap<>(Map.of(
                     "server.ssl.enabled", "false",
-                    "aiwcorpo.mcp.platform.mtls.required", "false",
-                    "aiwcorpo.mcp.platform.internal-jwt.replay-store", "memory",
-                    "aiwcorpo.mcp.platform.internal-jwt.jwks-ssl-bundle", "",
-                    "aiwcorpo.mcp.platform.policy-data.ssl-bundle", ""));
+                    "aiwcorpo.mcp.platform.internal-jwt.replay-store", "memory"));
             // A value the server's own configuration sets differently is what a deployment looks like.
             List<String> changed = overrides.entrySet().stream()
                     .filter(entry -> environment.getProperty(entry.getKey()) != null
@@ -103,6 +113,14 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
             } else {
                 environment.getPropertySources().addBefore(firstConfigFile, source);
             }
+        }
+        PlatformTlsEnvironment.apply(environment);
+    }
+
+    private static void fromVariable(ConfigurableEnvironment environment, Map<String, Object> defaults, String variable, String property) {
+        String value = environment.getProperty(variable);
+        if (value != null && !value.isBlank()) {
+            defaults.put(property, value.trim());
         }
     }
 

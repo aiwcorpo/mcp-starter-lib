@@ -39,7 +39,7 @@ class InternalJwtVectorsTest {
     private static final String ROOT = "mcp-contracts/test-vectors/";
 
     /** Files in test-vectors/jwt of mcp-contracts 7.0.0. */
-    private static final int EXPECTED_VECTORS = 66;
+    private static final int EXPECTED_VECTORS = 83;
 
     record Vector(String name, JsonNode data) {
         @Override
@@ -83,8 +83,7 @@ class InternalJwtVectorsTest {
         });
         assertThat(reasons).as("every rejection reason of the contract has a vector")
                 .containsAll(Arrays.stream(InternalJwtRejection.values()).filter(r -> !r.infrastructure())
-                        .filter(r -> r != InternalJwtRejection.MALFORMED
-                                && r != InternalJwtRejection.CLIENT_CERTIFICATE_REJECTED)
+                        .filter(r -> r != InternalJwtRejection.MALFORMED)
                         .map(InternalJwtRejection::code).toList());
     }
 
@@ -119,7 +118,7 @@ class InternalJwtVectorsTest {
     void filterAnswersWithTheVectorsHttpStatus(Vector vector) throws Exception {
         JsonNode data = vector.data();
         InternalJwtFilter filter = new InternalJwtFilter(verifierFor(data.get("verifier")),
-                List.of("/actuator/health"), 1024 * 1024, false, Set.of());
+                List.of("/actuator/health"), 1024 * 1024);
         MockHttpServletRequest request = httpRequestFor(data.get("request"));
         if (!data.get("token").isNull()) {
             request.addHeader("Authorization", "Bearer " + data.get("token").asString());
@@ -174,8 +173,14 @@ class InternalJwtVectorsTest {
                 || ("GET".equals(method) && "/v1/authenticator".equals(path))) {
             return RequestBinding.toolScoped(rid);
         }
-        if ("GET".equals(method) && ("/mcp-manifest".equals(path) || "/v1/systems".equals(path))) {
+        if ("GET".equals(method) && "/v1/systems".equals(path)) {
             return RequestBinding.protocol(rid);
+        }
+        if ("GET".equals(method) && "/.well-known/mcp-manifest".equals(path)) {
+            return RequestBinding.manifest(rid);
+        }
+        if ("POST".equals(method) && "/.well-known/mcp-policy-data".equals(path)) {
+            return RequestBinding.policyData(rid);
         }
         return RequestBinding.other(rid);
     }

@@ -19,7 +19,7 @@ import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 
 /**
- * Verifies the gateway's internal JWT (C2, mcp-contracts 2.0.0) against the request it arrived with.
+ * Verifies the gateway's internal JWT (C2, mcp-contracts 7.0.0) against the request it arrived with.
  *
  * <p>Checks, in the order of the reference receiver in mcp-contracts ({@code test/jwt-vectors.test.mjs}),
  * so that a token reports the same reason as in the contract vectors:
@@ -31,7 +31,8 @@ import tools.jackson.databind.JsonNode;
  *   <li>claims valid against {@code internal-jwt.schema.json}</li>
  *   <li>{@code iss}, {@code aud == serverId}</li>
  *   <li>{@code exp} and {@code iat} within the clock skew, {@code exp - iat} at most the maximum lifetime</li>
- *   <li>{@code jti} not seen before (recorded until {@code exp} + skew)</li>
+ *   <li>{@code jti} not seen before (recorded until {@code exp} + skew; one-time for every purpose)</li>
+ *   <li>{@code use} equal to the purpose of the endpoint ({@code wrong_purpose}), before anything about the variant</li>
  *   <li>service variant only for protocol requests; {@code rid == X-Request-Id}</li>
  *   <li>{@code tool} present exactly for {@code tools/call} and equal to {@code params.name}</li>
  * </ol>
@@ -184,6 +185,10 @@ public final class InternalJwtVerifier {
         }
         if (!firstUse) {
             throw reject(InternalJwtRejection.REPLAYED_JTI);
+        }
+
+        if (!binding.purpose().equals(claims.get("use").asString())) {
+            throw reject(InternalJwtRejection.WRONG_PURPOSE);
         }
 
         boolean service = CallerContext.SERVICE_SUBJECT.equals(claims.get("sub").asString());

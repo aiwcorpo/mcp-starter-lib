@@ -4,13 +4,10 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.net.URI;
 import java.time.Clock;
-import java.util.Set;
-import javax.net.ssl.SSLContext;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
-import org.springframework.boot.ssl.SslBundles;
 import org.springframework.context.annotation.Bean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
@@ -19,7 +16,8 @@ import org.springframework.core.env.Environment;
 import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
 
 /**
- * The internal JWT (C2): gateway keys, {@code jti} store, verifier and {@link InternalJwtFilter}. Always on;
+ * The internal JWT (C2): gateway keys, {@code jti} store (in memory, or Redis when {@code MCP_REDIS_HOST} is set), verifier and
+ * {@link InternalJwtFilter}. Always on;
  * there is no switch that serves requests without it. The key source ({@link GatewayKeys}) and the {@code jti}
  * store ({@link JtiReplayStore}) are {@code @ConditionalOnMissingBean} extension points; the verifier and the
  * filter are not, because replacing them replaces the check itself ({@code ForeignToolPolicyCheck} refuses
@@ -31,25 +29,21 @@ public class PlatformAuthAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    GatewayKeys gatewayKeys(McpPlatformProperties props, ObjectProvider<SslBundles> sslBundles,
-                            ObjectProvider<PlatformConfigurationGuard> guard) {
+    GatewayKeys gatewayKeys(McpPlatformProperties props, ObjectProvider<PlatformConfigurationGuard> guard) {
         guard.getIfAvailable();    // the guard first: it refuses a configuration before any key is fetched
         McpPlatformProperties.InternalJwt jwt = props.getInternalJwt();
-        SSLContext sslContext = null;
-        if (jwt.getJwksSslBundle() != null && !jwt.getJwksSslBundle().isBlank()) {
-            sslContext = sslBundles.getObject().getBundle(jwt.getJwksSslBundle()).createSslContext();
-        }
         URI uri = URI.create(jwt.getJwksUri() == null ? "" : jwt.getJwksUri());
-        return new JwksGatewayKeys(new HttpJwksFetcher(uri, sslContext, jwt.getJwksConnectTimeout(), jwt.getJwksReadTimeout()),
+        // The JWKS is public https of the platform: the trust is the JVM's own.
+        return new JwksGatewayKeys(new HttpJwksFetcher(uri, null, jwt.getJwksConnectTimeout(), jwt.getJwksReadTimeout()),
                 Clock.systemUTC(), jwt.getJwksCacheTtl(), jwt.getJwksMaxStale(), jwt.getJwksRefreshMinInterval());
     }
 
     @Bean
     @ConditionalOnMissingBean
     JtiReplayStore jtiReplayStore(McpPlatformProperties props, ObjectProvider<StringRedisTemplate> redis,
-                                  ObjectProvider<PlatformConfigurationGuard> guard) {
+                                  ObjectProvider<PlatformConfigurationGuard> guard, Environment environment) {
         guard.getIfAvailable();    // the guard first
-        if (props.getInternalJwt().getReplayStore() == McpPlatformProperties.ReplayStore.MEMORY) {
+        if (!redisReplayStore(props, environment)) {
             return new InMemoryJtiReplayStore(Clock.systemUTC());
         }
         StringRedisTemplate template = redis.getIfAvailable();
@@ -57,6 +51,16 @@ public class PlatformAuthAutoConfiguration {
             throw new IllegalStateException("internal-jwt.replay-store=redis needs Redis (spring.data.redis.*)");
         }
         return new RedisJtiReplayStore(template, props.getServerId(), Clock.systemUTC());
+    }
+
+    /** Redis only when asked for: an explicit {@code replay-store=redis}, or without a choice a configured {@code MCP_REDIS_HOST}. */
+    static boolean redisReplayStore(McpPlatformProperties props, Environment environment) {
+        McpPlatformProperties.ReplayStore chosen = props.getInternalJwt().getReplayStore();
+        if (chosen != null) {
+            return chosen == McpPlatformProperties.ReplayStore.REDIS;
+        }
+        String host = environment.getProperty("spring.data.redis.host");
+        return host != null && !host.isBlank();
     }
 
     @Bean
@@ -85,7 +89,6 @@ public class PlatformAuthAutoConfiguration {
                 props.getInternalJwt().getMissingTokenEventsPerSecond(), System::nanoTime,
                 meters.getIfAvailable(SimpleMeterRegistry::new));
         return new InternalJwtFilter(verifier, props.getInternalJwt().getUnauthenticatedPaths(),
-                props.getInternalJwt().getMaxRequestBody().toBytes(), props.getMtls().isRequired(),
-                Set.copyOf(props.getMtls().getAllowedClientNames()), audit, missingTokenEvents);
+                props.getInternalJwt().getMaxRequestBody().toBytes(), audit, missingTokenEvents);
     }
 }

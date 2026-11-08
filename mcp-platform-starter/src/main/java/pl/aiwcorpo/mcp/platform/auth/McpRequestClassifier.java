@@ -4,8 +4,9 @@ import java.util.Set;
 import tools.jackson.databind.JsonNode;
 
 /**
- * Decides what an incoming HTTP request is, for {@link RequestBinding}: a JSON-RPC {@code tools/call} (and
- * which tool), a protocol request the service variant may make, or anything else.
+ * Decides what an incoming HTTP request is, for {@link RequestBinding}: one of the two well-known endpoints of the gateway
+ * (manifest, policy data), a JSON-RPC {@code tools/call} (and which tool), a protocol request the service variant may
+ * make, or anything else.
  *
  * <p>Every request with a body is classified from that body, whatever its path or content type, so a tool
  * call cannot be smuggled in through a path or transport this class does not know about. A body that is not
@@ -17,8 +18,11 @@ final class McpRequestClassifier {
     /** JSON-RPC methods the gateway may send with its service variant (C2). */
     static final Set<String> PROTOCOL_METHODS = Set.of("initialize", "server/discover", "tools/list", "ping");
 
-    /** C6 manifest endpoint; the service variant may read it. */
-    static final String MANIFEST_PATH = "/mcp-manifest";
+    /** C14: the manifest the gateway pulls, with a token of purpose {@code manifest}. */
+    static final String MANIFEST_PATH = "/.well-known/mcp-manifest";
+
+    /** C14: the policy data the gateway pushes, with a token of purpose {@code policy-data}. */
+    static final String POLICY_DATA_PATH = "/.well-known/mcp-policy-data";
 
     static final class InvalidRequestException extends Exception {
         InvalidRequestException() {
@@ -37,6 +41,14 @@ final class McpRequestClassifier {
      */
     static RequestBinding classify(String httpMethod, String path, byte[] body, String requestIdHeader)
             throws InvalidRequestException {
+        // The two well-known endpoints first: the policy data body is a JSON object with no JSON-RPC method, and it must
+        // not be mistaken for a message of the MCP endpoint (nor the other way round).
+        if ("GET".equals(httpMethod) && MANIFEST_PATH.equals(path)) {
+            return RequestBinding.manifest(requestIdHeader);
+        }
+        if ("POST".equals(httpMethod) && POLICY_DATA_PATH.equals(path)) {
+            return RequestBinding.policyData(requestIdHeader);
+        }
         if (body.length > 0) {
             JsonNode message = StrictJson.parse(body);
             if (message == null || !message.isObject()) {
@@ -56,9 +68,6 @@ final class McpRequestClassifier {
             return PROTOCOL_METHODS.contains(name)
                     ? RequestBinding.protocol(requestIdHeader)
                     : RequestBinding.other(requestIdHeader);
-        }
-        if ("GET".equals(httpMethod) && MANIFEST_PATH.equals(path)) {
-            return RequestBinding.protocol(requestIdHeader);
         }
         return RequestBinding.other(requestIdHeader);
     }

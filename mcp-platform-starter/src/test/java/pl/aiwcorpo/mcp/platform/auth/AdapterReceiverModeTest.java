@@ -46,7 +46,7 @@ class AdapterReceiverModeTest {
         JWTClaimsSet.Builder claims = new JWTClaimsSet.Builder().issuer("https://mcp-gateway.internal").audience("mcp-jira")
                 .subject("6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11").claim("usr", "jkowalski")
                 .claim("grp", List.of("mcp-jira-read")).claim("azp", "claude-code").claim("tool", "get_issue")
-                .claim("rid", RID).claim("prv", 1L)
+                .claim("use", "call").claim("rid", RID).claim("prv", 1L)
                 .issueTime(Date.from(NOW.minusSeconds(10))).expirationTime(Date.from(NOW.plusSeconds(50)))
                 .jwtID(UUID.randomUUID().toString());
         extra.forEach(claims::claim);

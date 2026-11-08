@@ -33,11 +33,11 @@ public enum InternalJwtRejection {
      * own would need a contract change.
      */
     HEADER_NOT_ALLOWED("alg_not_allowed"),
-    /** mTLS: no client certificate, or one with a name that is not the gateway's. */
-    CLIENT_CERTIFICATE_REJECTED("client_certificate_rejected"),
+    /** The token's {@code use} is not the purpose of the endpoint (CC-249): a call token at the manifest, a policy-data token at {@code tools/call}, ... */
+    WRONG_PURPOSE("wrong_purpose"),
     /** The gateway's JWKS could not be fetched and no usable copy is cached. Answered with 503. */
     JWKS_UNAVAILABLE("jwks_unavailable", true),
-    /** The jti store (Redis) did not answer. Answered with 503. */
+    /** The jti store (Redis, or the bounded in-memory store when it is full) did not answer. Answered with 503. */
     REPLAY_STORE_UNAVAILABLE("replay_store_unavailable", true);
 
     private final String code;

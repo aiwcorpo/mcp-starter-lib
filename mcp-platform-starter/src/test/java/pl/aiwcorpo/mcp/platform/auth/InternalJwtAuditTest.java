@@ -12,7 +12,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -50,16 +49,20 @@ class InternalJwtAuditTest {
         logger.detachAppender(lines);
     }
 
-    private InternalJwtFilter filter(JtiReplayStore store, boolean mtls) {
-        return filter(store, mtls, new MissingTokenEventLimiter(MissingTokenEventLimiter.DEFAULT_PER_SECOND,
+    private InternalJwtFilter filter(JtiReplayStore store) {
+        return filter(store, new MissingTokenEventLimiter(MissingTokenEventLimiter.DEFAULT_PER_SECOND,
                 System::nanoTime, new SimpleMeterRegistry()));
     }
 
-    private InternalJwtFilter filter(JtiReplayStore store, boolean mtls, MissingTokenEventLimiter limiter) {
+    private InternalJwtFilter filter(JtiReplayStore store, MissingTokenEventLimiter limiter) {
+        return filter(store, limiter, clock);
+    }
+
+    private InternalJwtFilter filter(JtiReplayStore store, MissingTokenEventLimiter limiter, Clock verifierClock) {
         InternalJwtVerifier verifier = new InternalJwtVerifier(new InternalJwtVerifier.Settings(
                 "https://mcp-gateway.internal", "mcp-jira", Duration.ofSeconds(30), Duration.ofSeconds(60), true),
-                JwksGatewayKeys.of(InternalJwtFilterTest.read("keys/test-gateway-jwks.json")), store, clock);
-        return new InternalJwtFilter(verifier, List.of("/actuator/health"), 1024, mtls, Set.of("mcp-gateway"),
+                JwksGatewayKeys.of(InternalJwtFilterTest.read("keys/test-gateway-jwks.json")), store, verifierClock);
+        return new InternalJwtFilter(verifier, List.of("/actuator/health"), 1024,
                 new AuditLogger("test.audit.authentication", "mcp-jira"), limiter);
     }
 
@@ -67,7 +70,7 @@ class InternalJwtAuditTest {
         InternalJwtVerifier verifier = new InternalJwtVerifier(new InternalJwtVerifier.Settings(
                 "https://mcp-gateway.internal", "mcp-jira", Duration.ofSeconds(30), Duration.ofSeconds(60), true),
                 keys, new InMemoryJtiReplayStore(clock), clock);
-        return new InternalJwtFilter(verifier, List.of("/actuator/health"), 1024, false, Set.of("mcp-gateway"),
+        return new InternalJwtFilter(verifier, List.of("/actuator/health"), 1024,
                 new AuditLogger("test.audit.authentication", "mcp-jira"));
     }
 
@@ -99,7 +102,7 @@ class InternalJwtAuditTest {
 
     @Test
     void aMissingTokenIsAudited() throws Exception {
-        filter(new InMemoryJtiReplayStore(clock), false).doFilter(toolCall(null), new MockHttpServletResponse(),
+        filter(new InMemoryJtiReplayStore(clock)).doFilter(toolCall(null), new MockHttpServletResponse(),
                 new MockFilterChain());
 
         JsonNode event = onlyEvent();
@@ -109,7 +112,7 @@ class InternalJwtAuditTest {
 
     @Test
     void aReplayedTokenIsAuditedWithoutTheIdentityItClaims() throws Exception {
-        InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock), false);
+        InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock));
         filter.doFilter(toolCall("Bearer " + token), new MockHttpServletResponse(), new MockFilterChain());
         assertThat(CapturedLogs.snapshot(lines)).isEmpty();
 
@@ -121,21 +124,13 @@ class InternalJwtAuditTest {
     }
 
     @Test
-    void aWrongClientCertificateIsAudited() throws Exception {
-        filter(new InMemoryJtiReplayStore(clock), true).doFilter(toolCall("Bearer " + token),
-                new MockHttpServletResponse(), new MockFilterChain());
-
-        assertThat(onlyEvent().get("reason").asString()).isEqualTo("client_certificate_rejected");
-    }
-
-    @Test
     void aTokenThatCouldNotBeJudgedIsAuditedAsUnavailable() throws Exception {
         JtiReplayStore down = (jti, until) -> {
             throw new JtiReplayStore.StoreUnavailableException("down", null);
         };
 
         MockHttpServletResponse response = new MockHttpServletResponse();
-        filter(down, false).doFilter(toolCall("Bearer " + token), response, new MockFilterChain());
+        filter(down).doFilter(toolCall("Bearer " + token), response, new MockFilterChain());
 
         assertThat(response.getStatus()).isEqualTo(503);
         JsonNode event = onlyEvent();
@@ -160,19 +155,29 @@ class InternalJwtAuditTest {
 
     @Test
     void aBrokenSignatureIsAudited() throws Exception {
-        filter(new InMemoryJtiReplayStore(clock), false).doFilter(toolCall("Bearer " + token.substring(0, token.length() - 4) + "AAAA"),
+        filter(new InMemoryJtiReplayStore(clock)).doFilter(toolCall("Bearer " + token.substring(0, token.length() - 4) + "AAAA"),
                 new MockHttpServletResponse(), new MockFilterChain());
 
         assertThat(onlyEvent().get("reason").asString()).isEqualTo("bad_signature");
     }
 
     @Test
-    void theClientCertificateEventIsTheContractsVector() throws Exception {
-        JsonNode expected = JSON.readTree(InternalJwtFilterTest.read("audit-events/server-authentication-denied-client-certificate.json"))
+    void theWrongPurposeEventIsTheContractsVector() throws Exception {
+        JsonNode expected = JSON.readTree(InternalJwtFilterTest.read("audit-events/server-authentication-denied-wrong-purpose.json"))
                 .get("event");
-        filter(new InMemoryJtiReplayStore(clock), true).doFilter(toolCall("Bearer " + token),
-                new MockHttpServletResponse(), new MockFilterChain());
+        JsonNode purposeVector = JSON.readTree(InternalJwtFilterTest.read("jwt/purpose-call-token-at-manifest.json"));
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/.well-known/mcp-manifest");
+        request.setServletPath("/.well-known/mcp-manifest");
+        request.addHeader("Authorization", "Bearer " + purposeVector.get("token").asString());
+        request.addHeader("X-Request-Id", purposeVector.get("request").get("xRequestId").asString());
+        Clock purposeClock = Clock.fixed(Instant.parse(purposeVector.get("verifier").get("now").asString()), ZoneOffset.UTC);
+        MockHttpServletResponse response = new MockHttpServletResponse();
 
+        filter(new InMemoryJtiReplayStore(purposeClock), new MissingTokenEventLimiter(MissingTokenEventLimiter.DEFAULT_PER_SECOND,
+                System::nanoTime, new SimpleMeterRegistry()), purposeClock).doFilter(request, response, new MockFilterChain());
+
+        assertThat(response.getStatus()).isEqualTo(401);
+        assertThat(response.getContentAsString()).contains("\"reason\":\"wrong_purpose\"");
         JsonNode event = onlyEvent();
         for (String field : List.of("component", "componentId", "event", "decision", "reason", "outcome", "errorCode")) {
             assertThat(event.get(field)).as(field).isEqualTo(expected.get(field));
@@ -183,7 +188,7 @@ class InternalJwtAuditTest {
     void aFloodOfRequestsWithoutATokenWritesOnlyTheBudgetAndCountsTheRest() throws Exception {
         AtomicLong nanos = new AtomicLong(1_000_000_000L);
         SimpleMeterRegistry meters = new SimpleMeterRegistry();
-        InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock), false,
+        InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock),
                 new MissingTokenEventLimiter(3, nanos::get, meters));
 
         for (int i = 0; i < 10; i++) {
@@ -203,7 +208,7 @@ class InternalJwtAuditTest {
 
     @Test
     void theCapOfMissingTokensDoesNotHideOtherRefusals() throws Exception {
-        InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock), false,
+        InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock),
                 new MissingTokenEventLimiter(1, () -> 1_000_000_000L, new SimpleMeterRegistry()));
 
         for (int i = 0; i < 5; i++) {
@@ -229,7 +234,7 @@ class InternalJwtAuditTest {
         try {
             AtomicLong nanos = new AtomicLong(1_000_000_000L);
             SimpleMeterRegistry meters = new SimpleMeterRegistry();
-            InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock), false,
+            InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock),
                     new MissingTokenEventLimiter(2, nanos::get, meters));
 
             for (int i = 0; i < 6; i++) {
@@ -257,7 +262,7 @@ class InternalJwtAuditTest {
     @Test
     void aFloodWithoutATokenDoesNotSuppressTheEventForATokenWithACritHeader() throws Exception {
         AtomicLong nanos = new AtomicLong(1_000_000_000L);
-        InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock), false,
+        InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock),
                 new MissingTokenEventLimiter(1, nanos::get, new SimpleMeterRegistry()));
         for (int i = 0; i < 20; i++) {
             filter.doFilter(toolCall(null), new MockHttpServletResponse(), new MockFilterChain());

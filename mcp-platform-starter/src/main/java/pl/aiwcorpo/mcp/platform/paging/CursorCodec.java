@@ -38,8 +38,9 @@ import pl.aiwcorpo.mcp.platform.error.InvalidToolArgumentException;
  * forged or replayed cursor cannot widen what a page contains. Still put in it only the backend's position, never a
  * credential: the server that opens it sees the position in clear.
  *
- * <p>Instances of one server must share {@code aiwcorpo.mcp.platform.paging.cursor-key}; with a key generated at
- * startup a cursor issued by one instance is refused by another and by the same one after a restart. The gateway's
+ * <p>Instances of one server must share {@code aiwcorpo.mcp.platform.paging.cursor-key} ({@code MCP_PAGING_CURSOR_KEY}); without it each
+ * instance keeps a key of its own in its state directory, and a cursor issued by one instance is refused by another. A key that is
+ * generated for the process only (the dev profile, or a state directory that cannot be written) is refused by the same instance after a restart too. The gateway's
  * own cursors (C5) are a different mechanism and are not affected.
  */
 public final class CursorCodec {

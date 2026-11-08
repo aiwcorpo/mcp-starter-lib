@@ -17,8 +17,8 @@ import pl.aiwcorpo.mcp.platform.policy.ServerPolicies;
 
 /**
  * Builds the manifest once the MCP server is up, checks it (a failure stops the server) and keeps it for
- * {@code GET /mcp-manifest}. With {@code aiwcorpo.mcp.platform.manifest.output-file} it is also written to that file,
- * for the step that registers the server at the gateway.
+ * {@code GET /.well-known/mcp-manifest}. With {@code aiwcorpo.mcp.platform.manifest.output-file} it is also written to that file
+ * (the build keeps it as {@code target/mcp-manifest.json}).
  */
 public final class ManifestCheck implements SmartInitializingSingleton {
 

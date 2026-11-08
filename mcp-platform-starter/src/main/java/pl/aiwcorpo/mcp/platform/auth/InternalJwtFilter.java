@@ -7,15 +7,11 @@ import jakarta.servlet.http.HttpServletResponse;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.security.cert.X509Certificate;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 import java.util.regex.Pattern;
-import javax.naming.InvalidNameException;
-import javax.naming.ldap.LdapName;
-import javax.naming.ldap.Rdn;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
@@ -24,14 +20,14 @@ import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
 import pl.aiwcorpo.mcp.platform.observability.CorrelationIdFilter;
 
 /**
- * Admits only requests from the gateway: client certificate of the gateway (mTLS) and a valid internal JWT
- * (C2) bound to this very request. Anything else gets 401, never an anonymous caller.
+ * Admits only requests from the gateway: a valid internal JWT (C2) of the purpose of the endpoint, bound to this very request.
+ * There is no client certificate on the server port (CC-249). Anything else gets 401, never an anonymous caller.
  *
  * <p>On success the verified caller is in {@link CallerContext} for the rest of the request. Infrastructure
  * failures (JWKS, Redis) refuse the request with 503: the token could not be judged, so it is not accepted.
  *
  * <p>A refused request leaves an {@code authentication} audit event (C8, CC-071, CC-120): the reasons the gateway
- * knows for a token of its own plus {@code client_certificate_rejected} (mTLS) and, for the two infrastructure
+ * knows for a token of its own (a token of the wrong purpose is {@code wrong_purpose}) and, for the two infrastructure
  * failures, {@code jwks_unavailable} and {@code replay_store_unavailable} with {@code upstream_unavailable}.
  * Refusals for {@code missing_token} and {@code malformed} (a token that could not be parsed) have a per-process budget
  * each for the audit event and the log line ({@link MissingTokenEventLimiter}); the rest is not capped, including a token
@@ -50,8 +46,6 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
     /** After the correlation id (10), before the credential (20). */
     public static final int ORDER = Ordered.HIGHEST_PRECEDENCE + 15;
 
-    static final String CERTIFICATE_ATTRIBUTE = "jakarta.servlet.request.X509Certificate";
-
     private static final Set<String> METHODS_WITHOUT_BODY = Set.of("GET", "HEAD", "OPTIONS", "TRACE");
 
     /** Raw URI fragments a container may normalize away; such a request is never exempt from the check. */
@@ -61,21 +55,18 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
     private final InternalJwtVerifier verifier;
     private final Set<String> unauthenticatedPaths;
     private final long maxRequestBody;
-    private final boolean clientCertificateRequired;
-    private final Set<String> allowedClientNames;
     private final AuditLogger audit;
     private final MissingTokenEventLimiter missingTokenEvents;
 
     /** Without an audit logger the refusals reach only the application log; for tests of the check itself. */
-    public InternalJwtFilter(InternalJwtVerifier verifier, List<String> unauthenticatedPaths, long maxRequestBody,
-                             boolean clientCertificateRequired, Set<String> allowedClientNames) {
-        this(verifier, unauthenticatedPaths, maxRequestBody, clientCertificateRequired, allowedClientNames, null);
+    public InternalJwtFilter(InternalJwtVerifier verifier, List<String> unauthenticatedPaths, long maxRequestBody) {
+        this(verifier, unauthenticatedPaths, maxRequestBody, null);
     }
 
     /** As below, with the default cap on {@code missing_token} events and its counter in a registry of its own. */
     public InternalJwtFilter(InternalJwtVerifier verifier, List<String> unauthenticatedPaths, long maxRequestBody,
-                             boolean clientCertificateRequired, Set<String> allowedClientNames, AuditLogger audit) {
-        this(verifier, unauthenticatedPaths, maxRequestBody, clientCertificateRequired, allowedClientNames, audit,
+                             AuditLogger audit) {
+        this(verifier, unauthenticatedPaths, maxRequestBody, audit,
                 new MissingTokenEventLimiter(MissingTokenEventLimiter.DEFAULT_PER_SECOND, System::nanoTime,
                         new SimpleMeterRegistry()));
     }
@@ -85,8 +76,7 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
      * @param missingTokenEvents decides which events for a request without a usable token are written and logged; the others are only counted
      */
     public InternalJwtFilter(InternalJwtVerifier verifier, List<String> unauthenticatedPaths, long maxRequestBody,
-                             boolean clientCertificateRequired, Set<String> allowedClientNames, AuditLogger audit,
-                             MissingTokenEventLimiter missingTokenEvents) {
+                             AuditLogger audit, MissingTokenEventLimiter missingTokenEvents) {
         this.audit = audit;
         this.missingTokenEvents = missingTokenEvents;
         this.verifier = verifier;
@@ -97,8 +87,6 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
         }
         this.unauthenticatedPaths = Set.copyOf(unauthenticatedPaths);
         this.maxRequestBody = maxRequestBody;
-        this.clientCertificateRequired = clientCertificateRequired;
-        this.allowedClientNames = Set.copyOf(allowedClientNames);
     }
 
     @Override
@@ -132,10 +120,6 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
             throws ServletException, IOException {
         long start = System.nanoTime();
-        if (clientCertificateRequired && !clientCertificateAccepted(request)) {
-            reject(request, response, InternalJwtRejection.CLIENT_CERTIFICATE_REJECTED, null, start);
-            return;
-        }
         List<String> authorization = Collections.list(request.getHeaders("Authorization"));
         if (authorization.isEmpty()) {
             reject(request, response, InternalJwtRejection.MISSING_TOKEN, null, start);
@@ -152,7 +136,7 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
             buffered = METHODS_WITHOUT_BODY.contains(request.getMethod())
                     ? null : CachedBodyRequest.read(request, maxRequestBody);
         } catch (CachedBodyRequest.BodyTooLargeException ex) {
-            writeError(response, HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE, "invalid_argument",
+            writeError(response, HttpServletResponse.SC_REQUEST_ENTITY_TOO_LARGE, badRequestCode(request), null,
                     "The request body is too large.");
             return;
         }
@@ -162,7 +146,7 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
             binding = McpRequestClassifier.classify(request.getMethod(), normalizedPath(request),
                     buffered == null ? new byte[0] : buffered.body(), singleHeader(request, CorrelationIdFilter.HEADER));
         } catch (McpRequestClassifier.InvalidRequestException ex) {
-            writeError(response, HttpServletResponse.SC_BAD_REQUEST, "invalid_argument",
+            writeError(response, HttpServletResponse.SC_BAD_REQUEST, badRequestCode(request), null,
                     "The request body must be a single JSON object.");
             return;
         }
@@ -179,22 +163,6 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
             chain.doFilter(forwarded, response);
         } finally {
             CallerContext.clear();
-        }
-    }
-
-    private boolean clientCertificateAccepted(HttpServletRequest request) {
-        if (!(request.getAttribute(CERTIFICATE_ATTRIBUTE) instanceof X509Certificate[] chain) || chain.length == 0) {
-            return false;
-        }
-        try {
-            List<String> commonNames = new LdapName(chain[0].getSubjectX500Principal().getName()).getRdns().stream()
-                    .filter(rdn -> "CN".equalsIgnoreCase(rdn.getType()))
-                    .map(Rdn::getValue)
-                    .map(String::valueOf)
-                    .toList();
-            return commonNames.size() == 1 && allowedClientNames.contains(commonNames.getFirst());
-        } catch (InvalidNameException ex) {
-            return false;
         }
     }
 
@@ -223,7 +191,7 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
                 audit(reason, "upstream_unavailable", start);
             }
             response.setHeader("Retry-After", "5");
-            writeError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "upstream_unavailable",
+            writeError(response, HttpServletResponse.SC_SERVICE_UNAVAILABLE, "upstream_unavailable", null,
                     "The request could not be authenticated right now. Try again later.");
             return;
         }
@@ -234,7 +202,7 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
         }
         response.setHeader("WWW-Authenticate",
                 reason == InternalJwtRejection.MISSING_TOKEN ? "Bearer" : "Bearer error=\"invalid_token\"");
-        writeError(response, HttpServletResponse.SC_UNAUTHORIZED, "unauthenticated",
+        writeError(response, HttpServletResponse.SC_UNAUTHORIZED, "unauthenticated", reason.code(),
                 "The request was not authenticated by the platform gateway.");
     }
 
@@ -244,12 +212,19 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
         }
     }
 
-    private static void writeError(HttpServletResponse response, int status, String code, String message)
+    /** C14 names the refusal of a body on the well-known paths {@code invalid_request}; the MCP endpoint keeps {@code invalid_argument}. */
+    private static String badRequestCode(HttpServletRequest request) {
+        return normalizedPath(request).startsWith("/.well-known/") ? "invalid_request" : "invalid_argument";
+    }
+
+    /** The reason of a 401 is the code of C2 that the gateway also finds in the audit event; it says nothing about the request that it does not know. */
+    private static void writeError(HttpServletResponse response, int status, String code, String reason, String message)
             throws IOException {
         response.setStatus(status);
         response.setContentType("application/json");
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());
         // Fixed texts only: nothing from the request is echoed.
-        response.getWriter().write("{\"error\":\"" + code + "\",\"message\":\"" + message + "\"}");
+        response.getWriter().write("{\"error\":\"" + code + "\"" + (reason == null ? "" : ",\"reason\":\"" + reason + "\"")
+                + ",\"message\":\"" + message + "\"}");
     }
 }

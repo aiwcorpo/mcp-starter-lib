@@ -4,13 +4,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.charset.StandardCharsets;
-import java.security.cert.X509Certificate;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.web.MockFilterChain;
@@ -32,16 +30,15 @@ class InternalJwtFilterTest {
     private final String rid = vector.get("request").get("xRequestId").asString();
     private final Clock clock = Clock.fixed(Instant.parse(vector.get("verifier").get("now").asString()), ZoneOffset.UTC);
 
-    private InternalJwtFilter filter(JtiReplayStore store, GatewayKeys keys, boolean mtls) {
+    private InternalJwtFilter filter(JtiReplayStore store, GatewayKeys keys) {
         InternalJwtVerifier verifier = new InternalJwtVerifier(new InternalJwtVerifier.Settings(
                 "https://mcp-gateway.internal", "mcp-jira", Duration.ofSeconds(30), Duration.ofSeconds(60), true),
                 keys, store, clock);
-        return new InternalJwtFilter(verifier, List.of("/actuator/health", "/actuator/health/liveness"), 1024, mtls,
-                Set.of("mcp-gateway"));
+        return new InternalJwtFilter(verifier, List.of("/actuator/health", "/actuator/health/liveness"), 1024);
     }
 
     private InternalJwtFilter filter() {
-        return filter(new InMemoryJtiReplayStore(clock), JwksGatewayKeys.of(read("keys/test-gateway-jwks.json")), false);
+        return filter(new InMemoryJtiReplayStore(clock), JwksGatewayKeys.of(read("keys/test-gateway-jwks.json")));
     }
 
     private MockHttpServletRequest toolCall(String body) {
@@ -133,7 +130,7 @@ class InternalJwtFilterTest {
         MockHttpServletResponse response = new MockHttpServletResponse();
         MockFilterChain chain = new MockFilterChain();
 
-        filter(down, JwksGatewayKeys.of(read("keys/test-gateway-jwks.json")), false)
+        filter(down, JwksGatewayKeys.of(read("keys/test-gateway-jwks.json")))
                 .doFilter(toolCall(GET_ISSUE), response, chain);
 
         assertThat(response.getStatus()).isEqualTo(503);
@@ -148,7 +145,7 @@ class InternalJwtFilterTest {
         }, clock, Duration.ofMinutes(10), Duration.ofHours(1), Duration.ofSeconds(30));
         MockHttpServletResponse response = new MockHttpServletResponse();
 
-        filter(new InMemoryJtiReplayStore(clock), down, false).doFilter(toolCall(GET_ISSUE), response, new MockFilterChain());
+        filter(new InMemoryJtiReplayStore(clock), down).doFilter(toolCall(GET_ISSUE), response, new MockFilterChain());
 
         assertThat(response.getStatus()).isEqualTo(503);
     }
@@ -185,37 +182,8 @@ class InternalJwtFilterTest {
 
     @Test
     void patternsAreNotAcceptedAsUnauthenticatedPaths() {
-        assertThatThrownBy(() -> new InternalJwtFilter(null, List.of("/actuator/**"), 1, false, Set.of()))
+        assertThatThrownBy(() -> new InternalJwtFilter(null, List.of("/actuator/**"), 1))
                 .isInstanceOf(IllegalArgumentException.class);
-    }
-
-    @Test
-    void withMtlsOnlyTheGatewaysCertificateIsAccepted() throws Exception {
-        InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock),
-                JwksGatewayKeys.of(read("keys/test-gateway-jwks.json")), true);
-
-        MockHttpServletResponse noCertificate = new MockHttpServletResponse();
-        filter.doFilter(toolCall(GET_ISSUE), noCertificate, new MockFilterChain());
-        assertThat(noCertificate.getStatus()).isEqualTo(401);
-
-        MockHttpServletRequest portal = toolCall(GET_ISSUE);
-        portal.setAttribute(InternalJwtFilter.CERTIFICATE_ATTRIBUTE, new X509Certificate[] {certificate("mcp-portal-bff")});
-        MockHttpServletResponse wrongName = new MockHttpServletResponse();
-        filter.doFilter(portal, wrongName, new MockFilterChain());
-        assertThat(wrongName.getStatus()).isEqualTo(401);
-
-        MockHttpServletRequest gateway = toolCall(GET_ISSUE);
-        gateway.setAttribute(InternalJwtFilter.CERTIFICATE_ATTRIBUTE, new X509Certificate[] {certificate("mcp-gateway")});
-        MockFilterChain chain = new MockFilterChain();
-        filter.doFilter(gateway, new MockHttpServletResponse(), chain);
-        assertThat(chain.getRequest()).isNotNull();
-    }
-
-    private static X509Certificate certificate(String commonName) {
-        X509Certificate certificate = org.mockito.Mockito.mock(X509Certificate.class);
-        org.mockito.Mockito.when(certificate.getSubjectX500Principal())
-                .thenReturn(new javax.security.auth.x500.X500Principal("CN=" + commonName + ",O=aiwcorpo"));
-        return certificate;
     }
 
     static String read(String path) {
