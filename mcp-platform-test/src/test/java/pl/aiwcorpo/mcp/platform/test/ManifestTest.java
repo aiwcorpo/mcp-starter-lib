@@ -90,6 +90,31 @@ class ManifestTest {
     }
 
     @Test
+    void theAudiencePendingIsRefusedEverywhereOnceTheServerHoldsPolicyData() throws Exception {
+        HttpResponse<String> manifest = get("/.well-known/mcp-manifest", GATEWAY.manifestToken().audience("mcp-pending").mint().headers());
+        assertThat(manifest.statusCode()).as("this server was pushed policy data when it started: mcp-pending is no longer accepted").isEqualTo(401);
+        assertThat(manifest.body()).contains("\"reason\":\"wrong_audience\"");
+        assertThat(get("/.well-known/mcp-manifest", GATEWAY.manifestToken().mint().headers()).statusCode())
+                .as("the real server id still reads the manifest").isEqualTo(200);
+
+        HttpResponse<String> callAtManifest = get("/.well-known/mcp-manifest", GATEWAY.service().audience("mcp-pending").mint().headers());
+        assertThat(callAtManifest.statusCode()).isEqualTo(401);
+        assertThat(callAtManifest.body()).contains("\"reason\":\"wrong_audience\"");
+
+        HttpRequest.Builder push = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/.well-known/mcp-policy-data"))
+                .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString("{}"));
+        GATEWAY.service().use(TestGateway.USE_POLICY_DATA).audience("mcp-pending").mint().headers().forEach(push::header);
+        HttpResponse<String> policyData = HttpClient.newHttpClient().send(push.build(), HttpResponse.BodyHandlers.ofString());
+        assertThat(policyData.statusCode()).isEqualTo(401);
+        assertThat(policyData.body()).contains("\"reason\":\"wrong_audience\"");
+
+        RawMcp raw = new RawMcp(port);
+        HttpResponse<String> toolsList = raw.post("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/list\"}",
+                GATEWAY.service().audience("mcp-pending").mint().headers(), null);
+        assertThat(toolsList.statusCode()).isEqualTo(401);
+    }
+
+    @Test
     void theDefinitionsAreExactlyWhatToolsListPublishesSoTheHashesAgree() throws Exception {
         JsonNode manifest = manifest();
         List<JsonNode> listed = listedTools();

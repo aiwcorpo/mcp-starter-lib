@@ -69,6 +69,11 @@ class PolicyDataNotPushedTest {
         assertThat(http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/actuator/health")).GET().build(),
                 HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(200);
 
+        assertThat(manifestAs("mcp-pending", http).statusCode()).as("the add operation reads the manifest before the server id is known").isEqualTo(200);
+        HttpRequest.Builder pendingCall = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/.well-known/mcp-manifest")).GET();
+        GATEWAY.service().audience("mcp-pending").mint().headers().forEach(pendingCall::header);
+        assertThat(http.send(pendingCall.build(), HttpResponse.BodyHandlers.ofString()).statusCode()).as("only with use manifest").isEqualTo(401);
+
         PolicyDataEndpoint.Ack ack = GATEWAY.policyData().attach(URI.create("http://127.0.0.1:" + port));
         assertThat(ack).extracting(PolicyDataEndpoint.Ack::status, PolicyDataEndpoint.Ack::accepted, PolicyDataEndpoint.Ack::gate)
                 .containsExactly(200, true, "ok");
@@ -76,5 +81,16 @@ class PolicyDataNotPushedTest {
         HttpResponse<String> repeated = raw.post(RawMcp.toolCall("probe_caller"), GATEWAY.user().tool("probe_caller").mint().headers(), session);
         assertThat(repeated.statusCode()).isEqualTo(200);
         assertThat(repeated.body()).contains("jkowalski|probe_caller");
+
+        HttpResponse<String> pendingAfterPush = manifestAs("mcp-pending", http);
+        assertThat(pendingAfterPush.statusCode()).as("mcp-pending ends with the first accepted push").isEqualTo(401);
+        assertThat(pendingAfterPush.body()).contains("\"reason\":\"wrong_audience\"");
+        assertThat(manifestAs("mcp-jira", http).statusCode()).as("the real server id keeps working").isEqualTo(200);
+    }
+
+    private HttpResponse<String> manifestAs(String audience, HttpClient http) throws Exception {
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/.well-known/mcp-manifest")).GET();
+        GATEWAY.manifestToken().audience(audience).mint().headers().forEach(request::header);
+        return http.send(request.build(), HttpResponse.BodyHandlers.ofString());
     }
 }

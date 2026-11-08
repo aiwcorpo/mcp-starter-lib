@@ -103,6 +103,10 @@ when `MCP_REDIS_HOST` is set), the purpose `use`, `rid` ==
 `server/discover`, `tools/list`, `ping`, `GET /.well-known/mcp-manifest` and `POST /.well-known/mcp-policy-data`. **The purpose:** `use` is
 `call` for the MCP endpoint, `manifest` for the manifest and `policy-data` for the push, and a token of one purpose is refused for another
 (`401`, reason `wrong_purpose`), checked before the variant: a policy-data token presented to `tools/call` is `wrong_purpose`, not `service_token_not_allowed`.
+One exception to `aud` == `server-id`: the token of the add operation carries `aud: "mcp-pending"`, because the gateway does not know the server id before it has read the
+manifest. It is accepted only with `use: manifest` on `GET /.well-known/mcp-manifest` and only while the server holds no policy data (it was never connected). The audience is
+shared by every server, so after the first accepted push the starter requires `aud` == `server-id` for every request; on any other path, or with another `use`, `mcp-pending` is `401 wrong_audience`.
+The starter never looks at the `Host` header, and a self-signed certificate is not compared with any `Host` on the server side.
 Keys with an identifier `test-*` and the published test keys
 (recognized by SPKI from `mcp-contracts/security/published-test-keys.json`) are rejected unless `allow-test-keys=true` in the `dev`
 profile. The order of checks and the rejection reasons are those of the contracts' reference receiver, so all 83 vectors of

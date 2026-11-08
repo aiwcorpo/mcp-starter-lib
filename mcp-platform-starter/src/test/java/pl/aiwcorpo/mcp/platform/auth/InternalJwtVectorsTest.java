@@ -39,7 +39,7 @@ class InternalJwtVectorsTest {
     private static final String ROOT = "mcp-contracts/test-vectors/";
 
     /** Files in test-vectors/jwt of mcp-contracts 7.0.0. */
-    private static final int EXPECTED_VECTORS = 83;
+    private static final int EXPECTED_VECTORS = 90;
 
     record Vector(String name, JsonNode data) {
         @Override
@@ -153,7 +153,7 @@ class InternalJwtVectorsTest {
                 settings.get("allowTestKeys").asBoolean(),
                 settings.path("devstackProfile").asBoolean(false),
                 "adapter".equals(settings.path("receiverMode").asString("")) ? ReceiverMode.ADAPTER : ReceiverMode.NATIVE),
-                JwksGatewayKeys.of(jwks), store, clock);
+                JwksGatewayKeys.of(jwks), store, clock, null, () -> settings.path("holdsPolicyData").asBoolean(false));
     }
 
     /** The binding a server (or, for the broker's vectors, the broker) derives from the request. */

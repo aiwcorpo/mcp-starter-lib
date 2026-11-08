@@ -15,13 +15,19 @@ import tools.jackson.databind.node.ObjectNode;
  * its shape and only the highest revision is remembered. The answer is the one of C14, with {@code gate: ok} because there is no gate here to refuse.
  */
 @RestController
-public final class AdapterPolicyDataEndpoint {
+public final class AdapterPolicyDataEndpoint implements pl.aiwcorpo.mcp.platform.auth.PolicyDataHeld {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     private final AtomicLong revision = new AtomicLong();
+    private volatile boolean held;
 
     AdapterPolicyDataEndpoint() {
+    }
+
+    @Override
+    public boolean held() {
+        return held;
     }
 
     @PostMapping(path = "/.well-known/mcp-policy-data", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -36,6 +42,7 @@ public final class AdapterPolicyDataEndpoint {
             return ResponseEntity.badRequest().contentType(MediaType.APPLICATION_JSON).body(error.toString());
         }
         long before = revision.getAndAccumulate(offered, Math::max);
+        held = true;
         ObjectNode answer = JSON.createObjectNode();
         answer.put("revision", Math.max(before, offered));
         answer.put("accepted", offered > before);
