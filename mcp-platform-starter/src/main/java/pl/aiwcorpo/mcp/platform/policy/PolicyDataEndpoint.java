@@ -5,6 +5,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import pl.aiwcorpo.mcp.platform.auth.CallerContext;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -15,7 +16,8 @@ import tools.jackson.databind.node.ObjectNode;
  * <p>The data replaces what is held only with a strictly higher revision; an equal or lower one is answered {@code 200} with
  * {@code accepted: false} and the revision kept. Data that makes the gate refuse (an override that does not validate, policies that
  * differ from the approved ones) is still taken and answered {@code 200}: the {@code gate} of the answer says what the server now does, and
- * the administrator sees why it refuses. A body that is not the document of the contract is {@code 400} and changes nothing.
+ * the administrator sees why it refuses. A body that is not the document of the contract is {@code 400} and changes nothing, and so is a body whose
+ * revision differs from {@code prv} of the token: the token is minted for one revision and must not carry another.
  */
 @RestController
 public final class PolicyDataEndpoint {
@@ -35,6 +37,9 @@ public final class PolicyDataEndpoint {
         } catch (IllegalArgumentException ex) {
             return badRequest(ex.getMessage());
         }
+        if (!revisionMatchesToken(data.revision())) {
+            return badRequest("the revision of the body differs from prv of the token");
+        }
         PolicyEngine.Pushed pushed;
         try {
             pushed = engine.accept(data);
@@ -46,6 +51,10 @@ public final class PolicyDataEndpoint {
         answer.put("accepted", pushed.accepted());
         answer.put("gate", pushed.gate());
         return ResponseEntity.ok(answer.toString());
+    }
+
+    static boolean revisionMatchesToken(long bodyRevision) {
+        return CallerContext.current().map(caller -> caller.policyRevision() == bodyRevision).orElse(false);
     }
 
     private static ResponseEntity<String> badRequest(String message) {

@@ -6,6 +6,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RestController;
+import pl.aiwcorpo.mcp.platform.auth.CallerContext;
 import tools.jackson.databind.json.JsonMapper;
 import tools.jackson.databind.node.ObjectNode;
 
@@ -27,10 +28,10 @@ public final class AdapterPolicyDataEndpoint {
         try {
             offered = PolicyData.parse(body).revision();
         } catch (IllegalArgumentException ex) {
-            ObjectNode error = JSON.createObjectNode();
-            error.put("error", "invalid_request");
-            error.put("message", ex.getMessage());
-            return ResponseEntity.badRequest().contentType(MediaType.APPLICATION_JSON).body(error.toString());
+            return badRequest(ex.getMessage());
+        }
+        if (!PolicyDataEndpoint.revisionMatchesToken(offered)) {
+            return badRequest("the revision of the body differs from prv of the token");
         }
         long before = revision.getAndAccumulate(offered, Math::max);
         ObjectNode answer = JSON.createObjectNode();
@@ -38,5 +39,12 @@ public final class AdapterPolicyDataEndpoint {
         answer.put("accepted", offered > before);
         answer.put("gate", "ok");
         return ResponseEntity.ok(answer.toString());
+    }
+
+    private static ResponseEntity<String> badRequest(String message) {
+        ObjectNode error = JSON.createObjectNode();
+        error.put("error", "invalid_request");
+        error.put("message", message);
+        return ResponseEntity.badRequest().contentType(MediaType.APPLICATION_JSON).body(error.toString());
     }
 }

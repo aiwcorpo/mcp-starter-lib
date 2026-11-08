@@ -161,7 +161,7 @@ class PolicyDataPushTest {
                 GATEWAY.service().use("manifest").mint().headers(), session);
         assertThat(manifestTokenAtToolsList.statusCode()).isEqualTo(401);
 
-        TestGateway.Minted once = GATEWAY.service().use(TestGateway.USE_POLICY_DATA).mint();
+        TestGateway.Minted once = GATEWAY.service().use(TestGateway.USE_POLICY_DATA).policyRevision(held()).mint();
         assertThat(post(POLICY_DATA, data, once.headers()).statusCode()).isEqualTo(200);
         HttpResponse<String> replay = post(POLICY_DATA, data, once.headers());
         assertThat(replay.statusCode()).isEqualTo(401);
@@ -206,6 +206,30 @@ class PolicyDataPushTest {
 
             GATEWAY.policyData().approved();
             assertThat(GATEWAY.policyData().pushTo(origin()).gate()).isEqualTo("ok");
+        } finally {
+            GATEWAY.policyData().pushing(true);
+        }
+    }
+
+    @Test
+    @Order(7)
+    void aBodyWhoseRevisionDiffersFromPrvOfTheTokenIsRefusedAndChangesNothing() throws Exception {
+        GATEWAY.policyData().pushing(false);
+        try {
+            long held = held();
+            GATEWAY.policyData().nextRevision(held + 10).allowedClients("claude-ai");
+            byte[] newer = GATEWAY.policyData().json().getBytes(StandardCharsets.UTF_8);
+
+            PolicyDataEndpoint.Ack lower = GATEWAY.policyData().post(origin(), newer, held + 9);
+            PolicyDataEndpoint.Ack higher = GATEWAY.policyData().post(origin(), newer, held + 11);
+
+            assertThat(lower.status()).isEqualTo(400);
+            assertThat(higher.status()).isEqualTo(400);
+            assertThat(JSON.readTree(lower.body()).get("error").asString()).isEqualTo("invalid_request");
+
+            PolicyDataEndpoint.Ack matching = GATEWAY.policyData().post(origin(), newer, held + 10);
+            assertThat(matching).as("accepted as newer, so the two refused pushes replaced nothing").extracting(PolicyDataEndpoint.Ack::status, PolicyDataEndpoint.Ack::accepted, PolicyDataEndpoint.Ack::revision)
+                    .containsExactly(200, true, held + 10);
         } finally {
             GATEWAY.policyData().pushing(true);
         }
