@@ -18,7 +18,7 @@ Kontrakty 7.0.0 usuwają `mcp-policy-bundle`: starter nie zależy już od paczek
     `{revision, accepted, gate}`. The fail-closed gate answers `409 policy_data_stale` with `heldRevision` and `requiredRevision` (`PolicyDataStaleFilter`,
     right after the JWT filter, ahead of every other refusal), following `PolicyDataGate.decide(ownHash, held, prv)`; reason `policy_data_unavailable` is now `policy_data_stale`.
   - The internal JWT claim `use` (`call`, `manifest`, `policy-data`) is checked for every request, after the one-time `jti`: a mismatch is
-    `401 wrong_purpose`, before the variant and the tool are looked at. The 401 body carries the `reason`. 83 jwt vectors pass.
+    `401 wrong_purpose`, before the variant and the tool are looked at. The 401 body carries the `reason` on the two well-known paths only. 83 jwt vectors pass.
   - TLS of the server port from `MCP_TLS_KEYSTORE` with `MCP_TLS_STORE_PASSWORD`, or `MCP_TLS_CERT` and `MCP_TLS_KEY`, or `MCP_PLAIN_HTTP=true`; otherwise
     a self-signed certificate (EC P-256, 10 years) is generated once into `MCP_STATE_DIR` (`/var/lib/mcp/state`, `tls/server.crt`, `tls/server.key`) and reused.
     The start logs `event=tls_certificate source=<generated|pem|keystore> fingerprint=sha256:<hex over the DER>`, the format of `CertificateFingerprint`, so the author

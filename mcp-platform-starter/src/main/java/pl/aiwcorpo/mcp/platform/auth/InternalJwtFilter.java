@@ -202,8 +202,8 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
         }
         response.setHeader("WWW-Authenticate",
                 reason == InternalJwtRejection.MISSING_TOKEN ? "Bearer" : "Bearer error=\"invalid_token\"");
-        writeError(response, HttpServletResponse.SC_UNAUTHORIZED, "unauthenticated", reason.code(),
-                "The request was not authenticated by the platform gateway.");
+        writeError(response, HttpServletResponse.SC_UNAUTHORIZED, "unauthenticated",
+                wellKnown(request) ? reason.code() : null, "The request was not authenticated by the platform gateway.");
     }
 
     private void audit(InternalJwtRejection reason, String errorCode, long start) {
@@ -212,12 +212,20 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
         }
     }
 
-    /** C14 names the refusal of a body on the well-known paths {@code invalid_request}; the MCP endpoint keeps {@code invalid_argument}. */
-    private static String badRequestCode(HttpServletRequest request) {
-        return normalizedPath(request).startsWith("/.well-known/") ? "invalid_request" : "invalid_argument";
+    private static boolean wellKnown(HttpServletRequest request) {
+        return normalizedPath(request).startsWith("/.well-known/");
     }
 
-    /** The reason of a 401 is the code of C2 that the gateway also finds in the audit event; it says nothing about the request that it does not know. */
+    /** C14 names the refusal of a body on the well-known paths {@code invalid_request}; the MCP endpoint keeps {@code invalid_argument}. */
+    private static String badRequestCode(HttpServletRequest request) {
+        return wellKnown(request) ? "invalid_request" : "invalid_argument";
+    }
+
+    /**
+     * The 401 of a well-known path carries the C2 reason, as C14 documents (the gateway pulls and pushes there, and it is the one that needs
+     * to know why); on the MCP endpoint the reason stays in the log and the audit event, as before, because a caller that is not the gateway
+     * learns nothing from it that helps.
+     */
     private static void writeError(HttpServletResponse response, int status, String code, String reason, String message)
             throws IOException {
         response.setStatus(status);

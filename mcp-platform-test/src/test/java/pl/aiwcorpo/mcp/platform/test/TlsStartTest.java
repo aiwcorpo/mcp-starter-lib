@@ -106,10 +106,11 @@ class TlsStartTest {
                     .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString("{}")).build(),
                     HttpResponse.BodyHandlers.ofString());
             assertThat(mcp.statusCode()).as("no client certificate is needed to reach the JWT check").isEqualTo(401);
-            assertThat(mcp.body()).contains("\"reason\":\"missing_token\"");
+            assertThat(mcp.body()).as("the reason is for the log on the MCP endpoint").doesNotContain("reason");
             HttpResponse<String> manifest = https.send(HttpRequest.newBuilder(URI.create("https://127.0.0.1:" + port + "/.well-known/mcp-manifest")).GET().build(),
                     HttpResponse.BodyHandlers.ofString());
             assertThat(manifest.statusCode()).as("every path but the health check needs a gateway JWT").isEqualTo(401);
+            assertThat(manifest.body()).as("the well-known paths say why").contains("\"reason\":\"missing_token\"");
             assertThat(https.send(HttpRequest.newBuilder(URI.create("https://127.0.0.1:" + port + "/actuator/prometheus")).GET().build(),
                     HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(401);
         }
