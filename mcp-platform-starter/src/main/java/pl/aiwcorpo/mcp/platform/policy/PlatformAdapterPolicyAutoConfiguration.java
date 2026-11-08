@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Bean;
 public class PlatformAdapterPolicyAutoConfiguration {
 
     @Bean
-    AdapterPolicyDataEndpoint adapterPolicyDataEndpoint() {
-        return new AdapterPolicyDataEndpoint();
+    AdapterPolicyDataEndpoint adapterPolicyDataEndpoint(org.springframework.beans.factory.ObjectProvider<pl.aiwcorpo.mcp.platform.auth.ConnectedMarker> connected) {
+        return new AdapterPolicyDataEndpoint(connected.getIfAvailable());
     }
 }

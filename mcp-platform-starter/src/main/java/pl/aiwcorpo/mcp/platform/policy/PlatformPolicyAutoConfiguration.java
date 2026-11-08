@@ -61,8 +61,8 @@ public class PlatformPolicyAutoConfiguration {
     }
 
     @Bean
-    PolicyDataEndpoint policyDataEndpoint(PolicyEngine engine) {
-        return new PolicyDataEndpoint(engine);
+    PolicyDataEndpoint policyDataEndpoint(PolicyEngine engine, ObjectProvider<pl.aiwcorpo.mcp.platform.auth.ConnectedMarker> connected) {
+        return new PolicyDataEndpoint(engine, connected.getIfAvailable());
     }
 
     @Bean

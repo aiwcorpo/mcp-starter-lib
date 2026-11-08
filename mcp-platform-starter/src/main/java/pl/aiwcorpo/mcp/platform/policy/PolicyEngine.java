@@ -20,7 +20,7 @@ import pl.aiwcorpo.mcp.manifest.PolicyDataGate;
  * taken, and refuses every call: the push is not refused, so that the administrator can see why. A revision that is not strictly higher than the
  * one held never replaces it (revisions are a counter that only grows).
  */
-public final class PolicyEngine implements pl.aiwcorpo.mcp.platform.auth.PolicyDataHeld {
+public final class PolicyEngine {
 
     private static final Logger LOG = LoggerFactory.getLogger(PolicyEngine.class);
 
@@ -129,11 +129,6 @@ public final class PolicyEngine implements pl.aiwcorpo.mcp.platform.auth.PolicyD
     }
 
     /** Revision of the policy data in use, empty before the first push. */
-    @Override
-    public boolean held() {
-        return current != null;
-    }
-
     public OptionalLong revision() {
         PolicySnapshot snapshot = current;
         return snapshot == null ? OptionalLong.empty() : OptionalLong.of(snapshot.revision());

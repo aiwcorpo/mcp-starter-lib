@@ -1,5 +1,6 @@
 package pl.aiwcorpo.mcp.platform.auth;
 
+import java.nio.file.Path;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.net.URI;
@@ -68,7 +69,7 @@ public class PlatformAuthAutoConfiguration {
                                             ObjectProvider<JtiReplayStore> replayStoreProvider,
                                             ObjectProvider<PlatformConfigurationGuard> guard,
                                             Environment environment, ObjectProvider<MeterRegistry> meters,
-                                            ObjectProvider<PolicyDataHeld> policyData) {
+                                            ObjectProvider<ConnectedMarker> connected) {
         // The guard before the keys and the replay store are resolved, so that a server's own GatewayKeys or JtiReplayStore
         // (extension points) is created after the refusal too, not only the platform's. The guard is absent only in a Spring
         // test context that leaves the platform out on purpose (PlatformPresenceCheck refuses its absence everywhere else).
@@ -81,9 +82,15 @@ public class PlatformAuthAutoConfiguration {
                         jwt.getMaxLifetime(), jwt.isAllowTestKeys(),
                         PlatformConfigurationGuard.devstackProfile(environment), jwt.getReceiverMode()),
                 keys, replayStore, Clock.systemUTC(), meters.getIfAvailable(), () -> {
-                    PolicyDataHeld source = policyData.getIfAvailable();
-                    return source == null || source.held();
+                    ConnectedMarker marker = connected.getIfAvailable();
+                    return marker == null || marker.connected();
                 });
+    }
+
+    /** The state directory keeps the fact that the gateway has connected to this server, so a restart does not make {@code mcp-pending} valid again. */
+    @Bean
+    ConnectedMarker connectedMarker(McpPlatformProperties props) {
+        return new ConnectedMarker(Path.of(props.getStateDir()));
     }
 
     @Bean

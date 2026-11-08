@@ -26,6 +26,11 @@ import tools.jackson.databind.json.JsonMapper;
 @ActiveProfiles("dev")
 class PolicyDataNotPushedTest {
 
+    @org.junit.jupiter.api.BeforeAll
+    static void freshState() throws Exception {
+        org.springframework.util.FileSystemUtils.deleteRecursively(java.nio.file.Path.of("target", "policy-data-not-pushed-state"));
+    }
+
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     static final TestGateway GATEWAY = TestGateway.start("mcp-jira");
@@ -33,6 +38,7 @@ class PolicyDataNotPushedTest {
     @DynamicPropertySource
     static void gateway(DynamicPropertyRegistry registry) {
         // Without the property that names the gateway, nothing attaches the server when it starts.
+        registry.add("aiwcorpo.mcp.platform.state-dir", () -> java.nio.file.Path.of("target", "policy-data-not-pushed-state").toString());
         GATEWAY.serverProperties().forEach((name, value) -> {
             if (!name.endsWith("test.gateway")) {
                 registry.add(name, () -> value);

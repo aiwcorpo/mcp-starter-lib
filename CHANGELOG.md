@@ -20,7 +20,7 @@ Kontrakty 7.0.0 usuwają `mcp-policy-bundle`: starter nie zależy już od paczek
   - The internal JWT claim `use` (`call`, `manifest`, `policy-data`) is checked for every request, after the one-time `jti`: a mismatch is
     `401 wrong_purpose`, before the variant and the tool are looked at. The 401 body carries the `reason` on the two well-known paths only. 88 jwt vectors pass.
   - `aud: mcp-pending` (the probe token of the add operation, the server id is not known yet) is accepted only for `use: manifest` on `GET /.well-known/mcp-manifest` and only while the server
-    holds no policy data (`PolicyDataHeld`, implemented by `PolicyEngine` and the adapter endpoint); after the first accepted push `aud` must equal the server id for every request, and every
+    holds no policy data (`ConnectedMarker`: a marker file `connected` in `MCP_STATE_DIR` written after the first accepted push and read at start, in memory only with a warning when the directory is not writable); after the first accepted push `aud` must equal the server id for every request, and every
     other purpose and path needs it from the start (`401 wrong_audience`). Nothing in the starter depends on the `Host` header (a request addressed by name or by IP works), and the self-signed
     certificate needs no `Host` match on the server side (`ManifestTest`, `PolicyDataNotPushedTest`).
   - TLS of the server port from `MCP_TLS_KEYSTORE` with `MCP_TLS_STORE_PASSWORD`, or `MCP_TLS_CERT` and `MCP_TLS_KEY`, or `MCP_PLAIN_HTTP=true`; otherwise

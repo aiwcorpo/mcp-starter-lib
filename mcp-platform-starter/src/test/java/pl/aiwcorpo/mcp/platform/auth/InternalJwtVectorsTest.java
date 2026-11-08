@@ -140,6 +140,10 @@ class InternalJwtVectorsTest {
     }
 
     static InternalJwtVerifier verifierFor(JsonNode settings) throws Exception {
+        return verifierFor(settings, () -> settings.path("holdsPolicyData").asBoolean(false));
+    }
+
+    static InternalJwtVerifier verifierFor(JsonNode settings, java.util.function.BooleanSupplier policyDataHeld) throws Exception {
         Clock clock = Clock.fixed(Instant.parse(settings.get("now").asString()), ZoneOffset.UTC);
         InMemoryJtiReplayStore store = new InMemoryJtiReplayStore(clock);
         for (JsonNode seen : settings.get("seenJtis")) {
@@ -153,7 +157,7 @@ class InternalJwtVectorsTest {
                 settings.get("allowTestKeys").asBoolean(),
                 settings.path("devstackProfile").asBoolean(false),
                 "adapter".equals(settings.path("receiverMode").asString("")) ? ReceiverMode.ADAPTER : ReceiverMode.NATIVE),
-                JwksGatewayKeys.of(jwks), store, clock, null, () -> settings.path("holdsPolicyData").asBoolean(false));
+                JwksGatewayKeys.of(jwks), store, clock, null, policyDataHeld);
     }
 
     /** The binding a server (or, for the broker's vectors, the broker) derives from the request. */
