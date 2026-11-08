@@ -60,7 +60,6 @@ public final class TestGateway implements AutoCloseable {
 
     /** Purposes of a token (C2, claim {@code use}). */
     public static final String USE_CALL = "call";
-    public static final String USE_MANIFEST = "manifest";
     public static final String USE_POLICY_DATA = "policy-data";
 
     /** Test property that names the gateway of a server under test, so that the server is attached when its web server starts. */
@@ -174,11 +173,6 @@ public final class TestGateway implements AutoCloseable {
     /** A token of the service variant ({@code sub=system:mcp-gateway}, no user, no tool); its purpose is {@code call} unless {@link Token#use} says otherwise. */
     public Token service() {
         return new Token(this, true);
-    }
-
-    /** A service token for {@code GET /.well-known/mcp-manifest}: the purpose {@code manifest}. */
-    public Token manifestToken() {
-        return service().use(USE_MANIFEST);
     }
 
     /** The gateway of the server whose properties carry {@code key}, empty when no gateway of this JVM has it. */
@@ -362,8 +356,8 @@ public final class TestGateway implements AutoCloseable {
         }
 
         /**
-         * The purpose of the token ({@code use}): {@link #USE_CALL} (the default) for the MCP endpoint, {@link #USE_MANIFEST} and
-         * {@link #USE_POLICY_DATA} for the two well-known endpoints, both only with a service token. Any other value is for a test of the refusal.
+         * The purpose of the token ({@code use}): {@link #USE_CALL} (the default) for the MCP endpoint and
+         * {@link #USE_POLICY_DATA} for the policy data endpoint, only with a service token. Any other value is for a test of the refusal.
          */
         public Token use(String value) {
             use = value;

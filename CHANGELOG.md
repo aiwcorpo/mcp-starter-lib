@@ -17,11 +17,9 @@ Kontrakty 7.0.0 usuwają `mcp-policy-bundle`: starter nie zależy już od paczek
     (C14), both at the origin. The policy data pushed by the gateway replaces what the server holds only with a strictly newer revision; the answer is
     `{revision, accepted, gate}`. The fail-closed gate answers `409 policy_data_stale` with `heldRevision` and `requiredRevision` (`PolicyDataStaleFilter`,
     right after the JWT filter, ahead of every other refusal), following `PolicyDataGate.decide(ownHash, held, prv)`; reason `policy_data_unavailable` is now `policy_data_stale`.
-  - The internal JWT claim `use` (`call`, `manifest`, `policy-data`) is checked for every request, after the one-time `jti`: a mismatch is
-    `401 wrong_purpose`, before the variant and the tool are looked at. The 401 body carries the `reason` on the two well-known paths only. 88 jwt vectors pass.
-  - `aud: mcp-pending` (the probe token of the add operation, the server id is not known yet) is accepted only for `use: manifest` on `GET /.well-known/mcp-manifest` and only while the server
-    holds no policy data (`ConnectedMarker`: a marker file `connected` in `MCP_STATE_DIR` written after the first accepted push and read at start, in memory only with a warning when the directory is not writable); after the first accepted push `aud` must equal the server id for every request, and every
-    other purpose and path needs it from the start (`401 wrong_audience`). Nothing in the starter depends on the `Host` header (a request addressed by name or by IP works), and the self-signed
+  - The internal JWT claim `use` (`call`, `policy-data`) is checked for every request, after the one-time `jti`: a mismatch is
+    `401 wrong_purpose`, before the variant and the tool are looked at. The 401 body carries the `reason` on the policy data path only. 75 jwt vectors pass.
+  - `GET /.well-known/mcp-manifest` is served without authentication: `InternalJwtFilter` skips it (exact path, `GET` only) and ignores an `Authorization` header. There is no purpose `manifest`, no `aud: mcp-pending` and no marker file in `MCP_STATE_DIR`; `aud` must equal the server id for every request that is checked, and the policy data and MCP endpoints stay strictly authenticated. Nothing in the starter depends on the `Host` header (a request addressed by name or by IP works), and the self-signed
     certificate needs no `Host` match on the server side (`ManifestTest`, `PolicyDataNotPushedTest`).
   - TLS of the server port from `MCP_TLS_KEYSTORE` with `MCP_TLS_STORE_PASSWORD`, or `MCP_TLS_CERT` and `MCP_TLS_KEY`, or `MCP_PLAIN_HTTP=true`; otherwise
     a self-signed certificate (EC P-256, 10 years) is generated once into `MCP_STATE_DIR` (`/var/lib/mcp/state`, `tls/server.crt`, `tls/server.key`) and reused.
@@ -30,7 +28,7 @@ Kontrakty 7.0.0 usuwają `mcp-policy-bundle`: starter nie zależy już od paczek
   - The one-time `jti` store is the bounded memory of the process by default (entries end with the token), Redis only when `MCP_REDIS_HOST` is set. The key of paging cursors is generated once into the
     state directory unless `MCP_PAGING_CURSOR_KEY` is given; several instances need both Redis and an explicit key. `MCP_GATEWAY_JWKS_URI` is the public https JWKS of the gateway.
   - `mcp-platform-test`: `TestGateway` pushes the policy data (`PolicyDataEndpoint.attach`, `push`, `pushTo`; a listener attaches the server of a Spring test when its web server
-    starts), mints tokens with `use` (`Token.use`, `manifestToken()`), serves the JWKS at `/.well-known/mcp-jwks.json`; `LocalGateway` pushes to the server at the origin of `--upstream`
+    starts), mints tokens with `use` (`Token.use`), serves the JWKS at `/.well-known/mcp-jwks.json`; `LocalGateway` pushes to the server at the origin of `--upstream`
     every 3 s and repeats a call answered `409 policy_data_stale` once after a push.
   - `manifest.internal-url` is optional and informational. `server.ssl.client-auth` is refused.
   - Removed: the policy data pull client (`PolicyDataClient`), `GatewayTls`, `policy-data.*` (`MCP_GATEWAY_POLICY_DATA_URL`, `MCP_GATEWAY_TLS_NAME`), `mtls.*` and the check of the

@@ -165,9 +165,10 @@ class InternalJwtAuditTest {
     void theWrongPurposeEventIsTheContractsVector() throws Exception {
         JsonNode expected = JSON.readTree(InternalJwtFilterTest.read("audit-events/server-authentication-denied-wrong-purpose.json"))
                 .get("event");
-        JsonNode purposeVector = JSON.readTree(InternalJwtFilterTest.read("jwt/purpose-call-token-at-manifest.json"));
-        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/.well-known/mcp-manifest");
-        request.setServletPath("/.well-known/mcp-manifest");
+        JsonNode purposeVector = JSON.readTree(InternalJwtFilterTest.read("jwt/purpose-call-token-at-policy-data.json"));
+        MockHttpServletRequest request = new MockHttpServletRequest("POST", "/.well-known/mcp-policy-data");
+        request.setServletPath("/.well-known/mcp-policy-data");
+        request.setContent("{}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         request.addHeader("Authorization", "Bearer " + purposeVector.get("token").asString());
         request.addHeader("X-Request-Id", purposeVector.get("request").get("xRequestId").asString());
         Clock purposeClock = Clock.fixed(Instant.parse(purposeVector.get("verifier").get("now").asString()), ZoneOffset.UTC);

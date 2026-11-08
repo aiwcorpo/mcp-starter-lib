@@ -14,7 +14,6 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import java.util.function.BooleanSupplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
@@ -30,9 +29,7 @@ import tools.jackson.databind.JsonNode;
  *       {@code allowTestKeys}; a {@code dev-*} {@code kid} only in dev mode (the {@code devstack} profile and {@code allowTestKeys})</li>
  *   <li>ES256 signature</li>
  *   <li>claims valid against {@code internal-jwt.schema.json}</li>
- *   <li>{@code iss}, {@code aud == serverId}; the one exception is {@code aud == mcp-pending} with {@code use == manifest} on
- *       {@code GET /.well-known/mcp-manifest} while the server holds no policy data, the probe of the add operation (the server id is not
- *       known yet, CC-249); the audience is shared, so it stops working with the first accepted push</li>
+ *   <li>{@code iss}, {@code aud == serverId}, with no exception</li>
  *   <li>{@code exp} and {@code iat} within the clock skew, {@code exp - iat} at most the maximum lifetime</li>
  *   <li>{@code jti} not seen before (recorded until {@code exp} + skew; one-time for every purpose)</li>
  *   <li>{@code use} equal to the purpose of the endpoint ({@code wrong_purpose}), before anything about the variant</li>
@@ -49,9 +46,6 @@ public final class InternalJwtVerifier {
     private static final String DEV_KID_PREFIX = "dev-";
 
     private static final int MAX_TOKEN_LENGTH = 8 * 1024;
-
-    /** Audience of the manifest token of the add operation, sent before the gateway knows the server id. */
-    static final String PENDING_AUDIENCE = "mcp-pending";
 
     /**
      * @param issuer        expected {@code iss}
@@ -88,11 +82,9 @@ public final class InternalJwtVerifier {
     private final GatewayKeys keys;
     private final JtiReplayStore replayStore;
     private final Clock clock;
-    private final BooleanSupplier policyDataHeld;
     private final InternalJwtClaimsSchema schema = new InternalJwtClaimsSchema();
     private final MeterRegistry meters;
 
-    /** Without a policy data source {@code mcp-pending} is never accepted (the safe default; the platform wiring passes the real one). */
     public InternalJwtVerifier(Settings settings, GatewayKeys keys, JtiReplayStore replayStore, Clock clock) {
         this(settings, keys, replayStore, clock, null);
     }
@@ -100,13 +92,6 @@ public final class InternalJwtVerifier {
     /** @param meters counts the classifications other than {@code READ_ONLY} an adapter sidecar receives; may be {@code null} */
     public InternalJwtVerifier(Settings settings, GatewayKeys keys, JtiReplayStore replayStore, Clock clock,
                                MeterRegistry meters) {
-        this(settings, keys, replayStore, clock, meters, () -> true);
-    }
-
-    /** @param policyDataHeld true once the server holds policy data; from then on {@code aud} must be the server id for every request */
-    public InternalJwtVerifier(Settings settings, GatewayKeys keys, JtiReplayStore replayStore, Clock clock,
-                               MeterRegistry meters, BooleanSupplier policyDataHeld) {
-        this.policyDataHeld = policyDataHeld;
         this.meters = meters;
         this.settings = settings;
         this.keys = keys;
@@ -165,7 +150,7 @@ public final class InternalJwtVerifier {
         if (!settings.issuer().equals(claims.get("iss").asString())) {
             throw reject(InternalJwtRejection.WRONG_ISSUER);
         }
-        if (!settings.audience().equals(claims.get("aud").asString()) && !isPendingManifestToken(claims, binding)) {
+        if (!settings.audience().equals(claims.get("aud").asString())) {
             throw reject(InternalJwtRejection.WRONG_AUDIENCE);
         }
 
@@ -240,14 +225,6 @@ public final class InternalJwtVerifier {
             }
         }
         return caller(claims);
-    }
-
-    /** {@code mcp-pending} is accepted for the manifest only, and only while no policy data is held: not for another purpose, not on another path, not after the first push. */
-    private boolean isPendingManifestToken(JsonNode claims, RequestBinding binding) {
-        return !policyDataHeld.getAsBoolean()
-                && PENDING_AUDIENCE.equals(claims.get("aud").asString())
-                && binding.kind() == RequestBinding.Kind.MANIFEST
-                && RequestBinding.PURPOSE_MANIFEST.equals(claims.get("use").asString());
     }
 
     private Optional<ECKey> findKey(String kid) throws InternalJwtRejectedException {

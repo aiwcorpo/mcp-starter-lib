@@ -1,7 +1,6 @@
 package pl.aiwcorpo.mcp.platform.policy;
 
 import org.springframework.http.MediaType;
-import pl.aiwcorpo.mcp.platform.auth.ConnectedMarker;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -24,11 +23,8 @@ public final class PolicyDataEndpoint {
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     private final PolicyEngine engine;
-    private final ConnectedMarker connected;
-
-    PolicyDataEndpoint(PolicyEngine engine, ConnectedMarker connected) {
+    PolicyDataEndpoint(PolicyEngine engine) {
         this.engine = engine;
-        this.connected = connected;
     }
 
     @PostMapping(path = "/.well-known/mcp-policy-data", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -44,9 +40,6 @@ public final class PolicyDataEndpoint {
             pushed = engine.accept(data);
         } catch (IllegalArgumentException ex) {
             return badRequest("the policy data cannot be used by this server");
-        }
-        if (connected != null) {
-            connected.record();
         }
         ObjectNode answer = JSON.createObjectNode();
         answer.put("revision", pushed.revision());

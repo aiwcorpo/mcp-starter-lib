@@ -1,7 +1,6 @@
 package pl.aiwcorpo.mcp.platform.policy;
 
 import java.util.concurrent.atomic.AtomicLong;
-import pl.aiwcorpo.mcp.platform.auth.ConnectedMarker;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -22,12 +21,6 @@ public final class AdapterPolicyDataEndpoint {
 
     private final AtomicLong revision = new AtomicLong();
 
-    private final ConnectedMarker connected;
-
-    AdapterPolicyDataEndpoint(ConnectedMarker connected) {
-        this.connected = connected;
-    }
-
     @PostMapping(path = "/.well-known/mcp-policy-data", produces = MediaType.APPLICATION_JSON_VALUE)
     ResponseEntity<String> push(@RequestBody byte[] body) {
         long offered;
@@ -40,9 +33,6 @@ public final class AdapterPolicyDataEndpoint {
             return ResponseEntity.badRequest().contentType(MediaType.APPLICATION_JSON).body(error.toString());
         }
         long before = revision.getAndAccumulate(offered, Math::max);
-        if (connected != null) {
-            connected.record();
-        }
         ObjectNode answer = JSON.createObjectNode();
         answer.put("revision", Math.max(before, offered));
         answer.put("accepted", offered > before);

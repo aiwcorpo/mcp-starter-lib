@@ -11,9 +11,8 @@ package pl.aiwcorpo.mcp.platform.auth;
  */
 public record RequestBinding(Kind kind, String toolName, String requestIdHeader) {
 
-    /** Value of {@code use} for every request that is not one of the two well-known endpoints (CC-249). */
+    /** Value of {@code use} for every request that is not the policy data endpoint (CC-249). */
     public static final String PURPOSE_CALL = "call";
-    public static final String PURPOSE_MANIFEST = "manifest";
     public static final String PURPOSE_POLICY_DATA = "policy-data";
 
     public enum Kind {
@@ -29,8 +28,6 @@ public record RequestBinding(Kind kind, String toolName, String requestIdHeader)
          * both variants, {@code tool} absent, purpose {@code call}.
          */
         PROTOCOL,
-        /** {@code GET /.well-known/mcp-manifest}: service variant only, purpose {@code manifest}. */
-        MANIFEST,
         /** {@code POST /.well-known/mcp-policy-data}: service variant only, purpose {@code policy-data}. */
         POLICY_DATA,
         /** Everything else: user variant only, {@code tool} absent. */
@@ -43,10 +40,6 @@ public record RequestBinding(Kind kind, String toolName, String requestIdHeader)
 
     public static RequestBinding protocol(String requestIdHeader) {
         return new RequestBinding(Kind.PROTOCOL, null, requestIdHeader);
-    }
-
-    public static RequestBinding manifest(String requestIdHeader) {
-        return new RequestBinding(Kind.MANIFEST, null, requestIdHeader);
     }
 
     public static RequestBinding policyData(String requestIdHeader) {
@@ -64,14 +57,13 @@ public record RequestBinding(Kind kind, String toolName, String requestIdHeader)
     /** The value {@code use} must have: a token minted for one purpose is never accepted for another. */
     String purpose() {
         return switch (kind) {
-            case MANIFEST -> PURPOSE_MANIFEST;
             case POLICY_DATA -> PURPOSE_POLICY_DATA;
             default -> PURPOSE_CALL;
         };
     }
 
     boolean serviceVariantAllowed() {
-        return kind == Kind.PROTOCOL || kind == Kind.MANIFEST || kind == Kind.POLICY_DATA;
+        return kind == Kind.PROTOCOL || kind == Kind.POLICY_DATA;
     }
 
     boolean toolRequired() {

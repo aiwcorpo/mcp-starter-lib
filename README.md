@@ -85,7 +85,7 @@ gateway --TLS (any certificate) + JWT C2 + X-MCP-Credential--> SecurityHeadersFi
   -> CredentialHeaderFilter  X-MCP-Credential(-Type) -> CredentialContext; the headers are hidden from the rest
   -> MCP transport -> AuditingToolCallback -> argument validation -> ResourcePolicy (Cedar: call, resources from @ResourceRef)
                                            -> [ToolCallInterceptor...] -> the server's @Tool -> result filter
-  GET  /.well-known/mcp-manifest     (JWT use=manifest)    -> the C6 manifest built from the server at startup, 503 until it is built
+  GET  /.well-known/mcp-manifest     (no authentication)   -> the C6 manifest built from the server at startup, 503 until it is built
   POST /.well-known/mcp-policy-data  (JWT use=policy-data) -> the gateway replaces the policy data this server holds
 ```
 
@@ -100,16 +100,15 @@ the contract C14 (`openapi/mcp-server.v1.yaml`).
 `vsc` no longer exist, and a token with either is `401 invalid_claims`), a `jti` used for the first time (every purpose; in memory, or Redis
 when `MCP_REDIS_HOST` is set), the purpose `use`, `rid` ==
 `X-Request-Id`, `tool` present exactly for `tools/call` and equal to `params.name`, and the service variant only for `initialize`,
-`server/discover`, `tools/list`, `ping`, `GET /.well-known/mcp-manifest` and `POST /.well-known/mcp-policy-data`. **The purpose:** `use` is
-`call` for the MCP endpoint, `manifest` for the manifest and `policy-data` for the push, and a token of one purpose is refused for another
+`server/discover`, `tools/list`, `ping` and `POST /.well-known/mcp-policy-data`. **The purpose:** `use` is
+`call` for the MCP endpoint and `policy-data` for the push, and a token of one purpose is refused for another
 (`401`, reason `wrong_purpose`), checked before the variant: a policy-data token presented to `tools/call` is `wrong_purpose`, not `service_token_not_allowed`.
-One exception to `aud` == `server-id`: the token of the add operation carries `aud: "mcp-pending"`, because the gateway does not know the server id before it has read the
-manifest. It is accepted only with `use: manifest` on `GET /.well-known/mcp-manifest` and only while the server holds no policy data (it was never connected). The audience is
-shared by every server, so after the first accepted push the starter requires `aud` == `server-id` for every request (the fact is a marker file `connected` in `MCP_STATE_DIR`, so a restart keeps it; when the directory cannot be written the starter logs a warning and keeps it in memory); on any other path, or with another `use`, `mcp-pending` is `401 wrong_audience`.
+There is no exception to `aud` == `server-id` and no purpose `manifest`: a token with `use: manifest` is `401 invalid_claims`.
+**`GET /.well-known/mcp-manifest` is open.** The filter does not run for it (exact path, `GET` only, a raw URI without `;`, `..`, `%`, `\` or `//`): no token is required and an `Authorization` header that arrives is ignored. The manifest holds nothing secret (tool descriptions and policies, which are in the source of the server), and the server port is reachable only from the platform host. The policy data endpoint and the MCP endpoint stay strictly authenticated.
 The starter never looks at the `Host` header, and a self-signed certificate is not compared with any `Host` on the server side.
 Keys with an identifier `test-*` and the published test keys
 (recognized by SPKI from `mcp-contracts/security/published-test-keys.json`) are rejected unless `allow-test-keys=true` in the `dev`
-profile. The order of checks and the rejection reasons are those of the contracts' reference receiver, so all 83 vectors of
+profile. The order of checks and the rejection reasons are those of the contracts' reference receiver, so all 74 vectors of
 `test-vectors/jwt` give the same result and reason.
 
 A rejection is `401 {"error":"unauthenticated",...}` with `WWW-Authenticate: Bearer`; the reason is in the log
@@ -1235,8 +1234,8 @@ GATEWAY.policyData().pushing(false);        // changes are held back; pushTo(ori
 ```
 
 A server that is not a Spring test (run by hand, or started with `SpringApplicationBuilder`) is attached with `GATEWAY.policyData().attach(URI.create("http://127.0.0.1:8080"))`,
-which also makes the first push. For the purpose of a token, `GATEWAY.service().use(TestGateway.USE_POLICY_DATA)` and `GATEWAY.manifestToken()` mint the
-service tokens of the two well-known endpoints; a token with the default purpose is a `call` token.
+which also makes the first push. For the purpose of a token, `GATEWAY.service().use(TestGateway.USE_POLICY_DATA)` mints the
+service token of the policy data endpoint (the manifest needs none); a token with the default purpose is a `call` token.
 
 A resource test through the real transport with a resolver on an artificial system:
 `mcp-platform-test/src/test/java/pl/aiwcorpo/mcp/platform/test/resource/ResourcePolicyTest.java`; a manifest test: `ManifestTest`; the push, the

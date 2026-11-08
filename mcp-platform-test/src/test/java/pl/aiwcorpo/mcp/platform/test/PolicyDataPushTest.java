@@ -151,15 +151,15 @@ class PolicyDataPushTest {
         assertThat(callTokenAtPush.statusCode()).isEqualTo(401);
         assertThat(reason(callTokenAtPush)).isEqualTo("wrong_purpose");
         assertThat(reason(post(POLICY_DATA, "{}", GATEWAY.user().tool("probe_caller").mint().headers()))).isEqualTo("wrong_purpose");
-        assertThat(reason(post(POLICY_DATA, "{}", GATEWAY.manifestToken().mint().headers()))).isEqualTo("wrong_purpose");
+        assertThat(reason(post(POLICY_DATA, "{}", GATEWAY.service().use("manifest").mint().headers()))).as("manifest is no purpose any more").isEqualTo("invalid_claims");
 
         HttpResponse<String> pushTokenAtCall = raw.post(RawMcp.toolCall("probe_caller"),
                 GATEWAY.service().use(TestGateway.USE_POLICY_DATA).mint().headers(), session);
         assertThat(pushTokenAtCall.statusCode()).isEqualTo(401);
         assertThat(reason(pushTokenAtCall)).as("the MCP endpoint keeps the reason out of the body").isEmpty();
-        HttpResponse<String> manifestTokenAtInitialize = raw.post("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}",
-                GATEWAY.manifestToken().mint().headers(), session);
-        assertThat(manifestTokenAtInitialize.statusCode()).isEqualTo(401);
+        HttpResponse<String> manifestTokenAtToolsList = raw.post("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}",
+                GATEWAY.service().use("manifest").mint().headers(), session);
+        assertThat(manifestTokenAtToolsList.statusCode()).isEqualTo(401);
 
         TestGateway.Minted once = GATEWAY.service().use(TestGateway.USE_POLICY_DATA).mint();
         assertThat(post(POLICY_DATA, data, once.headers()).statusCode()).isEqualTo(200);

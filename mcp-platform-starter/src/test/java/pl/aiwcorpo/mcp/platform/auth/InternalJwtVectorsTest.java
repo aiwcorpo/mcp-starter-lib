@@ -39,7 +39,7 @@ class InternalJwtVectorsTest {
     private static final String ROOT = "mcp-contracts/test-vectors/";
 
     /** Files in test-vectors/jwt of mcp-contracts 7.0.0. */
-    private static final int EXPECTED_VECTORS = 90;
+    private static final int EXPECTED_VECTORS = 75;
 
     record Vector(String name, JsonNode data) {
         @Override
@@ -61,8 +61,15 @@ class InternalJwtVectorsTest {
         return vectors;
     }
 
+    /** The manifest is served without a token: no verifier is involved, only the filter lets it through. */
+    private static boolean opensTheManifest(Vector vector) {
+        JsonNode request = vector.data().get("request");
+        return "http".equals(request.get("kind").asString()) && "GET".equals(request.get("method").asString())
+                && "/.well-known/mcp-manifest".equals(request.get("path").asString());
+    }
+
     static Stream<Arguments> allVectors() throws IOException {
-        return vectors().stream().map(Arguments::of);
+        return vectors().stream().filter(v -> !opensTheManifest(v)).map(Arguments::of);
     }
 
     static Stream<Arguments> serverVectors() throws IOException {
@@ -113,6 +120,39 @@ class InternalJwtVectorsTest {
         }
     }
 
+    @Test
+    void theManifestIgnoresAnAuthorizationHeaderAndTheOtherWellKnownPathStillNeedsOne() throws Exception {
+        JsonNode settings = vectors().stream().filter(v -> v.name().equals("valid-manifest-without-token.json"))
+                .findFirst().orElseThrow().data().get("verifier");
+        InternalJwtFilter filter = new InternalJwtFilter(verifierFor(settings), List.of("/actuator/health"), 1024 * 1024);
+
+        MockHttpServletRequest manifest = new MockHttpServletRequest("GET", "/.well-known/mcp-manifest");
+        manifest.setServletPath("/.well-known/mcp-manifest");
+        manifest.addHeader("Authorization", "Bearer not-a-jwt");
+        MockFilterChain manifestChain = new MockFilterChain();
+        MockHttpServletResponse manifestResponse = new MockHttpServletResponse();
+        filter.doFilter(manifest, manifestResponse, manifestChain);
+        assertThat(manifestChain.getRequest()).as("the manifest is open").isNotNull();
+        assertThat(manifestResponse.getStatus()).isEqualTo(200);
+
+        MockHttpServletRequest policyData = new MockHttpServletRequest("POST", "/.well-known/mcp-policy-data");
+        policyData.setServletPath("/.well-known/mcp-policy-data");
+        policyData.setContent("{}".getBytes(StandardCharsets.UTF_8));
+        MockFilterChain policyChain = new MockFilterChain();
+        MockHttpServletResponse policyResponse = new MockHttpServletResponse();
+        filter.doFilter(policyData, policyResponse, policyChain);
+        assertThat(policyChain.getRequest()).isNull();
+        assertThat(policyResponse.getStatus()).isEqualTo(401);
+
+        MockHttpServletRequest postToManifest = new MockHttpServletRequest("POST", "/.well-known/mcp-manifest");
+        postToManifest.setServletPath("/.well-known/mcp-manifest");
+        MockFilterChain postChain = new MockFilterChain();
+        MockHttpServletResponse postResponse = new MockHttpServletResponse();
+        filter.doFilter(postToManifest, postResponse, postChain);
+        assertThat(postChain.getRequest()).as("only GET is open").isNull();
+        assertThat(postResponse.getStatus()).isEqualTo(401);
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("serverVectors")
     void filterAnswersWithTheVectorsHttpStatus(Vector vector) throws Exception {
@@ -140,10 +180,6 @@ class InternalJwtVectorsTest {
     }
 
     static InternalJwtVerifier verifierFor(JsonNode settings) throws Exception {
-        return verifierFor(settings, () -> settings.path("holdsPolicyData").asBoolean(false));
-    }
-
-    static InternalJwtVerifier verifierFor(JsonNode settings, java.util.function.BooleanSupplier policyDataHeld) throws Exception {
         Clock clock = Clock.fixed(Instant.parse(settings.get("now").asString()), ZoneOffset.UTC);
         InMemoryJtiReplayStore store = new InMemoryJtiReplayStore(clock);
         for (JsonNode seen : settings.get("seenJtis")) {
@@ -157,7 +193,7 @@ class InternalJwtVectorsTest {
                 settings.get("allowTestKeys").asBoolean(),
                 settings.path("devstackProfile").asBoolean(false),
                 "adapter".equals(settings.path("receiverMode").asString("")) ? ReceiverMode.ADAPTER : ReceiverMode.NATIVE),
-                JwksGatewayKeys.of(jwks), store, clock, null, policyDataHeld);
+                JwksGatewayKeys.of(jwks), store, clock, null);
     }
 
     /** The binding a server (or, for the broker's vectors, the broker) derives from the request. */
@@ -179,9 +215,6 @@ class InternalJwtVectorsTest {
         }
         if ("GET".equals(method) && "/v1/systems".equals(path)) {
             return RequestBinding.protocol(rid);
-        }
-        if ("GET".equals(method) && "/.well-known/mcp-manifest".equals(path)) {
-            return RequestBinding.manifest(rid);
         }
         if ("POST".equals(method) && "/.well-known/mcp-policy-data".equals(path)) {
             return RequestBinding.policyData(rid);

@@ -33,7 +33,8 @@ import pl.aiwcorpo.mcp.platform.observability.CorrelationIdFilter;
  * each for the audit event and the log line ({@link MissingTokenEventLimiter}); the rest is not capped, including a token
  * whose header is refused after its {@code kid} resolved.
  *
- * <p>Paths in {@code unauthenticatedPaths} (by default the health endpoints) are passed through untouched.
+ * <p>Paths in {@code unauthenticatedPaths} (by default the health endpoints) and {@code GET /.well-known/mcp-manifest} (C14: the
+ * manifest is served without authentication, an {@code Authorization} header that arrives is ignored) are passed through untouched.
  * They are exact paths, never patterns, and a request is let through only when its raw URI is literally one
  * of them: no {@code ;}, {@code ..}, percent-encoding, backslash or double slash, compared case-sensitively.
  * Anything that the container might normalize to a different path is verified like every other request, so
@@ -106,7 +107,11 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
             return false;
         }
         String normalized = normalizedPath(request);
-        return rawPath.equals(normalized) && unauthenticatedPaths.contains(normalized);
+        if (!rawPath.equals(normalized)) {
+            return false;
+        }
+        return unauthenticatedPaths.contains(normalized)
+                || ("GET".equals(request.getMethod()) && McpRequestClassifier.MANIFEST_PATH.equals(normalized));
     }
 
     /** The path the container resolved: servlet path plus path info, as routing sees it. */

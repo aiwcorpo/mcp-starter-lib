@@ -59,7 +59,7 @@ class ManifestTest {
     }
 
     private JsonNode manifest() throws Exception {
-        HttpResponse<String> response = get("/.well-known/mcp-manifest", GATEWAY.manifestToken().mint().headers());
+        HttpResponse<String> response = get("/.well-known/mcp-manifest", Map.of());
         assertThat(response.statusCode()).isEqualTo(200);
         assertThat(response.headers().firstValue("Cache-Control")).hasValueSatisfying(value -> assertThat(value).contains("no-store"));
         return JSON.readTree(response.body());
@@ -87,31 +87,6 @@ class ManifestTest {
         assertThat(manifest.get("serverId").asString()).isEqualTo("mcp-jira");
         assertThat(manifest.get("system").asString()).isEqualTo("jira");
         assertThat(manifest.at("/credential/acceptedTypes").toString()).isEqualTo("[\"user-secret\",\"user-oauth\"]");
-    }
-
-    @Test
-    void theAudiencePendingIsRefusedEverywhereOnceTheServerHoldsPolicyData() throws Exception {
-        HttpResponse<String> manifest = get("/.well-known/mcp-manifest", GATEWAY.manifestToken().audience("mcp-pending").mint().headers());
-        assertThat(manifest.statusCode()).as("this server was pushed policy data when it started: mcp-pending is no longer accepted").isEqualTo(401);
-        assertThat(manifest.body()).contains("\"reason\":\"wrong_audience\"");
-        assertThat(get("/.well-known/mcp-manifest", GATEWAY.manifestToken().mint().headers()).statusCode())
-                .as("the real server id still reads the manifest").isEqualTo(200);
-
-        HttpResponse<String> callAtManifest = get("/.well-known/mcp-manifest", GATEWAY.service().audience("mcp-pending").mint().headers());
-        assertThat(callAtManifest.statusCode()).isEqualTo(401);
-        assertThat(callAtManifest.body()).contains("\"reason\":\"wrong_audience\"");
-
-        HttpRequest.Builder push = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + "/.well-known/mcp-policy-data"))
-                .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString("{}"));
-        GATEWAY.service().use(TestGateway.USE_POLICY_DATA).audience("mcp-pending").mint().headers().forEach(push::header);
-        HttpResponse<String> policyData = HttpClient.newHttpClient().send(push.build(), HttpResponse.BodyHandlers.ofString());
-        assertThat(policyData.statusCode()).isEqualTo(401);
-        assertThat(policyData.body()).contains("\"reason\":\"wrong_audience\"");
-
-        RawMcp raw = new RawMcp(port);
-        HttpResponse<String> toolsList = raw.post("{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"tools/list\"}",
-                GATEWAY.service().audience("mcp-pending").mint().headers(), null);
-        assertThat(toolsList.statusCode()).isEqualTo(401);
     }
 
     @Test
@@ -181,28 +156,18 @@ class ManifestTest {
     }
 
     @Test
-    void theManifestNeedsAnInternalJwtOfThePurposeManifest() throws Exception {
+    void theManifestIsServedWithoutAuthentication() throws Exception {
         String path = "/.well-known/mcp-manifest";
-        assertThat(get(path, Map.of()).statusCode()).isEqualTo(401);
-        assertThat(get(path, GATEWAY.user().tool("get_issue").mint().headers()).statusCode())
-                .as("the manifest is not a tool call").isEqualTo(401);
-
-        HttpResponse<String> callToken = get(path, GATEWAY.service().mint().headers());
-        assertThat(callToken.statusCode()).as("a token minted for calls").isEqualTo(401);
-        assertThat(callToken.body()).contains("\"reason\":\"wrong_purpose\"");
-        HttpResponse<String> policyDataToken = get(path, GATEWAY.service().use(TestGateway.USE_POLICY_DATA).mint().headers());
-        assertThat(policyDataToken.body()).contains("\"reason\":\"wrong_purpose\"");
-        TestGateway.Minted once = GATEWAY.manifestToken().mint();
+        assertThat(get(path, Map.of()).statusCode()).as("no Authorization header").isEqualTo(200);
+        assertThat(get(path, Map.of("Authorization", "Bearer not-a-jwt")).statusCode()).as("a header that arrives is ignored").isEqualTo(200);
+        TestGateway.Minted once = GATEWAY.service().mint();
         assertThat(get(path, once.headers()).statusCode()).isEqualTo(200);
-        HttpResponse<String> replay = get(path, once.headers());
-        assertThat(replay.statusCode()).as("the jti is one-time for this purpose too").isEqualTo(401);
-        assertThat(replay.body()).contains("\"reason\":\"replayed_jti\"");
+        assertThat(get(path, once.headers()).statusCode()).as("a token is not read, so its jti is not consumed").isEqualTo(200);
     }
 
     @Test
     void theOldManifestRouteIsGone() throws Exception {
-        assertThat(get("/mcp-manifest", GATEWAY.manifestToken().mint().headers()).statusCode())
-                .as("a token of the right purpose for another path is refused before the path is looked at").isEqualTo(401);
+        assertThat(get("/mcp-manifest", Map.of()).statusCode()).as("every other path still needs a token").isEqualTo(401);
         assertThat(get("/mcp-manifest", GATEWAY.service().mint().headers()).statusCode())
                 .as("the service variant is for the well-known paths and the protocol only").isEqualTo(401);
         assertThat(get("/mcp-manifest", GATEWAY.user().mint().headers()).statusCode()).as("nothing serves it").isEqualTo(404);
