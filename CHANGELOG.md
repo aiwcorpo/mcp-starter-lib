@@ -4,7 +4,7 @@ Format: wersje SemVer; kolejność od najnowszej. Przed 3.0.0 wersje `alpha` i `
 `v3.0.0-beta-N`) nie gwarantują zgodności między sobą.
 Linia `mcp-platform` (3.x, 4.x) nie ma związku z wersją `mcp-contracts` (BOM zarządza obiema).
 
-## 4.0.0 - 2026-11-06
+## 4.0.0 - 2026-11-09
 
 Serwery dynamiczne: lista systemów, serwerów i typów zasobów przestaje być wiedzą startera. Polityki serwera leżą w jego jarze, dane
 administratora (mapowanie grup, dozwoleni klienci, nadpisania) serwer pobiera od gatewaya po mTLS, a zatwierdzenie polityk
