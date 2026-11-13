@@ -91,7 +91,7 @@ class ScopeGrantTest {
                 new AuditLogger("test.scope.grant", "mcp-servicedesk"), "mcp-servicedesk", "servicedesk", types, 200);
     }
 
-    private String call(List<String> groups, String ticketId) {
+    private String call(List<String> groups, Object ticketId) {
         CallerContext claims = new CallerContext("6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "sdreader", groups, "claude-code",
                 "get_ticket", "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", 0L, null);
         try (ResourceContext context = ResourceContext.open(claims, "get_ticket", Map.of("ticketId", ticketId))) {
@@ -116,6 +116,16 @@ class ScopeGrantTest {
         assertThat(call(List.of("mcp-servicedesk-read"), "T-1")).isEqualTo(DENIED);
         assertThat(call(List.of("mcp-servicedesk-read"), "T-404")).isEqualTo(DENIED);
         assertThat(asked).as("the system is not asked at all").isEmpty();
+    }
+
+    @Test
+    void aNumericIdentifierIsProbedLikeAString() {
+        tickets = Map.of("4711", ticket("4711", "42"));
+
+        String answer = call(List.of("mcp-servicedesk-read"), 4711L);
+
+        assertThat(answer).isEqualTo(DENIED);
+        assertThat(asked).as("refused by the probe, before the resolver").isEmpty();
     }
 
     @Test
