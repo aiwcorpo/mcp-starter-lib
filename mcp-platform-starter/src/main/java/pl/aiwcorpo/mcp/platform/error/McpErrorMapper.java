@@ -66,10 +66,13 @@ public class McpErrorMapper {
             .getSchema(SchemaLocation.of("classpath:mcp-contracts/schemas/tool-error.schema.json"));
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
-    /** Code-specific fields allowed by {@code tool-error.schema.json}. */
+    /**
+     * Code-specific fields allowed by {@code tool-error.schema.json}. For {@code confirmation_required} a server may send
+     * only the registerUrl shape (mcp-contracts CC-253): the pending shape is the gateway's own.
+     */
     private static final Map<String, Set<String>> DETAILS_BY_CODE = Map.of(
             "access_denied", Set.of("requiredEntitlements"),
-            "confirmation_required", Set.of("confirmationId", "confirmUrl"),
+            "confirmation_required", Set.of("registerUrl"),
             "credential_required", Set.of("system", "connectUrl"),
             "rate_limited", Set.of("retryAfterSeconds"),
             "step_up_required", Set.of("stepUpUrl"));

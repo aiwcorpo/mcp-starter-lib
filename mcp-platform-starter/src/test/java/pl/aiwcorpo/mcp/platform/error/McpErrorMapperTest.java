@@ -101,6 +101,18 @@ class McpErrorMapperTest {
     }
 
     @Test
+    void aConfirmationRequiredInTheRegisterShapeKeepsRegisterUrl() {
+        ToolErrorMapping register = ex -> Optional.of(new SafeError("confirmation_required", "Register an authenticator.",
+                Map.of("registerUrl", "https://portal.invalid/authenticator", "confirmUrl", "https://elsewhere.invalid")));
+
+        SafeError error = new McpErrorMapper(List.of(register), CONNECT).map(new RuntimeException());
+
+        assertThat(error.code()).isEqualTo("confirmation_required");
+        assertThat(error.details()).containsOnlyKeys("registerUrl");
+        json(error);
+    }
+
+    @Test
     void anEchoedMessageNeverCarriesTheCredential() {
         BackendCredential credential = new BackendCredential(BackendCredential.Scheme.BEARER, "jira-pat-0000secret",
                 BackendCredential.Type.USER_SECRET);
