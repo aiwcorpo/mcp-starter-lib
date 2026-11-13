@@ -1,5 +1,7 @@
 # mcp-platform: a library for MCP servers behind the gateway
 
+Part of [MCP Platform](https://github.com/aiwcorpo/mcp-platform), a self-hosted MCP gateway for companies. Documentation: [mcp.aiwcorpo.pl](https://mcp.aiwcorpo.pl/).
+
 The shared library for the MCP servers of the platform (`mcp-jira`, `mcp-confluence`, ...). Since 3.0 a server stands only behind
 the gateway: it does not sign users in, does not decide who may call a tool and does not ask for confirmations; the gateway does
 all of that. The library verifies the gateway's internal JWT, receives the credential for the target system, audits every call and
