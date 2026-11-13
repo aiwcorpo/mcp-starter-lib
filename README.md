@@ -481,6 +481,11 @@ A call reaches the system with every right of the token you send. Everything is 
 the `dev` profile accepts, and `dev` refuses to start in a container or under systemd, so this setup cannot leak into an
 installation.
 
+Run it only on a machine where you are the only user. The local gateway sends your `Authorization` value as `X-MCP-Credential`
+over plain HTTP to whatever process listens on the `--upstream` port (default `127.0.0.1:8080`) and does not check that the process
+is your server, also before your server has started and after it has stopped. On a host with other accounts (a shared build or jump
+host, a multi-user workstation, a CI runner) one of them can hold that port and receive your token. Such hosts are not supported.
+
 Outside `dev`, configuration errors appear one after another, because Spring checks them in different phases: first the HTTP server
 starts (a certificate or key that cannot be read), then `PlatformConfigurationGuard` (all violations at once in one message), and
 last the tools (a missing argument limit, `@ToolRisk`). A fixed TLS error can therefore expose the next one from a later phase (a
