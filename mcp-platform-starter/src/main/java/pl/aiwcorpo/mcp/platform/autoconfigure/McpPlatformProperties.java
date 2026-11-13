@@ -477,12 +477,26 @@ public class McpPlatformProperties {
          */
         private Duration idleTimeout = Duration.ofHours(1);
 
+        /**
+         * At this many open sessions an {@code initialize} gets 503 with {@code Retry-After}; 0 means no cap. Concurrent
+         * {@code initialize} requests can pass the check together, so the map may exceed it by that many.
+         */
+        private int maxCount = 0;
+
         public Duration getIdleTimeout() {
             return idleTimeout;
         }
 
         public void setIdleTimeout(Duration idleTimeout) {
             this.idleTimeout = idleTimeout;
+        }
+
+        public int getMaxCount() {
+            return maxCount;
+        }
+
+        public void setMaxCount(int maxCount) {
+            this.maxCount = maxCount;
         }
     }
 

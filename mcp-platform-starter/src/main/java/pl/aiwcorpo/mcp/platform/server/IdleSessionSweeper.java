@@ -7,6 +7,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,6 +33,11 @@ import pl.aiwcorpo.mcp.platform.auth.InternalJwtFilter;
  * caller without a token cannot keep a session alive. The transport has no public way to drop a session other than an HTTP
  * DELETE, hence the reflective access to its map; the Spring AI version is fixed by the platform BOM, and a version without
  * the field stops the start instead of leaking silently.
+ *
+ * <p>With {@code aiwcorpo.mcp.platform.session.max-count} above 0, an {@code initialize} POST to the MCP endpoint gets 503
+ * with {@code Retry-After} while the transport holds that many sessions, the answer the starter gives for a temporary
+ * refusal. It is decided from the body, not from {@code Mcp-Session-Id}: the transport opens a new session for every
+ * {@code initialize}, also one that carries a known or stale session id.
  */
 final class IdleSessionSweeper extends OncePerRequestFilter implements Ordered, SmartLifecycle {
 
@@ -41,20 +47,30 @@ final class IdleSessionSweeper extends OncePerRequestFilter implements Ordered, 
     static final int ORDER = InternalJwtFilter.ORDER + 2;
 
     private static final String SESSION_HEADER = "Mcp-Session-Id";
+    private static final String RETRY_AFTER_SECONDS = "5";
 
     private final Supplier<WebMvcStreamableServerTransportProvider> transport;
     private final long idleNanos;
     private final long periodMillis;
+    private final int maxCount;
+    private final String mcpEndpoint;
+    private volatile boolean full;
     private final Map<String, Long> lastSeen = new ConcurrentHashMap<>();
     private volatile Map<String, McpStreamableServerSession> sessions;
     private ScheduledExecutorService scheduler;
 
     /** @param transport the streamable transport, or {@code null} from the supplier in a context without one */
-    IdleSessionSweeper(Supplier<WebMvcStreamableServerTransportProvider> transport, Duration idleTimeout) {
+    IdleSessionSweeper(Supplier<WebMvcStreamableServerTransportProvider> transport, Duration idleTimeout, int maxCount,
+                       String mcpEndpoint) {
         if (idleTimeout == null || idleTimeout.isNegative() || idleTimeout.isZero()) {
             throw new IllegalArgumentException("aiwcorpo.mcp.platform.session.idle-timeout must be positive, got " + idleTimeout);
         }
+        if (maxCount < 0) {
+            throw new IllegalArgumentException("aiwcorpo.mcp.platform.session.max-count must be 0 (no cap) or positive, got " + maxCount);
+        }
         this.transport = transport;
+        this.maxCount = maxCount;
+        this.mcpEndpoint = mcpEndpoint;
         this.idleNanos = idleTimeout.toNanos();
         this.periodMillis = Math.clamp(idleTimeout.toMillis() / 4, 100L, 60_000L);
     }
@@ -72,7 +88,39 @@ final class IdleSessionSweeper extends OncePerRequestFilter implements Ordered, 
             // Only ids the sweep has already seen in the transport: a made-up id must not add an entry.
             lastSeen.computeIfPresent(id, (key, previous) -> System.nanoTime());
         }
+        if (atCap() && "POST".equals(request.getMethod()) && mcpEndpoint.equals(path(request))
+                && InternalJwtFilter.isInitialize(request)) {
+            if (!full) {
+                full = true;
+                LOG.warn("event=mcp_session_cap_reached max={}", maxCount);
+            }
+            response.setStatus(HttpServletResponse.SC_SERVICE_UNAVAILABLE);
+            response.setHeader("Retry-After", RETRY_AFTER_SECONDS);
+            response.setContentType("application/json");
+            response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+            response.getWriter().write("{\"error\":\"upstream_unavailable\","
+                    + "\"message\":\"The server holds its maximum number of MCP sessions. Try again later.\"}");
+            return;
+        }
         chain.doFilter(request, response);
+    }
+
+    private boolean atCap() {
+        if (maxCount == 0 || sessions == null) {
+            return false;
+        }
+        boolean atCap = sessions.size() >= maxCount;
+        if (!atCap) {
+            full = false;
+        }
+        return atCap;
+    }
+
+    /** The path the container resolved, as routing sees it. */
+    private static String path(HttpServletRequest request) {
+        String servletPath = request.getServletPath() == null ? "" : request.getServletPath();
+        String pathInfo = request.getPathInfo() == null ? "" : request.getPathInfo();
+        return servletPath + pathInfo;
     }
 
     void sweep() {

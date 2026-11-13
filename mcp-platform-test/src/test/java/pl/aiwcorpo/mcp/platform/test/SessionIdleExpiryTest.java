@@ -17,6 +17,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 import pl.aiwcorpo.mcp.platform.test.app.ProbeServer;
 
 /** Sessions the gateway drops without DELETE must not stay in the transport until the server restarts. */
@@ -46,6 +47,9 @@ class SessionIdleExpiryTest {
     @Autowired
     WebMvcStreamableServerTransportProvider transport;
 
+    @Autowired
+    McpPlatformProperties properties;
+
     @SuppressWarnings("unchecked")
     private Map<String, Object> sessions() throws Exception {
         Field field = WebMvcStreamableServerTransportProvider.class.getDeclaredField("sessions");
@@ -60,9 +64,11 @@ class SessionIdleExpiryTest {
         int before = sessions().size();
         List<String> opened = new ArrayList<>();
         for (int i = 0; i < 50; i++) {
-            opened.add(raw.openSession(GATEWAY));
+            String session = raw.openSession(GATEWAY);
+            // Checked one by one: opening 50 can take longer than the 1 s timeout, and the first ones may expire meanwhile.
+            assertThat(sessions().keySet()).contains(session);
+            opened.add(session);
         }
-        assertThat(sessions().keySet()).containsAll(opened);
 
         Thread.sleep(5_000);
 
@@ -82,5 +88,17 @@ class SessionIdleExpiryTest {
             assertThat(raw.post(TOOLS_LIST, GATEWAY.user().mint().headers(), session).statusCode()).isEqualTo(200);
         }
         assertThat(sessions().keySet()).contains(session);
+    }
+
+    @Test
+    @DisplayName("are not capped when session.max-count is not set")
+    void noCapByDefault() throws Exception {
+        assertThat(properties.getSession().getMaxCount()).isZero();
+        RawMcp raw = new RawMcp(port);
+        List<String> opened = new ArrayList<>();
+        for (int i = 0; i < 20; i++) {
+            opened.add(raw.openSession(GATEWAY));
+        }
+        assertThat(opened).doesNotHaveDuplicates().hasSize(20);
     }
 }
