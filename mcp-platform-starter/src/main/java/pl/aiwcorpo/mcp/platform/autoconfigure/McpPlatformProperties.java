@@ -61,6 +61,7 @@ public class McpPlatformProperties {
     private final Manifest manifest = new Manifest();
     private final Paging paging = new Paging();
     private final Capability capability = new Capability();
+    private final Session session = new Session();
 
     /** The backend system this server serves: {@code server-id} without the {@code mcp-} prefix. */
     public String system() {
@@ -467,8 +468,44 @@ public class McpPlatformProperties {
         }
     }
 
+    /** {@code aiwcorpo.mcp.platform.session.*}: MCP sessions of the streamable transport. */
+    public static class Session {
+
+        /**
+         * A session no request has used for this long is closed and its id answers 404. Above the gateway's upstream idle timeout
+         * (30 minutes), which forgets its side of the session without a DELETE.
+         */
+        private Duration idleTimeout = Duration.ofHours(1);
+
+        /**
+         * At this many open sessions an {@code initialize} gets 503 with {@code Retry-After}; 0 means no cap. Concurrent
+         * {@code initialize} requests can pass the check together, so the map may exceed it by that many.
+         */
+        private int maxCount = 0;
+
+        public Duration getIdleTimeout() {
+            return idleTimeout;
+        }
+
+        public void setIdleTimeout(Duration idleTimeout) {
+            this.idleTimeout = idleTimeout;
+        }
+
+        public int getMaxCount() {
+            return maxCount;
+        }
+
+        public void setMaxCount(int maxCount) {
+            this.maxCount = maxCount;
+        }
+    }
+
     public Paging getPaging() {
         return paging;
+    }
+
+    public Session getSession() {
+        return session;
     }
 
     public Capability getCapability() {
