@@ -221,7 +221,7 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
         if (reason.infrastructure()) {
             if (report) {
                 LOG.error("event=internal_jwt_unverifiable reason={} method={} path=\"{}\" kind={}", reason.code(),
-                        request.getMethod(), normalizedPath(request), kind);
+                        request.getMethod(), logSafe(normalizedPath(request)), kind);
                 audit(reason, "upstream_unavailable", start);
             }
             response.setHeader("Retry-After", "5");
@@ -231,13 +231,22 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
         }
         if (report) {
             LOG.warn("event=internal_jwt_rejected reason={} method={} path=\"{}\" kind={}", reason.code(),
-                    request.getMethod(), normalizedPath(request), kind);
+                    request.getMethod(), logSafe(normalizedPath(request)), kind);
             audit(reason, "unauthenticated", start);
         }
         response.setHeader("WWW-Authenticate",
                 reason == InternalJwtRejection.MISSING_TOKEN ? "Bearer" : "Bearer error=\"invalid_token\"");
         writeError(response, HttpServletResponse.SC_UNAUTHORIZED, "unauthenticated",
                 wellKnown(request) ? reason.code() : null, "The request was not authenticated by the platform gateway.");
+    }
+
+    /**
+     * The path as the container decoded it comes from a caller without a token: no quote or control character may close the field or
+     * start a new log line, and its length is bounded. The same rule as the log fields of {@code PolicyEngine}.
+     */
+    private static String logSafe(String path) {
+        String flat = path.replaceAll("[\\p{Cntrl}\"]", "'");
+        return flat.length() > 300 ? flat.substring(0, 300) : flat;
     }
 
     private void audit(InternalJwtRejection reason, String errorCode, long start) {
