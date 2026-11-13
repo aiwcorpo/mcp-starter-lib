@@ -36,7 +36,14 @@ import tools.jackson.databind.json.JsonMapper;
 class AuthenticationAuditVectorsTest {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
-    private static final int EXPECTED_VECTORS = 139;
+    /*
+     * The count of the 7.0.0 release (tag v7.0.0). mcp-contracts adds vectors between releases without a version
+     * bump, and a local build of its main installs them as 7.0.0 (main at dee98c4 has 140 after CC-250 added
+     * gateway-registry-hidden-characters.json). Such vectors are gateway events the starter does not emit; the
+     * schema test below still checks each one. A floor keeps the guard against a partial classpath scan without
+     * failing on either jar.
+     */
+    private static final int RELEASED_VECTORS = 139;
 
     /** The reasons CC-120 gives errorCode upstream_unavailable, written out so the test does not use the starter's own predicate. */
     private static final Set<String> UPSTREAM_UNAVAILABLE = Set.of("jwks_unavailable", "replay_store_unavailable");
@@ -67,7 +74,7 @@ class AuthenticationAuditVectorsTest {
 
     @Test
     void theWholeDirectoryIsRead() throws IOException {
-        assertThat(vectors()).hasSize(EXPECTED_VECTORS);
+        assertThat(vectors()).hasSizeGreaterThanOrEqualTo(RELEASED_VECTORS);
     }
 
     @ParameterizedTest(name = "{0}")
