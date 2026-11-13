@@ -217,6 +217,7 @@ aiwcorpo.mcp.platform:
     timeout: 10s
     interval: 5m                                          # interval between probes of a working system
     retry-interval: 30s                                   # interval when the system does not answer
+  session.idle-timeout: 1h                                # an MCP session unused this long is closed; its id then answers 404
 spring.ai.mcp.server.name: mcp-jira                      # protocol/type/endpoint are set by the starter
 ```
 
