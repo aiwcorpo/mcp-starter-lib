@@ -423,6 +423,10 @@ the server's `application*.yml` (the command line, system properties and environ
 | `server.ssl.enabled` | `false` | no certificate is generated and none is needed: the port speaks plain http on loopback |
 | `aiwcorpo.mcp.platform.internal-jwt.replay-store` | `memory` | no Redis, whatever `MCP_REDIS_HOST` says |
 
+In `dev` a request whose `Host` is not `127.0.0.1`, `localhost` or `[::1]`, or whose `Origin` is present and not one of them, gets
+`403` before the JWT check: a token signed with a published test key does not say who sent it, and the rule keeps other local
+accounts and web pages (DNS rebinding) out, as `LocalGateway` does on its port.
+
 `internal-jwt.allow-test-keys` is not forced: set `true` in the server's `application-dev.yml` when the local gateway
 (the dev stack or `TestGateway`) signs with test keys. `jwks-uri` stays required but is not fetched until a request with a JWT
 arrives.

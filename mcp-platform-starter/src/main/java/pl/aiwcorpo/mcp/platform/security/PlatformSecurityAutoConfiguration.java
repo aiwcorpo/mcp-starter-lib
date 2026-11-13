@@ -12,7 +12,7 @@ import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
 
 /**
  * HTTP baseline: configuration check at startup, {@link CredentialHeaderFilter} (backend credential, C3),
- * {@link SecurityHeadersFilter} and {@link CredentialTransportGuard}.
+ * {@link SecurityHeadersFilter}, {@link DevLocalPeerFilter} and {@link CredentialTransportGuard}.
  */
 @AutoConfiguration
 @EnableConfigurationProperties(McpPlatformProperties.class)
@@ -48,6 +48,13 @@ public class PlatformSecurityAutoConfiguration {
     @ConditionalOnMissingBean
     SecurityHeadersFilter securityHeadersFilter() {
         return new SecurityHeadersFilter();
+    }
+
+    /** Not {@code @ConditionalOnMissingBean}: like the loopback check, it is part of what keeps the dev relaxations local. */
+    @Bean
+    DevLocalPeerFilter devLocalPeerFilter(Environment environment) {
+        return new DevLocalPeerFilter(java.util.List.of(environment.getActiveProfiles())
+                .equals(java.util.List.of(PlatformConfigurationGuard.DEV_PROFILE)));
     }
 
     /** Eager for the same reason as the configuration guard; nothing depends on it. */
