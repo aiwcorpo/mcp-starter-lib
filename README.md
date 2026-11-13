@@ -565,15 +565,16 @@ the audit write: a mismatch is the C10 `internal_error`, a C8 event with `outcom
 audit an `authentication` event (`outcome=denied`, `reason` = the rejection code) with only the fields allowed in the contracts
 (CC-071, CC-120), without `sub`, `client`, `tool` from an unverified token. The reasons are the codes from the JWT vectors (`wrong_purpose`
 included) and, with `errorCode: upstream_unavailable` (a 503 response),
-`jwks_unavailable` and `replay_store_unavailable` (the `jti` store, Redis or the bounded memory when it is full). For requests whose token cannot be parsed (`missing_token`: a
-missing or empty header; `malformed`: a foreign scheme, not three segments, a JWT header that is not an object), the process
-writes events (and a log line) separately for each of the two reasons, at most
+`jwks_unavailable` and `replay_store_unavailable` (the `jti` store, Redis or the bounded memory when it is full). For requests refused without any key (`missing_token`: a
+missing or empty header; `malformed`: a foreign scheme, not three segments, a JWT header that is not an object; `alg_not_allowed` and
+`unknown_kid` from the unverified header; `bad_signature`, which needs only a `kid` of the public JWKS), the process
+writes events (and a log line) separately for each of these reasons, at most
 `aiwcorpo.mcp.platform.internal-jwt.missing-token-events-per-second` per second (default 20, minimum 1; the gateway has the same
 budget for `missing_token` alone); the excess reaches neither the audit nor the log, only the counter
 `mcp_audit_authentication_suppressed_total{component="server",reason}` (a name shared with the broker and the gateway, CC-143), and
 the request gets 401 as always. A request rejected with `400` (the body is not a single JSON object) or `413` (too large) before
 token verification is not an `authentication` event (CC-152). Other reasons are not limited, including a token with `crit` or a
-`typ` other than `JWT` in the header after `kid` resolution (reported as `alg_not_allowed`).
+`typ` other than `JWT` in the header after `kid` resolution (reported as `alg_not_allowed`, but outside its budget).
 
 The gateway removes `confirmation_code` from the arguments before calling the server (C11), so the server schema does not declare it.
 

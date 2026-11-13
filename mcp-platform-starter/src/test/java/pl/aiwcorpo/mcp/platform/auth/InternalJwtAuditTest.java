@@ -208,6 +208,30 @@ class InternalJwtAuditTest {
     }
 
     @Test
+    void refusalsDecidedFromTheUnverifiedHeaderShareTheCap() throws Exception {
+        AtomicLong nanos = new AtomicLong(1_000_000_000L);
+        SimpleMeterRegistry meters = new SimpleMeterRegistry();
+        InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock), new MissingTokenEventLimiter(3, nanos::get, meters));
+        String unknownKid = java.util.Base64.getUrlEncoder().withoutPadding()
+                .encodeToString("{\"alg\":\"ES256\",\"kid\":\"nope\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        for (String authorization : List.of("Bearer eyJhbGciOiJub25lIn0.e30.x", "Bearer " + unknownKid + ".e30.x")) {
+            for (int i = 0; i < 100; i++) {
+                MockHttpServletResponse response = new MockHttpServletResponse();
+                filter.doFilter(toolCall(authorization), response, new MockFilterChain());
+                assertThat(response.getStatus()).isEqualTo(401);
+            }
+        }
+
+        List<String> reasons = CapturedLogs.snapshot(lines).stream()
+                .map(line -> JSON.readTree(line.getFormattedMessage()).get("reason").asString()).toList();
+        assertThat(reasons).containsExactly("alg_not_allowed", "alg_not_allowed", "alg_not_allowed",
+                "unknown_kid", "unknown_kid", "unknown_kid");
+        assertThat(meters.get(MissingTokenEventLimiter.METRIC).tag("reason", "alg_not_allowed").counter().count()).isEqualTo(97.0);
+        assertThat(meters.get(MissingTokenEventLimiter.METRIC).tag("reason", "unknown_kid").counter().count()).isEqualTo(97.0);
+    }
+
+    @Test
     void theCapOfMissingTokensDoesNotHideOtherRefusals() throws Exception {
         InternalJwtFilter filter = filter(new InMemoryJtiReplayStore(clock),
                 new MissingTokenEventLimiter(1, () -> 1_000_000_000L, new SimpleMeterRegistry()));
@@ -215,15 +239,14 @@ class InternalJwtAuditTest {
         for (int i = 0; i < 5; i++) {
             filter.doFilter(toolCall(null), new MockHttpServletResponse(), new MockFilterChain());
         }
-        String broken = "Bearer " + token.substring(0, token.length() - 4) + "AAAA";
+        // A token with a valid signature, used again: replayed_jti needs a key of the gateway and is not capped.
         for (int i = 0; i < 5; i++) {
-            filter.doFilter(toolCall(broken), new MockHttpServletResponse(), new MockFilterChain());
+            filter.doFilter(toolCall("Bearer " + token), new MockHttpServletResponse(), new MockFilterChain());
         }
 
         List<String> reasons = CapturedLogs.snapshot(lines).stream()
                 .map(line -> JSON.readTree(line.getFormattedMessage()).get("reason").asString()).toList();
-        assertThat(reasons).containsExactly("missing_token", "bad_signature", "bad_signature", "bad_signature",
-                "bad_signature", "bad_signature");
+        assertThat(reasons).containsExactly("missing_token", "replayed_jti", "replayed_jti", "replayed_jti", "replayed_jti");
     }
 
     @Test
