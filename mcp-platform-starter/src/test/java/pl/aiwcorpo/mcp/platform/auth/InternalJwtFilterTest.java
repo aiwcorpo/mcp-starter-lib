@@ -227,6 +227,31 @@ class InternalJwtFilterTest {
     }
 
     @Test
+    void aDecodedPathCannotForgeOrSplitTheRejectionLogLine() throws Exception {
+        ch.qos.logback.classic.Logger filterLog =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(InternalJwtFilter.class);
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> warnings =
+                new ch.qos.logback.core.read.ListAppender<>();
+        warnings.start();
+        filterLog.addAppender(warnings);
+        try {
+            MockHttpServletRequest request = new MockHttpServletRequest("POST", "/mcp%22%20kind=tool_call%0aFORGED");
+            request.setServletPath("/mcp\" kind=tool_call\nFORGED");
+            MockHttpServletResponse response = new MockHttpServletResponse();
+
+            filter().doFilter(request, response, new MockFilterChain());
+
+            assertThat(response.getStatus()).isEqualTo(401);
+            String line = pl.aiwcorpo.mcp.platform.CapturedLogs.snapshot(warnings).stream()
+                    .map(ch.qos.logback.classic.spi.ILoggingEvent::getFormattedMessage)
+                    .filter(message -> message.contains("internal_jwt_rejected")).findFirst().orElseThrow();
+            assertThat(line).doesNotContain("\n").endsWith("path=\"/mcp' kind=tool_call'FORGED\" kind=-");
+        } finally {
+            filterLog.detachAppender(warnings);
+        }
+    }
+
+    @Test
     void twoAuthorizationHeadersAreRefused() throws Exception {
         MockHttpServletRequest request = toolCall(GET_ISSUE);
         request.addHeader("Authorization", "Bearer " + token);
