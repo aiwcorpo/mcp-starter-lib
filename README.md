@@ -166,6 +166,16 @@ meaning of the error: an expected outcome (a caller error, a missing credential,
 exception with a `ToolErrorMapping`) is INFO with the C10 code and the exception class, without a message or stack; an unavailable
 backend is WARN; ERROR is only for `internal_error`, which is what the server did not anticipate.
 
+**Codes with a link (mcp-contracts CC-253).** A server may report `step_up_required`, `credential_required` and
+`confirmation_required` (only the shape with `registerUrl`, never a pending call). The gateway builds every link of these codes
+from its own portal address and drops the server's: `stepUpUrl`, `connectUrl` and `registerUrl` from a server never reach the
+client, only its `message` does, and in `credential_required` the gateway also sets `system` to the system of the called tool. The
+schema still requires `connectUrl` and `stepUpUrl`, so `credential.connect-url` stays required and a `ToolErrorMapping` for
+`step_up_required` must put a valid URI in `stepUpUrl`. A `confirmation_required` with `confirmationId`, `description`,
+`previewUrl` or `expiresAt` reaches the client as `internal_error`, because only the gateway holds pending calls. The starter keeps
+only `confirmationId` and `confirmUrl` (not a field of the contract) of a `confirmation_required` and drops `registerUrl`, so no
+result matches the schema and today every `confirmation_required` a server maps is sent as `internal_error`.
+
 **Audit (C8).** One JSON line per event on the logger `pl.aiwcorpo.mcp.audit` (`component: server`, `componentId` = `server-id`,
 `requestId` = `rid`, `risk`, `credentialType`, `outcome`, `errorCode`, `latencyMs`, `argsLength`). Never values of arguments,
 results or credentials; everything outside printable ASCII is written as a JSON escape.
@@ -201,7 +211,7 @@ aiwcorpo.mcp.platform:
     max-request-body: 4MB
     unauthenticated-paths: [/actuator/health, /actuator/health/liveness, /actuator/health/readiness]
   credential:
-    connect-url: http://localhost:18090/connections?system={system}   # required, for credential_required
+    connect-url: http://localhost:18090/connections?system={system}   # required, for credential_required; the gateway replaces it
   manifest:                                               # the C6 manifest (GET /.well-known/mcp-manifest)
     version: 1.4.0                                        # required, the server's SemVer
     internal-url: https://mcp-jira.corp.test:8443/mcp     # optional and informational: the gateway connects to the address the administrator gave it
