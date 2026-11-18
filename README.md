@@ -115,7 +115,8 @@ profile. The order of checks and the rejection reasons are those of the contract
 
 A rejection is `401 {"error":"unauthenticated",...}` with `WWW-Authenticate: Bearer`; the reason is in the log
 (`event=internal_jwt_rejected reason=<code>`) and the audit event, and in the body only on the two well-known paths (`"reason":"wrong_purpose"` and the
-others of C2, as C14 documents), where the gateway pulls and pushes. An unavailable JWKS or Redis is `503 upstream_unavailable`, never a pass. The request
+others of C2, as C14 documents), where the gateway pulls and pushes. An unavailable JWKS or Redis is `503 upstream_unavailable`, never a pass. The checks
+that need only the token (up to the lifetime) run before the body is read; the one-time `jti` and the binding to the request run after it. The request
 body is read once (limit `max-request-body`, otherwise 413) and must be a single JSON object without repeated keys (otherwise 400),
 because the method and the tool name come from it: a JSON-RPC array or `{"name":"a","name":"b"}` could be read differently by the
 MCP transport.

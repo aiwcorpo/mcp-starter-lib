@@ -157,6 +157,14 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
             return;
         }
 
+        InternalJwtVerifier.CheckedToken checked;
+        try {
+            checked = verifier.check(token);
+        } catch (InternalJwtRejectedException ex) {
+            reject(request, response, ex.reason(), null, start);
+            return;
+        }
+
         CachedBodyRequest buffered;
         try {
             buffered = METHODS_WITHOUT_BODY.contains(request.getMethod())
@@ -179,7 +187,7 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
 
         CallerContext caller;
         try {
-            caller = verifier.verify(token, binding);
+            caller = verifier.bind(checked, binding);
         } catch (InternalJwtRejectedException ex) {
             reject(request, response, ex.reason(), binding, start);
             return;

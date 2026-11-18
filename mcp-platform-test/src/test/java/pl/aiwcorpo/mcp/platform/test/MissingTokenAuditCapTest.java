@@ -86,10 +86,11 @@ class MissingTokenAuditCapTest {
         lines.start();
         audit.addAppender(lines);
         double before = suppressed();
-        Map<String, String> headers = Map.of("Authorization", "Bearer a.b.c");
-
-        assertThat(new RawMcp(port).post("[{\"jsonrpc\":\"2.0\"}]", headers, null).statusCode()).as("a batch is not one object").isEqualTo(400);
-        assertThat(new RawMcp(port).post("{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"pad\":\"" + "x".repeat(4096) + "\"}", headers, null)
+        // A token that passes the checks made before the body is read; the body is then refused before the jti and the binding.
+        assertThat(new RawMcp(port).post("[{\"jsonrpc\":\"2.0\"}]", GATEWAY.user().mint().headers(), null).statusCode())
+                .as("a batch is not one object").isEqualTo(400);
+        assertThat(new RawMcp(port).post("{\"jsonrpc\":\"2.0\",\"method\":\"ping\",\"pad\":\"" + "x".repeat(4096) + "\"}",
+                        GATEWAY.user().mint().headers(), null)
                 .statusCode()).as("the body is over the limit").isEqualTo(413);
 
         assertThat(CapturedLogs.snapshot(lines).stream().filter(line -> line.getFormattedMessage().contains("\"event\":\"authentication\"")))

@@ -100,6 +100,18 @@ public final class InternalJwtVerifier {
     }
 
     public CallerContext verify(String token, RequestBinding binding) throws InternalJwtRejectedException {
+        return bind(check(token), binding);
+    }
+
+    /** A token that passed every check that needs nothing of the request; its {@code jti} is not recorded yet. */
+    record CheckedToken(JsonNode claims, long exp, long skew, boolean classified) {
+    }
+
+    /**
+     * The checks up to and including the lifetime, which need only the token. The filter runs them before it reads the body, so
+     * an unusable token costs no body buffering or parsing.
+     */
+    CheckedToken check(String token) throws InternalJwtRejectedException {
         if (token == null || token.isBlank()) {
             throw reject(InternalJwtRejection.MISSING_TOKEN);
         }
@@ -175,7 +187,23 @@ public final class InternalJwtVerifier {
         if (exp < iat) {
             throw reject(InternalJwtRejection.INVALID_CLAIMS);
         }
+        return new CheckedToken(claims, exp, skew, classified);
+    }
 
+    /**
+     * The checks against the request: the one-time {@code jti}, then purpose, variant, {@code rid} and tool. Called after the body was
+     * classified, so a token is not used up by a request that is then refused for its body.
+     */
+    CallerContext bind(CheckedToken checked, RequestBinding binding) throws InternalJwtRejectedException {
+        JsonNode claims = checked.claims();
+        long exp = checked.exp();
+        long skew = checked.skew();
+        boolean classified = checked.classified();
+        // The body was read since check(): a token that expired meanwhile must not be accepted, nor its jti recorded after the
+        // retention it asks for has ended.
+        if (clock.instant().getEpochSecond() > exp + skew) {
+            throw reject(InternalJwtRejection.EXPIRED);
+        }
         String jti = claims.get("jti").asString();
         boolean firstUse;
         try {
