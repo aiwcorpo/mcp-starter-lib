@@ -32,9 +32,9 @@ import pl.aiwcorpo.mcp.platform.observability.CorrelationIdFilter;
  * <p>A refused request leaves an {@code authentication} audit event (C8, CC-071, CC-120): the reasons the gateway
  * knows for a token of its own (a token of the wrong purpose is {@code wrong_purpose}) and, for the two infrastructure
  * failures, {@code jwks_unavailable} and {@code replay_store_unavailable} with {@code upstream_unavailable}.
- * Refusals for {@code missing_token} and {@code malformed} (a token that could not be parsed) have a per-process budget
- * each for the audit event and the log line ({@link MissingTokenEventLimiter}); the rest is not capped, including a token
- * whose header is refused after its {@code kid} resolved.
+ * Refusals that need no key ({@code missing_token}, {@code malformed}, {@code alg_not_allowed}, {@code unknown_kid},
+ * {@code bad_signature}) have a per-process budget each for the audit event and the log line ({@link MissingTokenEventLimiter});
+ * the rest is not capped.
  *
  * <p>Paths in {@code unauthenticatedPaths} (by default the health endpoints) and {@code GET /.well-known/mcp-manifest} (C14: the
  * manifest is served without authentication, an {@code Authorization} header that arrives is ignored) are passed through untouched.
