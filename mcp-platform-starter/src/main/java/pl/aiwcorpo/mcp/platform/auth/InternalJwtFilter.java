@@ -32,9 +32,9 @@ import pl.aiwcorpo.mcp.platform.observability.CorrelationIdFilter;
  * <p>A refused request leaves an {@code authentication} audit event (C8, CC-071, CC-120): the reasons the gateway
  * knows for a token of its own (a token of the wrong purpose is {@code wrong_purpose}) and, for the two infrastructure
  * failures, {@code jwks_unavailable} and {@code replay_store_unavailable} with {@code upstream_unavailable}.
- * Refusals for {@code missing_token} and {@code malformed} (a token that could not be parsed) have a per-process budget
- * each for the audit event and the log line ({@link MissingTokenEventLimiter}); the rest is not capped, including a token
- * whose header is refused after its {@code kid} resolved.
+ * Refusals that need no key ({@code missing_token}, {@code malformed}, {@code alg_not_allowed}, {@code unknown_kid},
+ * {@code bad_signature}) have a per-process budget each for the audit event and the log line ({@link MissingTokenEventLimiter});
+ * the rest is not capped.
  *
  * <p>Paths in {@code unauthenticatedPaths} (by default the health endpoints) and {@code GET /.well-known/mcp-manifest} (C14: the
  * manifest is served without authentication, an {@code Authorization} header that arrives is ignored) are passed through untouched.
@@ -221,7 +221,7 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
         if (reason.infrastructure()) {
             if (report) {
                 LOG.error("event=internal_jwt_unverifiable reason={} method={} path=\"{}\" kind={}", reason.code(),
-                        request.getMethod(), normalizedPath(request), kind);
+                        request.getMethod(), logSafe(normalizedPath(request)), kind);
                 audit(reason, "upstream_unavailable", start);
             }
             response.setHeader("Retry-After", "5");
@@ -231,13 +231,22 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
         }
         if (report) {
             LOG.warn("event=internal_jwt_rejected reason={} method={} path=\"{}\" kind={}", reason.code(),
-                    request.getMethod(), normalizedPath(request), kind);
+                    request.getMethod(), logSafe(normalizedPath(request)), kind);
             audit(reason, "unauthenticated", start);
         }
         response.setHeader("WWW-Authenticate",
                 reason == InternalJwtRejection.MISSING_TOKEN ? "Bearer" : "Bearer error=\"invalid_token\"");
         writeError(response, HttpServletResponse.SC_UNAUTHORIZED, "unauthenticated",
                 wellKnown(request) ? reason.code() : null, "The request was not authenticated by the platform gateway.");
+    }
+
+    /**
+     * The path as the container decoded it comes from a caller without a token: no quote or control character may close the field or
+     * start a new log line, and its length is bounded. The same rule as the log fields of {@code PolicyEngine}.
+     */
+    private static String logSafe(String path) {
+        String flat = path.replaceAll("[\\p{Cntrl}\"]", "'");
+        return flat.length() > 300 ? flat.substring(0, 300) : flat;
     }
 
     private void audit(InternalJwtRejection reason, String errorCode, long start) {

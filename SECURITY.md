@@ -19,6 +19,8 @@ Out of scope:
 - `mcp-platform-test` is test support. It publishes private test keys on purpose (they come from `mcp-contracts`,
   `test-vectors`) and must never be on a production classpath. A deployment that accepts a key named `test-*` or `dev-`
   is a misconfiguration of that deployment; the starter refuses them outside the `dev` and `devstack` profiles.
+  Its `LocalGateway` is supported only on a single-user machine: it forwards the developer's backend credential to
+  whatever process listens on the upstream port (README, "One server with your own token").
 - The `dev` and `devstack` profiles relax TLS, mTLS and the replay store by design. They are refused in a container,
   a Kubernetes pod and under systemd unless the documented acknowledgements are set; running them elsewhere is the
   operator's decision.

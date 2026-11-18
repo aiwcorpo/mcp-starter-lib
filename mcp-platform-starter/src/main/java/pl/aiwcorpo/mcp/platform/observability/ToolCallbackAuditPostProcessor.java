@@ -70,6 +70,10 @@ public final class ToolCallbackAuditPostProcessor implements BeanPostProcessor {
         if (bean instanceof ToolCallback callback && !(bean instanceof AuditingToolCallback)) {
             return decorate(callback);
         }
+        // Spring AI also serves the elements of List<ToolCallback> beans, ahead of provider callbacks of the same name.
+        if (bean instanceof List<?> list && !list.isEmpty() && list.stream().allMatch(ToolCallback.class::isInstance)) {
+            return list.stream().map(element -> decorate((ToolCallback) element)).toList();
+        }
         return bean;
     }
 

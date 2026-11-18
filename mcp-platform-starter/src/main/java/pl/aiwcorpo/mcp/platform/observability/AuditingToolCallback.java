@@ -7,6 +7,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.UnaryOperator;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
@@ -61,6 +63,8 @@ import tools.jackson.databind.json.JsonMapper;
  * Registering the tool here also validates its risk flag, so an unflagged tool stops the server at startup.
  */
 public final class AuditingToolCallback implements ToolCallback {
+
+    private static final Logger LOG = LoggerFactory.getLogger(AuditingToolCallback.class);
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
@@ -170,7 +174,12 @@ public final class AuditingToolCallback implements ToolCallback {
             return result;
         } catch (Exception ex) {
             McpErrorMapper.SafeError error = errorMapper.map(ex);
-            audit(caller, name, toolInput, error.code(), start);
+            try {
+                audit(caller, name, toolInput, error.code(), start);
+            } catch (RuntimeException auditFailed) {
+                // The caller still gets the closed C10 code, never the audit writer's exception.
+                LOG.error("event=tool_call_audit_failed tool={} exception={}", name, auditFailed.getClass().getName());
+            }
             throw new SanitizedToolException(error);
         }
     }

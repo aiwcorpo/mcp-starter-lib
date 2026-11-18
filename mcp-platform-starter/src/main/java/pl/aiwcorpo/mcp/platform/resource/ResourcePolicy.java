@@ -346,15 +346,30 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         }
     }
 
-    /** The string values of a reference argument: a string, or the strings of a list; anything else is left to the later checks. */
+    /**
+     * The identifiers of a reference argument, enumerated as the entity builder does for the full check ({@code argumentIds}): a string or an
+     * integral number, or every such element of a list. A value the probe skipped would reach the resolver unprobed; anything else is
+     * refused by the full check as {@code invalid_argument}.
+     */
     private static List<String> values(Object argument) {
-        if (argument instanceof CharSequence text) {
-            return List.of(text.toString());
-        }
         if (argument instanceof java.util.Collection<?> items) {
-            return items.stream().filter(CharSequence.class::isInstance).map(Object::toString).limit(100).toList();
+            return items.stream().map(ResourcePolicy::scalarId).flatMap(Optional::stream).toList();
         }
-        return List.of();
+        return scalarId(argument).stream().toList();
+    }
+
+    private static Optional<String> scalarId(Object value) {
+        if (value instanceof CharSequence text) {
+            return Optional.of(text.toString());
+        }
+        if (value instanceof Number number) {
+            try {
+                return Optional.of(new java.math.BigDecimal(number.toString()).toBigIntegerExact().toString());
+            } catch (ArithmeticException | NumberFormatException notIntegral) {
+                return Optional.empty();
+            }
+        }
+        return Optional.empty();
     }
 
     /**

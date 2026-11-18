@@ -267,7 +267,8 @@ public class McpPlatformProperties {
 
         /**
          * Portal page where the user connects an account, with {@code {system}} as a placeholder. Sent in
-         * {@code credential_required} (C10). Required.
+         * {@code credential_required} (C10), where the schema requires a link; the gateway replaces it with its own
+         * (mcp-contracts CC-253), so the client never sees this value. Required.
          */
         private String connectUrl;
 

@@ -166,6 +166,16 @@ meaning of the error: an expected outcome (a caller error, a missing credential,
 exception with a `ToolErrorMapping`) is INFO with the C10 code and the exception class, without a message or stack; an unavailable
 backend is WARN; ERROR is only for `internal_error`, which is what the server did not anticipate.
 
+**Codes with a link (mcp-contracts CC-253).** A server may report `step_up_required`, `credential_required` and
+`confirmation_required` (only the shape with `registerUrl`, never a pending call). The gateway builds every link of these codes
+from its own portal address and drops the server's: `stepUpUrl`, `connectUrl` and `registerUrl` from a server never reach the
+client, only its `message` does, and in `credential_required` the gateway also sets `system` to the system of the called tool. The
+schema still requires `connectUrl` and `stepUpUrl`, so `credential.connect-url` stays required and a `ToolErrorMapping` for
+`step_up_required` must put a valid URI in `stepUpUrl`. A `confirmation_required` with `confirmationId`, `description`,
+`previewUrl` or `expiresAt` reaches the client as `internal_error`, because only the gateway holds pending calls. The starter keeps
+only `confirmationId` and `confirmUrl` (not a field of the contract) of a `confirmation_required` and drops `registerUrl`, so no
+result matches the schema and today every `confirmation_required` a server maps is sent as `internal_error`.
+
 **Audit (C8).** One JSON line per event on the logger `pl.aiwcorpo.mcp.audit` (`component: server`, `componentId` = `server-id`,
 `requestId` = `rid`, `risk`, `credentialType`, `outcome`, `errorCode`, `latencyMs`, `argsLength`). Never values of arguments,
 results or credentials; everything outside printable ASCII is written as a JSON escape.
@@ -201,7 +211,7 @@ aiwcorpo.mcp.platform:
     max-request-body: 4MB
     unauthenticated-paths: [/actuator/health, /actuator/health/liveness, /actuator/health/readiness]
   credential:
-    connect-url: http://localhost:18090/connections?system={system}   # required, for credential_required
+    connect-url: http://localhost:18090/connections?system={system}   # required, for credential_required; the gateway replaces it
   manifest:                                               # the C6 manifest (GET /.well-known/mcp-manifest)
     version: 1.4.0                                        # required, the server's SemVer
     internal-url: https://mcp-jira.corp.test:8443/mcp     # optional and informational: the gateway connects to the address the administrator gave it
@@ -423,6 +433,10 @@ the server's `application*.yml` (the command line, system properties and environ
 | `server.ssl.enabled` | `false` | no certificate is generated and none is needed: the port speaks plain http on loopback |
 | `aiwcorpo.mcp.platform.internal-jwt.replay-store` | `memory` | no Redis, whatever `MCP_REDIS_HOST` says |
 
+In `dev` a request whose `Host` is not `127.0.0.1`, `localhost` or `[::1]`, or whose `Origin` is present and not one of them, gets
+`403` before the JWT check: a token signed with a published test key does not say who sent it, and the rule keeps other local
+accounts and web pages (DNS rebinding) out, as `LocalGateway` does on its port.
+
 `internal-jwt.allow-test-keys` is not forced: set `true` in the server's `application-dev.yml` when the local gateway
 (the dev stack or `TestGateway`) signs with test keys. `jwks-uri` stays required but is not fetched until a request with a JWT
 arrives.
@@ -480,6 +494,11 @@ What it does not do: no login, no tool approval, no confirmation code for `DESTR
 A call reaches the system with every right of the token you send. Everything is signed with the published test keys, which only
 the `dev` profile accepts, and `dev` refuses to start in a container or under systemd, so this setup cannot leak into an
 installation.
+
+Run it only on a machine where you are the only user. The local gateway sends your `Authorization` value as `X-MCP-Credential`
+over plain HTTP to whatever process listens on the `--upstream` port (default `127.0.0.1:8080`) and does not check that the process
+is your server, also before your server has started and after it has stopped. On a host with other accounts (a shared build or jump
+host, a multi-user workstation, a CI runner) one of them can hold that port and receive your token. Such hosts are not supported.
 
 Outside `dev`, configuration errors appear one after another, because Spring checks them in different phases: first the HTTP server
 starts (a certificate or key that cannot be read), then `PlatformConfigurationGuard` (all violations at once in one message), and
@@ -565,15 +584,16 @@ the audit write: a mismatch is the C10 `internal_error`, a C8 event with `outcom
 audit an `authentication` event (`outcome=denied`, `reason` = the rejection code) with only the fields allowed in the contracts
 (CC-071, CC-120), without `sub`, `client`, `tool` from an unverified token. The reasons are the codes from the JWT vectors (`wrong_purpose`
 included) and, with `errorCode: upstream_unavailable` (a 503 response),
-`jwks_unavailable` and `replay_store_unavailable` (the `jti` store, Redis or the bounded memory when it is full). For requests whose token cannot be parsed (`missing_token`: a
-missing or empty header; `malformed`: a foreign scheme, not three segments, a JWT header that is not an object), the process
-writes events (and a log line) separately for each of the two reasons, at most
+`jwks_unavailable` and `replay_store_unavailable` (the `jti` store, Redis or the bounded memory when it is full). For requests refused without any key (`missing_token`: a
+missing or empty header; `malformed`: a foreign scheme, not three segments, a JWT header that is not an object; `alg_not_allowed` and
+`unknown_kid` from the unverified header; `bad_signature`, which needs only a `kid` of the public JWKS), the process
+writes events (and a log line) separately for each of these reasons, at most
 `aiwcorpo.mcp.platform.internal-jwt.missing-token-events-per-second` per second (default 20, minimum 1; the gateway has the same
 budget for `missing_token` alone); the excess reaches neither the audit nor the log, only the counter
 `mcp_audit_authentication_suppressed_total{component="server",reason}` (a name shared with the broker and the gateway, CC-143), and
 the request gets 401 as always. A request rejected with `400` (the body is not a single JSON object) or `413` (too large) before
 token verification is not an `authentication` event (CC-152). Other reasons are not limited, including a token with `crit` or a
-`typ` other than `JWT` in the header after `kid` resolution (reported as `alg_not_allowed`).
+`typ` other than `JWT` in the header after `kid` resolution (reported as `alg_not_allowed`, but outside its budget).
 
 The gateway removes `confirmation_code` from the arguments before calling the server (C11), so the server schema does not declare it.
 

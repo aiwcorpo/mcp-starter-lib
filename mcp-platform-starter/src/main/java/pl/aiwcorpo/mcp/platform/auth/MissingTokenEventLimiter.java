@@ -6,14 +6,16 @@ import java.util.Map;
 import java.util.function.LongSupplier;
 
 /**
- * Per-process caps on the refusals of requests whose token could not even be parsed: {@code missing_token} (no or empty
- * header) and {@code malformed} (a foreign {@code Authorization} scheme, a string that is not three segments, a header
- * that is not a JSON object). Both cost the caller nothing, so without a cap anyone who reaches the port could fill the
- * audit stream and the application log (CC-120). Each reason has a budget of its own: a flood of one must not use up the
- * other. What is over a budget is only counted ({@value #METRIC}, tags {@code component=server} and {@code reason}), neither audited nor logged.
+ * Per-process caps on the refusals that can be caused without any key: {@code missing_token} (no or empty header),
+ * {@code malformed} (a foreign {@code Authorization} scheme, a string that is not three segments, a header that is not a
+ * JSON object), {@code alg_not_allowed} and {@code unknown_kid} (decided from the unverified header) and {@code bad_signature}
+ * (needs only a {@code kid} from the public JWKS). They cost the caller nothing, so without a cap anyone who reaches the port
+ * could fill the audit stream and the application log (CC-120); the gateway caps the same five. Each reason has a budget of its
+ * own: a flood of one must not use up another. What is over a budget is only counted ({@value #METRIC}, tags
+ * {@code component=server} and {@code reason}), neither audited nor logged.
  *
- * <p>Nothing else is capped, in particular not a token that got past parsing and the key lookup (a header with
- * {@code crit}, a wrong signature, claims): that takes effort and is an attempt, not noise.
+ * <p>Nothing else is capped, in particular not a token with a valid signature (claims, replay, binding): that needs a key of the
+ * gateway and is an attempt, not noise.
  */
 public final class MissingTokenEventLimiter {
 
@@ -40,7 +42,9 @@ public final class MissingTokenEventLimiter {
 
     /** Whether a refusal for this reason is capped at all. */
     public static boolean covers(InternalJwtRejection reason) {
-        return reason == InternalJwtRejection.MISSING_TOKEN || reason == InternalJwtRejection.MALFORMED;
+        return reason == InternalJwtRejection.MISSING_TOKEN || reason == InternalJwtRejection.MALFORMED
+                || reason == InternalJwtRejection.ALG_NOT_ALLOWED || reason == InternalJwtRejection.UNKNOWN_KID
+                || reason == InternalJwtRejection.BAD_SIGNATURE;
     }
 
     /** True when the event may be written; false (and counted under {@code reason}) when this second's budget is spent. */

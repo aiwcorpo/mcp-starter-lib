@@ -2,7 +2,8 @@ package pl.aiwcorpo.mcp.platform.security;
 
 /**
  * The tool needs the user's credential for {@code system} and the request carries none. Reaches the client
- * as {@code credential_required} (C10) with the portal link where the user connects the account.
+ * as {@code credential_required} (C10) with the portal link where the user connects the account; the gateway
+ * builds that link and the {@code system} itself (mcp-contracts CC-253).
  */
 public class CredentialRequiredException extends RuntimeException {
 

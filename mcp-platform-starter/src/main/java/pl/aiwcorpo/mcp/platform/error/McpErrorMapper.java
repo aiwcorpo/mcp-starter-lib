@@ -44,6 +44,19 @@ import tools.jackson.databind.json.JsonMapper;
  * the message is cut to 500 characters; a result that still does not match {@code tool-error.schema.json}
  * (e.g. a required field missing) becomes {@code internal_error}. The current request's credential is removed from every message.
  *
+ * <h2>Codes with a link (mcp-contracts CC-253)</h2>
+ * A server may report {@code step_up_required}, {@code credential_required} and {@code confirmation_required}, the last
+ * one only in the shape with {@code registerUrl}. The gateway builds every link of these codes from its own portal
+ * address and drops the server's ({@code stepUpUrl}, {@code connectUrl}, {@code registerUrl}); for
+ * {@code credential_required} it also sets {@code system} to the system of the called tool. Only the server's
+ * {@code message} reaches the client. The schema still requires {@code connectUrl} and {@code stepUpUrl}, so the server
+ * sends a valid URI there, but not one the user sees. A {@code confirmation_required} that names a pending call
+ * ({@code confirmationId}, {@code description}, {@code previewUrl}, {@code expiresAt}) reaches the client as
+ * {@code internal_error}: only the gateway holds pending calls. This mapper keeps only {@code confirmationId} and
+ * {@code confirmUrl} (not a field of the contract) of a {@code confirmation_required} and drops {@code registerUrl}, so
+ * no result matches the schema and every {@code confirmation_required} a server maps leaves here as
+ * {@code internal_error}.
+ *
  * <h2>What the log gets</h2>
  * One {@code event=tool_failed} line per failure, at INFO for an expected outcome (C10 code and exception class
  * only), WARN for an unavailable backend and ERROR for {@code internal_error}; the last two carry the exception
@@ -98,7 +111,8 @@ public class McpErrorMapper {
 
     /**
      * @param connectUrlTemplate portal URL for {@code credential_required}, {@code {system}} replaced by the
-     *                           system id; {@code null} leaves {@code connectUrl} out
+     *                           system id; {@code null} leaves {@code connectUrl} out (then the result fails the schema).
+     *                           The gateway replaces the link with its own (CC-253)
      */
     public McpErrorMapper(List<ToolErrorMapping> mappings, String connectUrlTemplate) {
         this.mappings = List.copyOf(mappings);
@@ -146,8 +160,16 @@ public class McpErrorMapper {
             return Optional.of(new SafeError(ToolErrorCode.INTERNAL_ERROR.code(), GENERIC));
         }
         for (ToolErrorMapping mapping : mappings) {
-            Optional<SafeError> mapped = mapping.map(ex);
-            if (mapped.isPresent()) {
+            Optional<SafeError> mapped;
+            try {
+                mapped = mapping.map(ex);
+            } catch (RuntimeException failed) {
+                // Server code on the error path: its failure must not escape unmapped; the built-in rules still decide.
+                LOG.warn("event=tool_error_mapping_failed mapping={} exception={}", mapping.getClass().getName(),
+                        failed.getClass().getName());
+                continue;
+            }
+            if (mapped != null && mapped.isPresent()) {
                 return mapped;
             }
         }
