@@ -102,6 +102,43 @@ class AuditingToolCallbackTest {
     }
 
     @Test
+    void aServerMappingThatThrowsOrReturnsNullFallsBackToTheBuiltInRules() {
+        McpErrorMapper throwing = new McpErrorMapper(List.of(ex -> {
+            throw new IllegalStateException("body: dummy-backend-text");
+        }), null);
+        McpErrorMapper returningNull = new McpErrorMapper(List.of(ex -> null), null);
+        for (McpErrorMapper mapper : List.of(throwing, returningNull)) {
+            int before = CapturedLogs.snapshot(auditLines).size();
+            ToolCallback callback = new AuditingToolCallback(new Tool("get_issue", () -> {
+                throw new RuntimeException("x");
+            }), audit, mapper, new ToolRiskRegistry(ToolRiskRegistry.Unclassified.FAIL), List.of());
+
+            assertThatThrownBy(() -> TestCallers.as(TestCallers.user("get_issue"), () -> callback.call("{}")))
+                    .isInstanceOf(SanitizedToolException.class).hasMessageContaining("\"error\":\"internal_error\"")
+                    .satisfies(ex -> assertThat(ex.getMessage()).doesNotContain("dummy-backend-text"));
+            assertThat(CapturedLogs.snapshot(auditLines)).hasSize(before + 1);
+            assertThat(lastAudit()).contains("\"outcome\":\"error\"");
+        }
+    }
+
+    @Test
+    void anAuditWriterThatThrowsDoesNotReplaceTheSanitizedError() {
+        AuditLogger failing = new AuditLogger("test.audit.callback", "mcp-jira") {
+            @Override
+            public void toolCall(pl.aiwcorpo.mcp.platform.auth.CallerContext caller, String tool, RiskLevel risk, String credentialType,
+                                 String outcome, String errorCode, long latencyMs, long argsLength) {
+                throw new IllegalStateException("audit sink down");
+            }
+        };
+        ToolCallback callback = new AuditingToolCallback(new Tool("get_issue", () -> {
+            throw new RuntimeException("x");
+        }), failing, errors, new ToolRiskRegistry(ToolRiskRegistry.Unclassified.FAIL), List.of());
+
+        assertThatThrownBy(() -> TestCallers.as(TestCallers.user("get_issue"), () -> callback.call("{}")))
+                .isInstanceOf(SanitizedToolException.class).hasMessageContaining("\"error\":\"internal_error\"");
+    }
+
+    @Test
     void aBoundCallRunsAndIsAudited() {
         ToolCallback callback = decorate(() -> "{\"key\":\"ABC-1\"}");
 

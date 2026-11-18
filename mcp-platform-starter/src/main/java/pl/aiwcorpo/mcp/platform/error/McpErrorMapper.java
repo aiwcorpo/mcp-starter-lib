@@ -143,8 +143,16 @@ public class McpErrorMapper {
             return Optional.of(new SafeError(ToolErrorCode.INTERNAL_ERROR.code(), GENERIC));
         }
         for (ToolErrorMapping mapping : mappings) {
-            Optional<SafeError> mapped = mapping.map(ex);
-            if (mapped.isPresent()) {
+            Optional<SafeError> mapped;
+            try {
+                mapped = mapping.map(ex);
+            } catch (RuntimeException failed) {
+                // Server code on the error path: its failure must not escape unmapped; the built-in rules still decide.
+                LOG.warn("event=tool_error_mapping_failed mapping={} exception={}", mapping.getClass().getName(),
+                        failed.getClass().getName());
+                continue;
+            }
+            if (mapped != null && mapped.isPresent()) {
                 return mapped;
             }
         }
