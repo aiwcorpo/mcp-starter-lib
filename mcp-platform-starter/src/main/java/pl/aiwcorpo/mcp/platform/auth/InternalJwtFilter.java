@@ -2,6 +2,8 @@ package pl.aiwcorpo.mcp.platform.auth;
 
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.ServletRequest;
+import jakarta.servlet.ServletRequestWrapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -16,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
 import org.springframework.web.filter.OncePerRequestFilter;
+import tools.jackson.databind.JsonNode;
 import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
 import pl.aiwcorpo.mcp.platform.observability.CorrelationIdFilter;
 
@@ -112,6 +115,24 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
         }
         return unauthenticatedPaths.contains(normalized)
                 || ("GET".equals(request.getMethod()) && McpRequestClassifier.MANIFEST_PATH.equals(normalized));
+    }
+
+    /**
+     * Whether a request this filter let through is a JSON-RPC {@code initialize}, read from the body it buffered. The
+     * transport opens a session for every {@code initialize}, with or without an {@code Mcp-Session-Id}. A request whose
+     * body this filter did not buffer counts as one, so a caller that limits sessions errs on the side of refusing.
+     */
+    public static boolean isInitialize(ServletRequest request) {
+        ServletRequest current = request;
+        while (!(current instanceof CachedBodyRequest) && current instanceof ServletRequestWrapper wrapper) {
+            current = wrapper.getRequest();
+        }
+        if (!(current instanceof CachedBodyRequest buffered)) {
+            return true;
+        }
+        JsonNode message = StrictJson.parse(buffered.body());
+        JsonNode method = message == null ? null : message.get("method");
+        return method != null && method.isString() && "initialize".equals(method.asString());
     }
 
     /** The path the container resolved: servlet path plus path info, as routing sees it. */
