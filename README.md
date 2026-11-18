@@ -173,8 +173,7 @@ client, only its `message` does, and in `credential_required` the gateway also s
 schema still requires `connectUrl` and `stepUpUrl`, so `credential.connect-url` stays required and a `ToolErrorMapping` for
 `step_up_required` must put a valid URI in `stepUpUrl`. A `confirmation_required` with `confirmationId`, `description`,
 `previewUrl` or `expiresAt` reaches the client as `internal_error`, because only the gateway holds pending calls. The starter keeps
-only `confirmationId` and `confirmUrl` (not a field of the contract) of a `confirmation_required` and drops `registerUrl`, so no
-result matches the schema and today every `confirmation_required` a server maps is sent as `internal_error`.
+only `registerUrl` of a `confirmation_required`, so only the registerUrl shape passes, and the gateway replaces the link.
 
 **Audit (C8).** One JSON line per event on the logger `pl.aiwcorpo.mcp.audit` (`component: server`, `componentId` = `server-id`,
 `requestId` = `rid`, `risk`, `credentialType`, `outcome`, `errorCode`, `latencyMs`, `argsLength`). Never values of arguments,
