@@ -31,7 +31,7 @@ import tools.jackson.databind.JsonNode;
  *   <li>claims valid against {@code internal-jwt.schema.json}</li>
  *   <li>{@code iss}, {@code aud == serverId}, with no exception</li>
  *   <li>{@code exp} and {@code iat} within the clock skew, {@code exp - iat} at most the maximum lifetime</li>
- *   <li>{@code jti} not seen before (recorded until {@code exp} + skew; one-time for every purpose)</li>
+ *   <li>{@code jti} not seen before (recorded until the end of the second {@code exp} + skew; one-time for every purpose)</li>
  *   <li>{@code use} equal to the purpose of the endpoint ({@code wrong_purpose}), before anything about the variant</li>
  *   <li>service variant only for protocol requests; {@code rid == X-Request-Id}</li>
  *   <li>{@code tool} present exactly for {@code tools/call} and equal to {@code params.name}</li>
@@ -207,7 +207,8 @@ public final class InternalJwtVerifier {
         String jti = claims.get("jti").asString();
         boolean firstUse;
         try {
-            firstUse = replayStore.firstUse(jti, Instant.ofEpochSecond(exp + skew));
+            // now is truncated to the second, so the token is accepted until the end of second exp + skew; keep the jti as long.
+            firstUse = replayStore.firstUse(jti, Instant.ofEpochSecond(exp + skew + 1));
         } catch (JtiReplayStore.StoreUnavailableException ex) {
             throw new InternalJwtRejectedException(InternalJwtRejection.REPLAY_STORE_UNAVAILABLE, ex);
         }
