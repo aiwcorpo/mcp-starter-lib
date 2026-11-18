@@ -52,10 +52,8 @@ import tools.jackson.databind.json.JsonMapper;
  * {@code message} reaches the client. The schema still requires {@code connectUrl} and {@code stepUpUrl}, so the server
  * sends a valid URI there, but not one the user sees. A {@code confirmation_required} that names a pending call
  * ({@code confirmationId}, {@code description}, {@code previewUrl}, {@code expiresAt}) reaches the client as
- * {@code internal_error}: only the gateway holds pending calls. This mapper keeps only {@code confirmationId} and
- * {@code confirmUrl} (not a field of the contract) of a {@code confirmation_required} and drops {@code registerUrl}, so
- * no result matches the schema and every {@code confirmation_required} a server maps leaves here as
- * {@code internal_error}.
+ * {@code internal_error}: only the gateway holds pending calls. This mapper keeps only {@code registerUrl} of a
+ * {@code confirmation_required}, so only the registerUrl shape passes; the gateway then replaces the link.
  *
  * <h2>What the log gets</h2>
  * One {@code event=tool_failed} line per failure, at INFO for an expected outcome (C10 code and exception class
@@ -79,10 +77,13 @@ public class McpErrorMapper {
             .getSchema(SchemaLocation.of("classpath:mcp-contracts/schemas/tool-error.schema.json"));
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
-    /** Code-specific fields allowed by {@code tool-error.schema.json}. */
+    /**
+     * Code-specific fields allowed by {@code tool-error.schema.json}. For {@code confirmation_required} a server may send
+     * only the registerUrl shape (mcp-contracts CC-253): the pending shape is the gateway's own.
+     */
     private static final Map<String, Set<String>> DETAILS_BY_CODE = Map.of(
             "access_denied", Set.of("requiredEntitlements"),
-            "confirmation_required", Set.of("confirmationId", "confirmUrl"),
+            "confirmation_required", Set.of("registerUrl"),
             "credential_required", Set.of("system", "connectUrl"),
             "rate_limited", Set.of("retryAfterSeconds"),
             "step_up_required", Set.of("stepUpUrl"));
