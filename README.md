@@ -110,7 +110,7 @@ There is no exception to `aud` == `server-id` and no purpose `manifest`: a token
 The starter never looks at the `Host` header, and a self-signed certificate is not compared with any `Host` on the server side.
 Keys with an identifier `test-*` and the published test keys
 (recognized by SPKI from `mcp-contracts/security/published-test-keys.json`) are rejected unless `allow-test-keys=true` in the `dev`
-profile. The order of checks and the rejection reasons are those of the contracts' reference receiver, so all 74 vectors of
+profile. The order of checks and the rejection reasons are those of the contracts' reference receiver, so all 75 vectors of
 `test-vectors/jwt` give the same result and reason.
 
 A rejection is `401 {"error":"unauthenticated",...}` with `WWW-Authenticate: Bearer`; the reason is in the log
