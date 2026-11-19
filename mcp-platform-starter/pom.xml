@@ -25,7 +25,7 @@
 
     <groupId>pl.aiwcorpo.mcp</groupId>
     <artifactId>mcp-platform-starter</artifactId>
-    <version>4.0.0</version>
+    <version>4.1.0</version>
     <name>Aiwcorpo MCP Platform :: Starter (auto-configuration)</name>
     <description>Spring Boot starter for MCP servers behind the MCP platform gateway: internal JWT verification, backend credential, resource policy, audit and safe tool errors.</description>
 
@@ -70,7 +70,7 @@
     <properties>
         <java.version>25</java.version>
         <spring-ai.version>2.0.0</spring-ai.version>
-        <mcp-contracts.version>7.0.0</mcp-contracts.version>
+        <mcp-contracts.version>7.2.0</mcp-contracts.version>
         <!-- Same version Spring Security 7.1.0 (Boot 4.1.0) brings; Boot does not manage it. -->
         <nimbus-jose-jwt.version>10.9</nimbus-jose-jwt.version>
         <json-schema-validator.version>3.0.8</json-schema-validator.version>

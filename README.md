@@ -7,8 +7,8 @@ the gateway: it does not sign users in, does not decide who may call a tool and 
 all of that. The library verifies the gateway's internal JWT, receives the credential for the target system, audits every call and
 makes sure that only safe errors leave a tool.
 
-Stack: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), `mcp-contracts` 7.0.0.
-Version: **4.0.0** (changes since 3.x in the `CHANGELOG.md` entry for 4.0.0).
+Stack: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), `mcp-contracts` 7.2.0.
+Version: **4.1.0** (changes in the `CHANGELOG.md` entry for 4.1.0; since 3.x in the entry for 4.0.0).
 
 ## Who this is for and how to start
 
@@ -27,7 +27,7 @@ gateway", settings are "Configuration", and moving from 3.x is the "Migracja ser
 ### Using the artifacts
 
 Maven Central, group `pl.aiwcorpo.mcp`; no repository entry and no credentials needed. Import the BOM and add the starter (the
-BOM also manages `mcp-contracts` 7.0.0, `mcp-cedar-entities`, `mcp-manifest` and Spring AI):
+BOM also manages `mcp-contracts` 7.2.0, `mcp-cedar-entities`, `mcp-manifest` and Spring AI):
 
 ```xml
 <dependencyManagement>
@@ -1287,7 +1287,7 @@ release workflow refuses a run in which any test was skipped. Verified: a local 
 `maven:3.9.12-eclipse-temurin-25` image; not on a real GitLab, Jenkins or GitHub runner. With Docker that has no route to the host,
 set `TESTCONTAINERS_HOST_OVERRIDE`.
 
-The `mcp-contracts` 7.0.0 artifacts come from Maven Central; until they are released they must be in `~/.m2`. `RedisJtiReplayStoreTest` starts
+The `mcp-contracts` 7.2.0 artifacts come from Maven Central; until they are released they must be in `~/.m2`. `RedisJtiReplayStoreTest` starts
 Redis through Testcontainers, so access to a container environment is needed (the Docker socket mounted into the CI container, or
 `DOCKER_HOST`).
 
@@ -1301,7 +1301,7 @@ Per release (a maintainer):
 1. Release `mcp-contracts` first and publish its deployment in the Central Portal: this repository depends on its artifacts
    (`mcp-contracts`, `mcp-cedar-entities`, `mcp-manifest`), which Maven resolves from Central. Until then the
    build works only with them in `~/.m2`.
-2. Version without `-SNAPSHOT` in all poms (`4.0.0`), `CHANGELOG.md` entry, `./mvnw -B verify` green, and
+2. Version without `-SNAPSHOT` in all poms (`4.1.0`), `CHANGELOG.md` entry, `./mvnw -B verify` green, and
    `./mvnw -Prelease -Dgpg.skip verify` (builds the sources and javadoc jars Central requires; javadoc must pass doclint).
 3. Commit, tag `vX.Y.Z`, and push only that one tag (`git push origin vX.Y.Z`, never `git push --tags`: the local
    `v3.0.0-beta-N` tags are not meant to be published). The workflow reacts to `vX.Y.Z` only; pre-release tags do not start it.
