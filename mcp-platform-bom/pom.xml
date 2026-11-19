@@ -13,7 +13,7 @@
     <parent>
         <groupId>pl.aiwcorpo.mcp</groupId>
         <artifactId>mcp-platform</artifactId>
-        <version>4.0.0</version>
+        <version>4.1.0</version>
     </parent>
     <artifactId>mcp-platform-bom</artifactId>
     <packaging>pom</packaging>
@@ -60,7 +60,7 @@
 
     <properties>
         <spring-ai.version>2.0.0</spring-ai.version>
-        <mcp-contracts.version>7.0.0</mcp-contracts.version>
+        <mcp-contracts.version>7.2.0</mcp-contracts.version>
     </properties>
 
     <dependencyManagement>

@@ -4,6 +4,23 @@ Format: wersje SemVer; kolejność od najnowszej. Przed 3.0.0 wersje `alpha` i `
 `v3.0.0-beta-N`) nie gwarantują zgodności między sobą.
 Linia `mcp-platform` (3.x, 4.x) nie ma związku z wersją `mcp-contracts` (BOM zarządza obiema).
 
+## 4.1.0 - 2026-11-19
+
+Wydanie **minor** z poprawkami po audycie bezpieczeństwa z 2026-11-13 (L-04 ... L-13) i przejściem na `mcp-contracts` 7.2.0 (CC-250, CC-252 ... CC-257).
+Publiczne typy i właściwości konfiguracji bez zmian; serwery nie muszą nic zmieniać (nowa właściwość `session.idle-timeout` ma wartość domyślną).
+
+- Contracts 7.2.0 (BOM, starter and test module). Vectors added after 7.0.0 pass (CC-250); the vector-count check of
+  `AuthenticationAuditVectorsTest` is a floor (CC-250).
+- CC-253: `McpErrorMapper` keeps `registerUrl` in a mapped `confirmation_required`; the README states that the gateway builds every tool error link and ignores the one from the server.
+  CC-257 (TOTP confirmation for `UPDATE` tools) is gateway behaviour and changes nothing the starter validates.
+- Internal JWT: the token-only checks run before the request body is read (L-12); the `jti` is kept until the end of the last accepted second (L-05); the request path in the
+  rejection log line is cleaned and bounded (L-04); the keyless refusals have their own per-second budget like `missing_token` (L-13).
+- `dev` profile: a request with a non-loopback `Host` or `Origin` is refused before the JWT check (L-10). `LocalGateway` is documented as meant for single-user machines (L-11).
+- MCP sessions idle longer than `session.idle-timeout` (default 1h) are closed (L-06).
+- Tool errors: a `ToolErrorMapping` that throws or returns null is skipped and the built-in rules decide, and a failing audit write is logged while the caller still gets the
+  sanitized C10 error (L-07). Elements of `List<ToolCallback>` beans go through the audit decorator; the same tool declared in a list and in a provider stops the start as a duplicate (L-08).
+- Grant-first probe of resource policies takes integral numbers and every list element it resolves, as the entity builder does (L-09).
+
 ## 4.0.0 - 2026-11-09
 
 Serwery dynamiczne: lista systemów, serwerów i typów zasobów przestaje być wiedzą startera. Polityki serwera leżą w jego jarze, dane
