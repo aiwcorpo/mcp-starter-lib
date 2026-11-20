@@ -38,6 +38,12 @@ public class PlatformObservabilityAutoConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
+    RequestUrlFilter requestUrlFilter() {
+        return new RequestUrlFilter();
+    }
+
+    @Bean
+    @ConditionalOnMissingBean
     CorrelationIdFilter correlationIdFilter() {
         return new CorrelationIdFilter();
     }

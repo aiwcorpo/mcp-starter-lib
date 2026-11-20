@@ -4,6 +4,17 @@ Format: wersje SemVer; kolejność od najnowszej. Przed 3.0.0 wersje `alpha` i `
 `v3.0.0-beta-N`) nie gwarantują zgodności między sobą.
 Linia `mcp-platform` (3.x, 4.x) nie ma związku z wersją `mcp-contracts` (BOM zarządza obiema).
 
+## Unreleased
+
+Additive; servers need no change. The version heading is for the person who releases.
+
+- OpenTelemetry tracing, off by default: `MCP_OTLP_ENDPOINT` (the OTLP/HTTP traces URL, with the path) turns it on and sets the exporter endpoint
+  (`PlatformDefaultsEnvironmentPostProcessor`; `management.tracing.export.enabled` and `management.opentelemetry.enabled` follow it, and a server's own
+  value wins; `management.tracing.enabled` is ignored by Spring Boot 4). The server continues the W3C `traceparent` / `tracestate` of the gateway's call and exports spans with method, route, status and
+  exception class only, never tokens, headers, bodies, tool names or arguments (README, "Tracing"). The starter now depends on
+  `spring-boot-starter-opentelemetry` without `micrometer-registry-otlp`; baggage, OTLP log export and Redis and scheduled-task spans are off.
+  No contract entry: `traceparent` is a standard optional header that the C14 receiver ignores unless tracing is on; see the PR for the proposed note.
+
 ## 4.1.0 - 2026-11-19
 
 Wydanie **minor** z poprawkami po audycie bezpieczeństwa z 2026-11-13 (L-04 ... L-13) i przejściem na `mcp-contracts` 7.2.0 (CC-250, CC-252 ... CC-257).
