@@ -368,7 +368,8 @@ path, for example `http://collector:4318/v1/traces`, and restart. Spans are expo
   `RestClient.Builder` so the call becomes a span; the starter drops the `http.url` attribute (the full URL with its query string, which can
   hold tool arguments) from every span, and the span keeps the method, host and URI template only. The `uri` tag is cut at the query and the
   user info of a template (`/items?q={q}` becomes `/items`); when the URL was built by concatenation and passed to `uri(String)`, the string
-  is no template, and a literal query or user info in it turns the tag into `unknown`.
+  is no template, and a literal query or user info in it turns the tag into `unknown`. On a call to another system the tag is kept only if
+  it contains a template variable (`/issue/{key}`); a concatenated path such as `/issue/PROJ-1` also becomes `unknown`.
 
 Recorded on the span of a request, and nothing else: HTTP method, route template or path (`/mcp`, `/.well-known/mcp-manifest`), status,
 outcome and the exception class. No token, header, request or response body, tool name, tool argument or result is recorded. The

@@ -111,6 +111,13 @@ class OutboundCallRedactionTest {
     }
 
     @Test
+    void aConcatenatedPathWithAnIdentifierDoesNotReachTheCollector() {
+        String exported = exportedAfter(client -> client.get().uri(baseUrl() + "/rest/api/2/issue/PROJ-" + "7431").retrieve()
+                .toBodilessEntity());
+        assertThat(exported).contains("tool-call").doesNotContain("PROJ-7431").doesNotContain("/rest/api/2/issue");
+    }
+
+    @Test
     void aTemplateWithVariablesKeepsItsPathAsTheUriTag() {
         String exported = exportedAfter(client -> client.get().uri(baseUrl() + "/items/{id}?q={q}", "42", QUERY_MARKER).retrieve()
                 .toBodilessEntity());
