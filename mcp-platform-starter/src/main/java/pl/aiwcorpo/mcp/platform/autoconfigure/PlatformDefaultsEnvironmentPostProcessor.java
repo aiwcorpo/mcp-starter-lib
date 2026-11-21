@@ -31,6 +31,11 @@ import org.springframework.core.env.MapPropertySource;
  *       {@code MCP_STATE_DIR} ({@code aiwcorpo.mcp.platform.state-dir}), {@code MCP_GATEWAY_JWKS_URI}, {@code MCP_PAGING_CURSOR_KEY} and
  *       {@code MCP_REDIS_HOST}, {@code _PORT}, {@code _USER}, {@code _PASSWORD} ({@code spring.data.redis.*}: the jti store is Redis only when
  *       the host is set). A value in the server's own {@code application.yml} wins.</li>
+ *   <li>Tracing is off unless {@code MCP_OTLP_ENDPOINT} (the full OTLP/HTTP traces URL) is set: {@code management.tracing.export.enabled} and
+ *       {@code management.opentelemetry.enabled} follow it ({@code management.tracing.enabled} is ignored by Spring Boot 4), and the endpoint goes to {@code management.opentelemetry.tracing.export.otlp.endpoint}.
+ *       Spring Boot enables tracing by itself once its libraries are on the classpath (and then adds a correlation id block to every log
+ *       line), so the switch has to be set here, also as {@code false}. Log export over OTLP,
+ *       baggage and the spans of Redis commands and scheduled tasks stay off.</li>
  *   <li>With the {@code dev} profile active only: {@code server.address=127.0.0.1}. The dev relaxations (test
  *       keys, no TLS) must not be reachable from the network; {@code PlatformConfigurationGuard} refuses any
  *       non-loopback address in dev, and for a separate management port it requires a loopback
@@ -75,6 +80,7 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
                             "spring.ai.mcp.server.streamable-http.mcp-endpoint", "/mcp",
                             "spring.ai.mcp.server.annotation-scanner.enabled", "false",
                             "spring.data.redis.timeout", "2s"));
+            tracing(environment, defaults);
             if (Arrays.asList(environment.getActiveProfiles()).contains(PlatformConfigurationGuard.DEV_PROFILE)) {
                 defaults.put("server.address", "127.0.0.1");
             }
@@ -115,6 +121,20 @@ public class PlatformDefaultsEnvironmentPostProcessor implements EnvironmentPost
             }
         }
         PlatformTlsEnvironment.apply(environment);
+    }
+
+    private static void tracing(ConfigurableEnvironment environment, Map<String, Object> defaults) {
+        String endpoint = environment.getProperty("MCP_OTLP_ENDPOINT", "").trim();
+        String on = Boolean.toString(!endpoint.isEmpty());
+        defaults.put("management.tracing.export.enabled", on);
+        defaults.put("management.opentelemetry.enabled", on);
+        if (!endpoint.isEmpty()) {
+            defaults.put("management.opentelemetry.tracing.export.otlp.endpoint", endpoint);
+        }
+        defaults.put("management.logging.export.otlp.enabled", "false");
+        defaults.put("management.tracing.baggage.enabled", "false");
+        defaults.put("management.observations.enable.lettuce", "false");
+        defaults.put("management.observations.enable.tasks", "false");
     }
 
     private static void fromVariable(ConfigurableEnvironment environment, Map<String, Object> defaults, String variable, String property) {

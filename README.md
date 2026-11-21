@@ -348,6 +348,39 @@ is with the `devstack` profile (with both consents) **and** `allow-test-keys=tru
 **The `dev-pat` mode** (only when `dev` is the only active profile): besides `X-MCP-Credential`, the server accepts a developer
 token in `X-PAT-<system>` (for example `X-PAT-Jira`) as a `Bearer` of type `user-secret`. The internal JWT is still required.
 
+## Tracing
+
+Off by default, and a server needs no change to get it. Set `MCP_OTLP_ENDPOINT` to the OTLP/HTTP traces URL of your collector, with the
+path, for example `http://collector:4318/v1/traces`, and restart. Spans are exported under the server's `spring.application.name`.
+
+- A W3C `traceparent` (and `tracestate`) on a request, which the gateway sends with every call, is continued: the span of the request is a
+  child of the gateway's span, so one trace runs from the client through the gateway to the tool. A request without the header starts a
+  trace. Baggage is not read. The header is not part of the internal JWT checks and changes no decision.
+- Of the traces that start at the server 10 % are sampled (`MANAGEMENT_TRACING_SAMPLING_PROBABILITY`, 0.0 to 1.0); a trace the gateway
+  marked as sampled is kept. Spring Boot propagates the trace context only while span export is on, so
+  `MANAGEMENT_TRACING_EXPORT_ENABLED=false` also stops it. `MANAGEMENT_OPENTELEMETRY_ENABLED=false` (the SDK and exporter) or
+  `MANAGEMENT_TRACING_EXPORT_ENABLED=false` (the spans) switches tracing off even when `MCP_OTLP_ENDPOINT` is set; so do
+  `management.opentelemetry.enabled: false` and `management.tracing.export.enabled: false` in the server's own `application.yml`.
+  `management.tracing.enabled` has no effect in Spring Boot 4. Other exporter settings
+  (headers, TLS bundle, timeouts, gRPC) are the Spring Boot properties under `management.opentelemetry.tracing.export.otlp.*`.
+- Log lines carry the trace id and span id of the request they belong to.
+- The server sends no `traceparent` to the backend system it calls. If you add it in your own client, build the client from Boot's
+  `RestClient.Builder` so the call becomes a span; the starter drops the `http.url` attribute (the full URL with its query string, which can
+  hold tool arguments) from every span, and the span keeps the method, host and URI template only. The `uri` tag is cut at the query and the
+  user info of a template (`/items?q={q}` becomes `/items`); when the URL was built by concatenation and passed to `uri(String)`, the string
+  is no template, and a literal query or user info in it turns the tag into `unknown`. On a call to another system the tag is kept only if
+  it contains a template variable (`/issue/{key}`); a concatenated path such as `/issue/PROJ-1` also becomes `unknown`.
+
+Recorded on the span of a request, and nothing else: HTTP method, route template or path (`/mcp`, `/.well-known/mcp-manifest`), status,
+outcome and the exception class. No token, header, request or response body, tool name, tool argument or result is recorded. The
+starter adds no span of its own for a tool call, and its audit events stay the record of tool calls. Redis and scheduled-task spans are
+switched off. A span of a failed request or backend call carries the exception class only (and the HTTP status): the message and stack
+trace, which can hold a backend response body or a URL, are removed before export, as are the status description and any attribute that
+holds a URL (`http.url`, `url.full`, `http.target`, `url.query`).
+
+The starter brings `spring-boot-starter-opentelemetry` (without its OTLP metrics registry): the OpenTelemetry SDK, the OTLP exporter and its HTTP
+client end up in every server's jar. Metrics stay on Prometheus.
+
 ## First server
 
 The starter sets the MCP transport (lowest priority, the server may override it): `spring.ai.mcp.server.protocol=STREAMABLE`,
