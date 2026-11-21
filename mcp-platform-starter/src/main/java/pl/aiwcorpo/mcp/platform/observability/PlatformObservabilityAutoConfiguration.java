@@ -37,6 +37,11 @@ public class PlatformObservabilityAutoConfiguration {
     }
 
     @Bean
+    static RedactingSpanExporters redactingSpanExporters() {
+        return new RedactingSpanExporters();
+    }
+
+    @Bean
     @ConditionalOnMissingBean
     RequestUrlFilter requestUrlFilter() {
         return new RequestUrlFilter();

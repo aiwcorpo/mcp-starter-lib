@@ -11,7 +11,7 @@ Additive; servers need no change. The version heading is for the person who rele
 - OpenTelemetry tracing, off by default: `MCP_OTLP_ENDPOINT` (the OTLP/HTTP traces URL, with the path) turns it on and sets the exporter endpoint
   (`PlatformDefaultsEnvironmentPostProcessor`; `management.tracing.export.enabled` and `management.opentelemetry.enabled` follow it, and a server's own
   value wins; `management.tracing.enabled` is ignored by Spring Boot 4). The server continues the W3C `traceparent` / `tracestate` of the gateway's call and exports spans with method, route, status and
-  exception class only, never tokens, headers, bodies, tool names or arguments (README, "Tracing"). The starter now depends on
+  exception class only, never tokens, headers, bodies, tool names or arguments, exception messages or stack traces, or the query of a URL (README, "Tracing"). The starter now depends on
   `spring-boot-starter-opentelemetry` without `micrometer-registry-otlp`; baggage, OTLP log export and Redis and scheduled-task spans are off.
   No contract entry: `traceparent` is a standard optional header that the C14 receiver ignores unless tracing is on; see the PR for the proposed note.
 

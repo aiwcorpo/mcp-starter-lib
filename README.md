@@ -366,13 +366,16 @@ path, for example `http://collector:4318/v1/traces`, and restart. Spans are expo
 - Log lines carry the trace id and span id of the request they belong to.
 - The server sends no `traceparent` to the backend system it calls. If you add it in your own client, build the client from Boot's
   `RestClient.Builder` so the call becomes a span; the starter drops the `http.url` attribute (the full URL with its query string, which can
-  hold tool arguments) from every span, and the span keeps the method, host and URI template only.
+  hold tool arguments) from every span, and the span keeps the method, host and URI template only. The `uri` tag is cut at the query and the
+  user info of a template (`/items?q={q}` becomes `/items`); when the URL was built by concatenation and passed to `uri(String)`, the string
+  is no template, and a literal query or user info in it turns the tag into `unknown`.
 
 Recorded on the span of a request, and nothing else: HTTP method, route template or path (`/mcp`, `/.well-known/mcp-manifest`), status,
 outcome and the exception class. No token, header, request or response body, tool name, tool argument or result is recorded. The
 starter adds no span of its own for a tool call, and its audit events stay the record of tool calls. Redis and scheduled-task spans are
-switched off. A request that ends in an exception no handler answers has it recorded on its span as Spring Boot does (type, message,
-stack); exception messages are held to the same rule as log lines (`SanitizedToolException` only).
+switched off. A span of a failed request or backend call carries the exception class only (and the HTTP status): the message and stack
+trace, which can hold a backend response body or a URL, are removed before export, as are the status description and any attribute that
+holds a URL (`http.url`, `url.full`, `http.target`, `url.query`).
 
 The starter brings `spring-boot-starter-opentelemetry` (without its OTLP metrics registry): the OpenTelemetry SDK, the OTLP exporter and its HTTP
 client end up in every server's jar. Metrics stay on Prometheus.
