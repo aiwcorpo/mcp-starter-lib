@@ -9,8 +9,9 @@ import org.springframework.mock.env.MockEnvironment;
 class TracingDefaultsTest {
 
     private static MockEnvironment processed(String... properties) {
-        MockEnvironment environment = new MockEnvironment();
-        environment.setActiveProfiles("dev");
+        // Not 'dev': its container check refuses to start on a CI runner, which is itself a container.
+        MockEnvironment environment = new MockEnvironment().withProperty("MCP_PLAIN_HTTP", "true");
+        environment.setActiveProfiles("prod");
         for (int i = 0; i < properties.length; i += 2) {
             environment.setProperty(properties[i], properties[i + 1]);
         }
