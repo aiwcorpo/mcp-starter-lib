@@ -7,6 +7,7 @@
     - CredentialContext: the backend credential the gateway injected (C3), or X-PAT-<system> in dev-pat mode
     - AuditingToolCallback: audit events (C8) and safe tool errors (C10) around every tool
     - CorrelationIdFilter (X-Request-Id), SecurityHeadersFilter, CredentialTransportGuard
+    - OpenTelemetry tracing, off by default (MCP_OTLP_ENDPOINT): continues the gateway's W3C traceparent
     - the Spring AI MCP server starter (streamable HTTP)
   It is a library (jar), not an application: no spring-boot-maven-plugin repackage.
 -->
@@ -92,6 +93,19 @@
         <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency>
         <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-actuator</artifactId></dependency>
         <dependency><groupId>io.micrometer</groupId><artifactId>micrometer-registry-prometheus</artifactId></dependency>
+
+        <!-- Tracing (off unless MCP_OTLP_ENDPOINT is set, see README): continues the trace of an incoming traceparent and exports spans over OTLP/HTTP. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-opentelemetry</artifactId>
+            <exclusions>
+                <exclusion>
+                    <!-- Metrics stay on Prometheus; the starter would also push them over OTLP by default. -->
+                    <groupId>io.micrometer</groupId>
+                    <artifactId>micrometer-registry-otlp</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.ai</groupId>
