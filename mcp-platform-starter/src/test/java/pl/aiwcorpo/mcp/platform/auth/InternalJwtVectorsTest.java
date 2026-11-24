@@ -38,8 +38,8 @@ class InternalJwtVectorsTest {
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final String ROOT = "mcp-contracts/test-vectors/";
 
-    /** Files in test-vectors/jwt of mcp-contracts 7.0.0. */
-    private static final int EXPECTED_VECTORS = 75;
+    /** Files in test-vectors/jwt of mcp-contracts 8.0.0: the 75 of 7.x and the 20 of CC-260. */
+    private static final int EXPECTED_VECTORS = 95;
 
     record Vector(String name, JsonNode data) {
         @Override
@@ -110,6 +110,9 @@ class InternalJwtVectorsTest {
             assertThat(caller.requestId()).isEqualTo(claims.get("rid").asString());
             assertThat(caller.policyRevision()).isEqualTo(claims.get("prv").asLong());
             assertThat(caller.tool()).isEqualTo(claims.has("tool") ? claims.get("tool").asString() : null);
+            assertThat(caller.principalType()).isEqualTo(claims.has("pty") ? claims.get("pty").asString() : null);
+            assertThat(caller.actorSub()).isEqualTo(claims.has("act") ? claims.get("act").get("sub").asString() : null);
+            assertThat(caller.actorClient()).isEqualTo(claims.has("act") ? claims.get("act").get("azp").asString() : null);
             assertThat(expected.get("httpStatus").asInt()).isEqualTo(200);
         } else {
             assertThatThrownBy(() -> verifier.verify(token, binding))
@@ -169,7 +172,12 @@ class InternalJwtVectorsTest {
         filter.doFilter(request, response, chain);
 
         int expected = data.get("expected").get("httpStatus").asInt();
-        if (expected == 200) {
+        if (expected == 200 && isServedByNoOne(data.get("request"))) {
+            // The token is valid (the verifier test above says so), but the starter serves no resources yet: it answers -32601 itself.
+            assertThat(chain.getRequest()).as("resources are not served, the request must not reach the MCP endpoint").isNull();
+            assertThat(response.getStatus()).isEqualTo(200);
+            assertThat(response.getContentAsString()).contains("\"code\":-32601");
+        } else if (expected == 200) {
             assertThat(chain.getRequest()).as("the request reached the MCP endpoint").isNotNull();
             assertThat(response.getStatus()).isEqualTo(200);
         } else {
@@ -177,6 +185,10 @@ class InternalJwtVectorsTest {
             assertThat(response.getStatus()).isEqualTo(expected);
             assertThat(response.getContentAsString()).contains("\"error\":\"unauthenticated\"");
         }
+    }
+
+    private static boolean isServedByNoOne(JsonNode request) {
+        return "jsonrpc".equals(request.get("kind").asString()) && request.get("method").asString().startsWith("resources/");
     }
 
     static InternalJwtVerifier verifierFor(JsonNode settings) throws Exception {
@@ -203,6 +215,12 @@ class InternalJwtVectorsTest {
         if ("jsonrpc".equals(request.get("kind").asString())) {
             if ("tools/call".equals(method)) {
                 return RequestBinding.toolCall(request.get("toolName").asString(), rid);
+            }
+            if ("resources/read".equals(method)) {
+                return RequestBinding.resourceRead(request.get("uri").asString(), rid);
+            }
+            if (McpRequestClassifier.RESOURCE_LIST_METHODS.contains(method)) {
+                return RequestBinding.resourceList(rid);
             }
             return McpRequestClassifier.PROTOCOL_METHODS.contains(method)
                     ? RequestBinding.protocol(rid) : RequestBinding.other(rid);
@@ -231,6 +249,9 @@ class InternalJwtVectorsTest {
             String body = "tools/call".equals(method)
                     ? "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\""
                             + request.get("toolName").asString() + "\",\"arguments\":{}}}"
+                    : "resources/read".equals(method)
+                    ? "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"resources/read\",\"params\":{\"uri\":\""
+                            + request.get("uri").asString() + "\"}}"
                     : "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"" + method + "\"}";
             http.setContent(body.getBytes(StandardCharsets.UTF_8));
             http.setContentType("application/json");

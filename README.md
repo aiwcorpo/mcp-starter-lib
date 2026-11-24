@@ -7,7 +7,7 @@ the gateway: it does not sign users in, does not decide who may call a tool and 
 all of that. The library verifies the gateway's internal JWT, receives the credential for the target system, audits every call and
 makes sure that only safe errors leave a tool.
 
-Stack: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), `mcp-contracts` 7.2.0.
+Stack: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), `mcp-contracts` 8.0.0.
 Version: **4.1.0** (changes in the `CHANGELOG.md` entry for 4.1.0; since 3.x in the entry for 4.0.0).
 
 ## Who this is for and how to start
@@ -27,7 +27,7 @@ gateway", settings are "Configuration", and moving from 3.x is the "Migracja ser
 ### Using the artifacts
 
 Maven Central, group `pl.aiwcorpo.mcp`; no repository entry and no credentials needed. Import the BOM and add the starter (the
-BOM also manages `mcp-contracts` 7.2.0, `mcp-cedar-entities`, `mcp-manifest` and Spring AI):
+BOM also manages `mcp-contracts` 8.0.0, `mcp-cedar-entities`, `mcp-manifest` and Spring AI):
 
 ```xml
 <dependencyManagement>
@@ -1320,7 +1320,7 @@ release workflow refuses a run in which any test was skipped. Verified: a local 
 `maven:3.9.12-eclipse-temurin-25` image; not on a real GitLab, Jenkins or GitHub runner. With Docker that has no route to the host,
 set `TESTCONTAINERS_HOST_OVERRIDE`.
 
-The `mcp-contracts` 7.2.0 artifacts come from Maven Central; until they are released they must be in `~/.m2`. `RedisJtiReplayStoreTest` starts
+The `mcp-contracts` 8.0.0 artifacts come from Maven Central; until they are released they must be in `~/.m2`. `RedisJtiReplayStoreTest` starts
 Redis through Testcontainers, so access to a container environment is needed (the Docker socket mounted into the CI container, or
 `DOCKER_HOST`).
 

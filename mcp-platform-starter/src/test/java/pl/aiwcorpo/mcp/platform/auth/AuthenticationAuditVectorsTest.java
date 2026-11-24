@@ -29,7 +29,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * The {@code audit-events} vectors of mcp-contracts 7.0.0 against the schema the starter validates its own events with,
+ * The {@code audit-events} vectors of mcp-contracts 8.0.0 against the schema the starter validates its own events with,
  * and what the starter emits for every reason of {@code authentication} that concerns a receiver of the internal JWT
  * (CC-071, CC-120).
  */
@@ -37,13 +37,12 @@ class AuthenticationAuditVectorsTest {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
     /*
-     * The count of the 7.0.0 release (tag v7.0.0). mcp-contracts adds vectors between releases without a version
-     * bump, and a local build of its main installs them as 7.0.0 (main at dee98c4 has 140 after CC-250 added
-     * gateway-registry-hidden-characters.json). Such vectors are gateway events the starter does not emit; the
-     * schema test below still checks each one. A floor keeps the guard against a partial classpath scan without
-     * failing on either jar.
+     * The count of the 8.0.0 release (tag v8.0.0). mcp-contracts adds vectors between releases without a version
+     * bump, and a local build of its main installs them under the released number. Such vectors are gateway events
+     * the starter does not emit; the schema test below still checks each one. A floor keeps the guard against a partial
+     * classpath scan without failing on either jar.
      */
-    private static final int RELEASED_VECTORS = 139;
+    private static final int RELEASED_VECTORS = 167;
 
     /** The reasons CC-120 gives errorCode upstream_unavailable, written out so the test does not use the starter's own predicate. */
     private static final Set<String> UPSTREAM_UNAVAILABLE = Set.of("jwks_unavailable", "replay_store_unavailable");

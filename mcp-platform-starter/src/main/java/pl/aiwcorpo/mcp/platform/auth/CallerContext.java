@@ -22,15 +22,31 @@ import java.util.OptionalLong;
  * @param mfaAgeSeconds       {@code mfa}, or {@code null} when unknown
  * @param mcpRisk             {@code mcp_risk}, the administrator's classification; only in {@link ReceiverMode#ADAPTER}, otherwise {@code null}
  * @param mcpAction           {@code mcp_action}, as above
+ * @param principalType       {@code pty}: {@code agent} or {@code delegated}; {@code null} for a human (CC-260)
+ * @param actorSub            {@code act.sub}, the agent acting for the user in {@code subject}; only with {@code delegated}
+ * @param actorClient         {@code act.azp}, the client of that agent; only with {@code delegated}
  */
 public record CallerContext(String subject, String username, List<String> groups, String client,
                             String tool, String requestId, long policyRevision, Long mfaAgeSeconds,
-                            String mcpRisk, String mcpAction) {
+                            String mcpRisk, String mcpAction, String principalType, String actorSub, String actorClient) {
 
-    /** Without the classification of an adapter; what every native server has. */
+    /** {@code pty} of an autonomous agent: {@code subject} is its service account. */
+    public static final String PRINCIPAL_AGENT = "agent";
+
+    /** {@code pty} of an agent acting for a person: {@code subject} is the person, the agent is in {@link #actorSub()}. */
+    public static final String PRINCIPAL_DELEGATED = "delegated";
+
+    /** Without the classification of an adapter and for a human; what every native server had before contracts 8.0.0. */
     public CallerContext(String subject, String username, List<String> groups, String client, String tool,
                          String requestId, long policyRevision, Long mfaAgeSeconds) {
-        this(subject, username, groups, client, tool, requestId, policyRevision, mfaAgeSeconds, null, null);
+        this(subject, username, groups, client, tool, requestId, policyRevision, mfaAgeSeconds, null, null, null, null, null);
+    }
+
+    /** For a human, with the classification of an adapter. */
+    public CallerContext(String subject, String username, List<String> groups, String client,
+                         String tool, String requestId, long policyRevision, Long mfaAgeSeconds,
+                         String mcpRisk, String mcpAction) {
+        this(subject, username, groups, client, tool, requestId, policyRevision, mfaAgeSeconds, mcpRisk, mcpAction, null, null, null);
     }
 
     /** {@code sub} of the gateway's service variant (calls without a user). */
@@ -45,6 +61,11 @@ public record CallerContext(String subject, String username, List<String> groups
     /** True for the gateway's own calls ({@code initialize}, {@code server/discover}, {@code tools/list}, {@code ping}, manifest). */
     public boolean isService() {
         return SERVICE_SUBJECT.equals(subject);
+    }
+
+    /** The value of the Cedar context attribute {@code principalType} (CC-263): {@code user} when the token has no {@code pty}. */
+    public String cedarPrincipalType() {
+        return principalType == null ? "user" : principalType;
     }
 
     public OptionalLong mfaAge() {

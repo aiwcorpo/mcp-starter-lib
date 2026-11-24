@@ -19,6 +19,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.core.Ordered;
 import org.springframework.web.filter.OncePerRequestFilter;
 import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 import pl.aiwcorpo.mcp.platform.observability.AuditLogger;
 import pl.aiwcorpo.mcp.platform.observability.CorrelationIdFilter;
 
@@ -46,6 +47,7 @@ import pl.aiwcorpo.mcp.platform.observability.CorrelationIdFilter;
 public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
 
     private static final Logger LOG = LoggerFactory.getLogger(InternalJwtFilter.class);
+    private static final JsonMapper JSON = JsonMapper.builder().build();
 
     /** After the correlation id (10), before the credential (20). */
     public static final int ORDER = Ordered.HIGHEST_PRECEDENCE + 15;
@@ -192,12 +194,33 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
             reject(request, response, ex.reason(), binding, start);
             return;
         }
+        if (binding.refusedUntilSupported()) {
+            refuseMethod(response, binding, buffered);
+            return;
+        }
         CallerContext.bind(caller);
         try {
             chain.doFilter(forwarded, response);
         } finally {
             CallerContext.clear();
         }
+    }
+
+    /**
+     * The token was valid, but the starter serves no resources, prompts, completions or logging yet and declares none of them (CC-259),
+     * so the call gets what a server without the method answers: JSON-RPC {@code -32601}. Refused here, before the MCP transport, so
+     * no handler Spring AI wires up by itself can answer it. Status 200 as the SDK sends for an unknown method; a 404 would read as a lost session.
+     */
+    private static void refuseMethod(HttpServletResponse response, RequestBinding binding, CachedBodyRequest buffered) throws IOException {
+        LOG.warn("event=mcp_method_refused method={} reason=not_served", binding.refusedMethod());
+        JsonNode message = StrictJson.parse(buffered.body());
+        JsonNode id = message == null ? null : message.get("id");
+        String echoedId = id != null && (id.isString() || id.isIntegralNumber()) ? JSON.writeValueAsString(id) : "null";
+        response.setStatus(HttpServletResponse.SC_OK);
+        response.setContentType("application/json");
+        response.setCharacterEncoding(StandardCharsets.UTF_8.name());
+        response.getWriter().write("{\"jsonrpc\":\"2.0\",\"id\":" + echoedId
+                + ",\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}");
     }
 
     private static String bearerToken(String header) {
