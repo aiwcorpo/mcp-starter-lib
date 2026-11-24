@@ -6,7 +6,34 @@ Linia `mcp-platform` (3.x, 4.x) nie ma związku z wersją `mcp-contracts` (BOM z
 
 ## Unreleased
 
-Additive; servers need no change. The version heading is for the person who releases.
+Receiver of `mcp-contracts` 8.0.0 (CC-258 ... CC-266). The version heading is for the person who releases.
+
+Operators, upgrade order (CC-260): the gateway and the credential broker that understand 8.0.0 first (emission of the new claims off), then the servers built on
+this starter (and the template and the adapter sidecar), then emission. The gateway sends `resource`, `pty` and `act` to a server only when its approved manifest
+says `contractsVersion` 8.0.0 or newer, so a server still on the old starter keeps working and gets none of them; to a server that cannot take them the gateway
+sends no call and the audit reason is `contracts_version_unsupported`. Roll the servers one by one, pull the manifest again after each (the new field is not part of any
+`definitionHash`, so no tool goes back to approval).
+
+Server authors:
+
+- No code change for a server that only has tools. Rebuild against the BOM: it manages `mcp-contracts` 8.0.0 (`mcp-cedar-entities`, `mcp-manifest`, test vectors).
+- The manifest carries `contractsVersion: "8.0.0"` (CC-258, `ManifestGenerator.CONTRACTS_VERSION`).
+- Internal JWT (CC-260): `resource` is accepted at `resources/read` only and must equal `params.uri` (`resource_missing`, `resource_not_allowed`,
+  `resource_mismatch`; never together with `tool`, which the schema refuses). `pty` (`agent`, `delegated`) and `act` (`{sub, azp}`, exactly with `delegated`) are validated by the schema.
+  A token without `pty` is a human and behaves as before. 95 jwt vectors pass (75 before).
+- `CallerContext` gets `principalType`, `actorSub`, `actorClient` at the end; the Cedar context of a call gets `principalType` (`user`, `agent`, `delegated`) and `actor`
+  (CC-263), so a server policy may forbid agents; audit events carry `principalType`, and `actorSub` and `actorClient` for `delegated`, never for a human (CC-264).
+  The platform policy `agent-no-destructive` and `maxRisk` of an agent are enforced by the gateway.
+- The server serves tools only until the starter wraps resources and prompts (CC-259; until then the gateway sends a server none of these methods). Spring AI's
+  `capabilities.resource`, `.prompt` and `.completion` default to `false`. After the token is verified, `resources/*`, `prompts/*`, `completion/*` and `logging/*` get JSON-RPC
+  `-32601` and never reach the MCP transport (before, they passed the gate as `OTHER`). The server no longer starts (`UnservedPrimitivesCheck`) when a `Sync*Specification` bean
+  or a list of them exists, a resource or prompt is listed, or `resources`, `prompts` or `completions` is declared. `logging`, which MCP SDK 2.0.0 declares itself, is removed
+  from the declaration at startup. A server that registered such a specification (none of ours do) must remove it until the next release.
+- Public API, additive: `RequestBinding` has two more components (`resourceUri`, `unsupportedFamily`; the three-argument constructor stays) and the kinds `RESOURCE_READ`, `RESOURCE_LIST`,
+  `UNSUPPORTED`; `TOOL_SCOPED` takes exactly one of `tool` and `resource`; `InternalJwtRejection` has `RESOURCE_MISSING`, `RESOURCE_NOT_ALLOWED`, `RESOURCE_MISMATCH`.
+  A `switch` over these enums in server code needs the new cases. `AuthenticationAuditVectorsTest` floor is 167 vectors.
+
+Also in this release:
 
 - OpenTelemetry tracing, off by default: `MCP_OTLP_ENDPOINT` (the OTLP/HTTP traces URL, with the path) turns it on and sets the exporter endpoint
   (`PlatformDefaultsEnvironmentPostProcessor`; `management.tracing.export.enabled` and `management.opentelemetry.enabled` follow it, and a server's own
