@@ -31,7 +31,7 @@ What changed:
   `resources/*`, `prompts/*`, `completion/*` and `logging/*` get JSON-RPC `-32601` (a notification gets 202) and never reach the MCP transport (before, they passed the gate as `OTHER`).
   `UnservedPrimitivesCheck` stops the server when a `Sync*Specification` bean or a list of them exists, a resource or prompt is listed, or `resources`, `prompts` or `completions` is declared.
   `logging`, which MCP SDK 2.0.0 declares itself, is removed from the declaration at startup (by replacing a private field; a test pins the SDK version).
-- `mcp-platform-test`: `PolicyDataEndpoint.allowedAgentClients(...)` (default none, and the field is always pushed); tokens with the new claims come from `Token.extraClaim`.
+- `mcp-platform-test`: `PolicyDataEndpoint.allowedAgentClients(...)` (default none, and the field is always pushed) and `PolicyDecisions.allowedAgentClients(...)`; `PolicyDecisions.decide` checks the client against the list that fits the caller's `principalType`; tokens with the new claims come from `Token.extraClaim`.
 
 Also in this release:
 

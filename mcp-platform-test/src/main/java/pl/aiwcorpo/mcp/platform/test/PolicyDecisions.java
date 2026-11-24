@@ -50,6 +50,7 @@ public final class PolicyDecisions {
     private final ServerPolicies policies;
     private Map<String, List<String>> scopeMapping = Map.of();
     private List<String> allowedClients = List.of(DEFAULT_CLIENT);
+    private List<String> allowedAgentClients = List.of();
     private final List<PolicyData.Override> overrides = new ArrayList<>();
     private String credentialType = DEFAULT_CREDENTIAL_TYPE;
     private PolicySnapshot snapshot;
@@ -92,6 +93,16 @@ public final class PolicyDecisions {
         return this;
     }
 
+    /**
+     * The agent clients the gateway allows (default: none), the {@code allowedAgentClients} of CC-266. A caller with a principal type other
+     * than {@code user} is accepted only from these, a human only from {@link #allowedClients}.
+     */
+    public PolicyDecisions allowedAgentClients(String... clients) {
+        this.allowedAgentClients = List.of(clients);
+        this.snapshot = null;
+        return this;
+    }
+
     /** An emergency override an administrator set for this server: its id ({@code override-<name>}) and the Cedar text of one {@code forbid} policy. */
     public PolicyDecisions override(String id, String text) {
         overrides.add(new PolicyData.Override(id, text));
@@ -118,7 +129,7 @@ public final class PolicyDecisions {
      */
     public Decision decide(Caller caller, String action, ResolvedResource resource) {
         PolicySnapshot current = snapshot();
-        if (!current.allows(caller.client())) {
+        if (!current.allows(caller.client(), "user".equals(caller.principalType()) ? null : caller.principalType())) {
             return new Decision(false, Set.of(), List.of("client " + caller.client() + " is not allowed by the policy data"));
         }
         ToolDescriptor tool = new ToolDescriptor("mcp-test", "test", "decision_test", riskOf(action), action, List.of());
@@ -161,7 +172,8 @@ public final class PolicyDecisions {
 
     private PolicySnapshot snapshot() {
         if (snapshot == null) {
-            PolicySnapshot made = PolicySnapshot.of(policies, PolicyData.of(REVISION, java.util.Optional.of(policies.policiesHash()), toMutable(scopeMapping), allowedClients, overrides));
+            PolicySnapshot made = PolicySnapshot.of(policies, PolicyData.of(REVISION, java.util.Optional.of(policies.policiesHash()), toMutable(scopeMapping), allowedClients, overrides)
+                    .withAllowedAgentClients(allowedAgentClients));
             if (!made.overridesValid()) {
                 throw new IllegalArgumentException("an override is not valid for these policies, the server would refuse every call: "
                         + made.overrideProblems());

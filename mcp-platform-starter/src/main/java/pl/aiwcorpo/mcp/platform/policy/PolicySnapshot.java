@@ -51,7 +51,7 @@ public final class PolicySnapshot {
     private final Schema schema;
     private final AuthorizationEngine engine = new BasicAuthorizationEngine();
     private final Set<String> allowedClients;
-    private final PolicyData clients;
+    private final Set<String> allowedAgentClients;
 
     private PolicySnapshot(PolicyData data, boolean overridesValid, List<String> overrideProblems, List<ScopeMapping.Ignored> ignored,
                            EntityBuilder entityBuilder, PolicySet policySet, PolicySet callPolicySet, Schema schema) {
@@ -61,7 +61,7 @@ public final class PolicySnapshot {
         this.overrideProblems = overrideProblems;
         this.ignored = ignored;
         this.allowedClients = Set.copyOf(data.allowedClients());
-        this.clients = data;
+        this.allowedAgentClients = Set.copyOf(data.allowedAgentClients());
         this.entityBuilder = entityBuilder;
         this.policySet = policySet;
         this.callPolicySet = callPolicySet;
@@ -193,6 +193,6 @@ public final class PolicySnapshot {
 
     /** As {@link PolicyData#allows}: a call with {@code pty} is checked against {@code allowedAgentClients}, never against {@code allowedClients}. */
     public boolean allows(String client, String principalType) {
-        return clients.allows(client, principalType);
+        return client != null && (principalType == null ? allowedClients : allowedAgentClients).contains(client);
     }
 }
