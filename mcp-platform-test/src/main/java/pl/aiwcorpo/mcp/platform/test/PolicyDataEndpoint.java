@@ -61,6 +61,7 @@ public final class PolicyDataEndpoint {
     private volatile String approvedHashOverride;
     private volatile Map<String, List<String>> scopeMapping = defaultMapping();
     private volatile List<String> allowedClients = List.of("claude-code", "claude-ai", "local-gateway");
+    private volatile List<String> allowedAgentClients = List.of();
     private final Map<String, String> overrides = new LinkedHashMap<>();
     private volatile byte[] document;
     private volatile boolean pushing = true;
@@ -216,6 +217,12 @@ public final class PolicyDataEndpoint {
         return changed();
     }
 
+    /** Replaces the agent clients ({@code azp} of a token with {@code pty}, CC-266); none, the default, accepts no agent. */
+    public synchronized PolicyDataEndpoint allowedAgentClients(String... clients) {
+        this.allowedAgentClients = List.of(clients);
+        return changed();
+    }
+
     /** Adds or replaces an emergency override: its id ({@code override-<name>}) and the Cedar text of one {@code forbid} policy. */
     public synchronized PolicyDataEndpoint override(String id, String text) {
         overrides.put(id, text);
@@ -282,6 +289,8 @@ public final class PolicyDataEndpoint {
         });
         ArrayNode clients = root.putArray("allowedClients");
         allowedClients.forEach(clients::add);
+        ArrayNode agentClients = root.putArray("allowedAgentClients");
+        allowedAgentClients.forEach(agentClients::add);
         ArrayNode list = root.putArray("overrides");
         overrides.forEach((id, text) -> {
             ObjectNode entry = list.addObject();

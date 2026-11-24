@@ -20,7 +20,7 @@ import pl.aiwcorpo.mcp.platform.resource.ResourcePolicy;
 
 /**
  * Outside the {@code dev} profile, refuses to start when a server declares its own {@link ToolInputPolicy},
- * {@link ToolCallbackAuditPostProcessor}, {@link RegisteredToolsCheck} {@link UnservedPrimitivesCheck} or {@link ToolHintsPostProcessor} bean.
+ * {@link ToolCallbackAuditPostProcessor}, {@link RegisteredToolsCheck}, {@link UnservedPrimitivesCheck} or {@link ToolHintsPostProcessor} bean.
  *
  * <p>These used to be {@code @ConditionalOnMissingBean}: a server bean such as {@code ToolInputPolicy.DEV}
  * switched off the bounded-schema rule, a replacement post-processor dropped the audit wrapper and the

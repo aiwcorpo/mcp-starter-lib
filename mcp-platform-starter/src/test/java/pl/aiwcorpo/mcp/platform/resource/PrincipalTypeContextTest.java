@@ -66,4 +66,14 @@ class PrincipalTypeContextTest {
         assertThat(user.username()).isEqualTo("service-account-agent-triage");
         assertThat(user.client()).isEqualTo("agent-triage");
     }
+
+    @Test
+    void aCallerThatTheContractExcludesCannotBeBuilt() {
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> caller("user", null, null)).isInstanceOf(IllegalArgumentException.class);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> caller("delegated", null, null)).isInstanceOf(IllegalArgumentException.class);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> caller("agent", AGENT_SUB, "agent-triage"))
+                .isInstanceOf(IllegalArgumentException.class);
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> caller(null, AGENT_SUB, "agent-triage"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
 }

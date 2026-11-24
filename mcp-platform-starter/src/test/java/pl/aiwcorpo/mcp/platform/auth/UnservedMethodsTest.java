@@ -80,6 +80,18 @@ class UnservedMethodsTest {
     }
 
     @Test
+    void aRefusedNotificationGetsNoJsonRpcResponse() throws Exception {
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        MockFilterChain chain = new MockFilterChain();
+
+        filter(vector).doFilter(request(vector, "{\"jsonrpc\":\"2.0\",\"method\":\"logging/setLevel\"}", true), response, chain);
+
+        assertThat(chain.getRequest()).isNull();
+        assertThat(response.getStatus()).isEqualTo(202);
+        assertThat(response.getContentAsString()).isEmpty();
+    }
+
+    @Test
     void withoutAValidTokenTheMethodIsNotAnswered() throws Exception {
         MockHttpServletResponse noToken = new MockHttpServletResponse();
         filter(vector).doFilter(request(vector, rpc("prompts/get", null), false), noToken, new MockFilterChain());

@@ -115,12 +115,16 @@ profile. The order of checks and the rejection reasons are those of the contract
 `test-vectors/jwt` give the same result and reason. `pty` (`agent` or `delegated`, anything else is `invalid_claims`) and `act` (`{sub, azp}`, exactly
 when `pty` is `delegated`) are checked by the schema; a token without `pty` is a human and behaves exactly as before.
 
+**Who may call (CC-266).** The policy data has `allowedClients` and, since 8.0.0, an optional `allowedAgentClients` (absent is empty). A token without `pty` is accepted
+only when its `azp` is in `allowedClients`, a token with `pty` (`agent`, `delegated`) only when its `azp` is in `allowedAgentClients`; neither list accepts the other's clients
+(`PolicyData.allows(client, principalType)`, the vectors `policy-data-gate/agent-*`, `human-*`, `delegated-*`). Until the gateway lists an agent client, every agent call is `access_denied`.
+
 **The server serves tools only.** The starter has no wrapper for resources, prompts or completions yet, and CC-259 forbids a server to declare `completions`
 or `logging`. So `spring.ai.mcp.server.capabilities.resource`, `.prompt` and `.completion` default to `false`; `UnservedPrimitivesCheck` stops the server at
 startup when a `Sync*Specification` bean (or a `List` of them) exists, when the MCP server lists a resource or a prompt, or when it declares `resources`,
 `prompts`, `completions` or `logging` (MCP SDK 2.0.0 adds `logging` itself and has no switch, so the check removes it from the declaration). After the token is
-verified, the filter answers `resources/*`, `prompts/*`, `completion/*` and `logging/*` with JSON-RPC `-32601` (HTTP 200, `event=mcp_method_refused
-method=<family>`) and the request never reaches the MCP transport; a request whose token is invalid is still `401`.
+verified, the filter answers `resources/*`, `prompts/*`, `completion/*` and `logging/*` with JSON-RPC `-32601` (HTTP 200; a notification without an `id` gets 202), logged as `event=mcp_method_refused
+method=<family>` and not audited (no C8 event fits); the request never reaches the MCP transport; a request whose token is invalid is still `401`.
 
 A rejection is `401 {"error":"unauthenticated",...}` with `WWW-Authenticate: Bearer`; the reason is in the log
 (`event=internal_jwt_rejected reason=<code>`) and the audit event, and in the body only on the two well-known paths (`"reason":"wrong_purpose"` and the
@@ -137,7 +141,7 @@ configured.
 
 **`CallerContext`.** The verified claims of the current request: `subject`, `username`, `groups`, `client`, `tool`, `requestId`,
 `policyRevision`, `mfaAgeSeconds`, and since contracts 8.0.0 `principalType` (`pty`: `agent`, `delegated`, `null` for a human), `actorSub` and `actorClient`
-(`act`, only for `delegated`); `CallerContext.current()` on the request thread. The fields correspond to the input of the Cedar
+(`act`, only for `delegated`; the constructor refuses any other combination); `CallerContext.current()` on the request thread. The fields correspond to the input of the Cedar
 entity builder from `mcp-cedar-entities`, from which `ResourcePolicy` builds the caller: the Cedar context gets `principalType` (`user` when the token has no
 `pty`) and, for `delegated`, `actor` (CC-263). Audit events carry `principalType` for an agent or a delegated call and `actorSub` and `actorClient` for a
 delegated one; a human is never written (CC-264).

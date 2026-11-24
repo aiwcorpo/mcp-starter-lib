@@ -215,7 +215,12 @@ public class InternalJwtFilter extends OncePerRequestFilter implements Ordered {
         LOG.warn("event=mcp_method_refused method={} reason=not_served", binding.refusedMethod());
         JsonNode message = StrictJson.parse(buffered.body());
         JsonNode id = message == null ? null : message.get("id");
-        String echoedId = id != null && (id.isString() || id.isIntegralNumber()) ? JSON.writeValueAsString(id) : "null";
+        if (id == null) {
+            // A notification has no id and gets no JSON-RPC response; the transport answers it 202.
+            response.setStatus(HttpServletResponse.SC_ACCEPTED);
+            return;
+        }
+        String echoedId = id.isString() || id.isIntegralNumber() ? JSON.writeValueAsString(id) : "null";
         response.setStatus(HttpServletResponse.SC_OK);
         response.setContentType("application/json");
         response.setCharacterEncoding(StandardCharsets.UTF_8.name());

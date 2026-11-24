@@ -33,6 +33,10 @@ class UnservedPrimitivesTest {
 
     static final TestGateway GATEWAY = TestGateway.start("mcp-jira");
 
+    static {
+        GATEWAY.policyData().allowedAgentClients("agent-reports");
+    }
+
     @DynamicPropertySource
     static void gateway(DynamicPropertyRegistry registry) {
         GATEWAY.serverProperties().forEach((name, value) -> registry.add(name, () -> value));
@@ -95,18 +99,29 @@ class UnservedPrimitivesTest {
         assertThat(read.statusCode()).isEqualTo(401);
     }
 
-    @Test
-    @DisplayName("an agent token (pty) is accepted for a tool call like a human one")
-    void anAgentTokenReachesTheToolLikeAHumanOne() throws Exception {
+    private HttpResponse<String> echo(TestGateway.Token token) throws Exception {
         RawMcp raw = new RawMcp(port);
-        String session = raw.openSession(GATEWAY);
-
-        HttpResponse<String> call = raw.post(
+        return raw.post(
                 "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"echo_text\",\"arguments\":{\"text\":\"a\"}}}",
-                GATEWAY.user().tool("echo_text").extraClaim("pty", "agent").mint().headers(), session);
+                token.tool("echo_text").mint().headers(), raw.openSession(GATEWAY));
+    }
 
-        assertThat(call.statusCode()).isEqualTo(200);
-        assertThat(call.body()).contains("\"result\"");
+    @Test
+    @DisplayName("an agent reaches a tool only from allowedAgentClients (CC-266)")
+    void anAgentReachesTheToolOnlyFromAllowedAgentClients() throws Exception {
+        HttpResponse<String> listedAgent = echo(GATEWAY.user().client("agent-reports").username("service-account-agent-reports")
+                .extraClaim("pty", "agent"));
+        assertThat(listedAgent.statusCode()).isEqualTo(200);
+        assertThat(listedAgent.body()).contains("\"result\"").doesNotContain("access_denied");
+
+        HttpResponse<String> agentFromHumanList = echo(GATEWAY.user().client("claude-code").extraClaim("pty", "agent"));
+        assertThat(agentFromHumanList.body()).contains("access_denied");
+
+        HttpResponse<String> humanFromAgentList = echo(GATEWAY.user().client("agent-reports"));
+        assertThat(humanFromAgentList.body()).contains("access_denied");
+
+        HttpResponse<String> human = echo(GATEWAY.user());
+        assertThat(human.body()).doesNotContain("access_denied");
     }
 
     @Configuration(proxyBeanMethods = false)

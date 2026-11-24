@@ -5,7 +5,9 @@ import io.modelcontextprotocol.server.McpServerFeatures;
 import io.modelcontextprotocol.server.McpSyncServer;
 import io.modelcontextprotocol.spec.McpSchema;
 import java.lang.reflect.Field;
+import java.lang.reflect.RecordComponent;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -27,6 +29,9 @@ public class UnservedPrimitivesCheck implements SmartInitializingSingleton {
             McpServerFeatures.SyncPromptSpecification.class, McpServerFeatures.SyncCompletionSpecification.class,
             McpServerFeatures.AsyncResourceSpecification.class, McpServerFeatures.AsyncResourceTemplateSpecification.class,
             McpServerFeatures.AsyncPromptSpecification.class, McpServerFeatures.AsyncCompletionSpecification.class);
+
+    private static final List<String> EXPECTED_CAPABILITY_COMPONENTS =
+            List.of("completions", "experimental", "logging", "prompts", "resources", "tools");
 
     private final ObjectProvider<McpSyncServer> servers;
     private final ListableBeanFactory beans;
@@ -85,6 +90,13 @@ public class UnservedPrimitivesCheck implements SmartInitializingSingleton {
             return;
         }
         McpAsyncServer async = server.getAsyncServer();
+        // The copy below lists every component by hand: a version of the record with another component would lose it silently.
+        List<String> components = Arrays.stream(McpSchema.ServerCapabilities.class.getRecordComponents())
+                .map(RecordComponent::getName).sorted().toList();
+        if (!components.equals(EXPECTED_CAPABILITY_COMPONENTS)) {
+            throw new IllegalStateException("McpSchema.ServerCapabilities has the components " + components + ", not "
+                    + EXPECTED_CAPABILITY_COMPONENTS + ": this version of the MCP SDK is not supported by this version of the starter");
+        }
         try {
             Field field = McpAsyncServer.class.getDeclaredField("serverCapabilities");
             field.setAccessible(true);

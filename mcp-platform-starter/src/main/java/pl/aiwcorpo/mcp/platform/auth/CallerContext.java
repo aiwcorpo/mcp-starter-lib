@@ -56,6 +56,14 @@ public record CallerContext(String subject, String username, List<String> groups
 
     public CallerContext {
         groups = groups == null ? List.of() : List.copyOf(groups);
+        // The verifier gets this from the schema; a caller built by hand (a test) must not make a state the contract excludes.
+        if (principalType != null && !PRINCIPAL_AGENT.equals(principalType) && !PRINCIPAL_DELEGATED.equals(principalType)) {
+            throw new IllegalArgumentException("principalType is agent, delegated or absent");
+        }
+        boolean delegated = PRINCIPAL_DELEGATED.equals(principalType);
+        if (delegated != (actorSub != null && actorClient != null) || (!delegated && (actorSub != null || actorClient != null))) {
+            throw new IllegalArgumentException("act (actorSub and actorClient) is present exactly when principalType is delegated");
+        }
     }
 
     /** True for the gateway's own calls ({@code initialize}, {@code server/discover}, {@code tools/list}, {@code ping}, manifest). */
