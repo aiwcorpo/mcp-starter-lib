@@ -681,6 +681,10 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         if (claims.mfaAge().isPresent()) {
             caller = caller.withMfaAge(claims.mfaAge().getAsLong());
         }
+        caller = caller.withPrincipalType(claims.cedarPrincipalType());
+        if (claims.actorSub() != null) {
+            caller = caller.withActor(claims.actorSub());
+        }
         return caller;
     }
 

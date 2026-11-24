@@ -175,6 +175,14 @@ public class AuditLogger {
             if (caller.client() != null) {
                 event.put("client", caller.client());
             }
+            // A human is never written (CC-264): the field appears only once an agent has called.
+            if (caller.principalType() != null) {
+                event.put("principalType", caller.principalType());
+            }
+            if (CallerContext.PRINCIPAL_DELEGATED.equals(caller.principalType())) {
+                event.put("actorSub", caller.actorSub());
+                event.put("actorClient", caller.actorClient());
+            }
         }
         return event;
     }
