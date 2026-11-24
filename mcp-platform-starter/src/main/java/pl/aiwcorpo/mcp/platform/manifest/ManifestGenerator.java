@@ -39,6 +39,13 @@ public final class ManifestGenerator {
     private static final Schema MANIFEST_SCHEMA = SchemaRegistry.withDefaultDialect(SpecificationVersion.DRAFT_2020_12)
             .getSchema(SchemaLocation.of("classpath:mcp-contracts/schemas/server-manifest.schema.json"));
 
+    /**
+     * The mcp-contracts version this build implements (the {@code mcp-contracts.version} of the pom; a test compares the two). The
+     * manifest says it so that the gateway sends {@code resource}, {@code pty} and {@code act} only to a server that accepts them
+     * (CC-258, CC-260); a manifest without it reads as 7.x or older.
+     */
+    public static final String CONTRACTS_VERSION = "8.0.0";
+
     private ManifestGenerator() {
     }
 
@@ -69,6 +76,7 @@ public final class ManifestGenerator {
         manifest.put("serverId", props.getServerId());
         manifest.put("version", props.getManifest().getVersion());
         manifest.put("system", props.system());
+        manifest.put("contractsVersion", CONTRACTS_VERSION);
         String internalUrl = props.getManifest().getInternalUrl();
         if (internalUrl != null && !internalUrl.isBlank()) {
             manifest.put("internalUrl", internalUrl);
