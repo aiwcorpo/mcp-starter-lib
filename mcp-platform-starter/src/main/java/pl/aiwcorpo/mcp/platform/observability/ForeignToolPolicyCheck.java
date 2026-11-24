@@ -13,13 +13,14 @@ import pl.aiwcorpo.mcp.platform.auth.InternalJwtVerifier;
 import pl.aiwcorpo.mcp.platform.autoconfigure.PlatformConfigurationGuard;
 import pl.aiwcorpo.mcp.platform.guard.RegisteredToolsCheck;
 import pl.aiwcorpo.mcp.platform.guard.ToolHintsPostProcessor;
+import pl.aiwcorpo.mcp.platform.guard.UnservedPrimitivesCheck;
 import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
 import pl.aiwcorpo.mcp.platform.policy.PolicyEngine;
 import pl.aiwcorpo.mcp.platform.resource.ResourcePolicy;
 
 /**
  * Outside the {@code dev} profile, refuses to start when a server declares its own {@link ToolInputPolicy},
- * {@link ToolCallbackAuditPostProcessor}, {@link RegisteredToolsCheck} or {@link ToolHintsPostProcessor} bean.
+ * {@link ToolCallbackAuditPostProcessor}, {@link RegisteredToolsCheck} {@link UnservedPrimitivesCheck} or {@link ToolHintsPostProcessor} bean.
  *
  * <p>These used to be {@code @ConditionalOnMissingBean}: a server bean such as {@code ToolInputPolicy.DEV}
  * switched off the bounded-schema rule, a replacement post-processor dropped the audit wrapper and the
@@ -39,6 +40,7 @@ public class ForeignToolPolicyCheck implements BeanFactoryPostProcessor, Environ
     static final String INPUT_POLICY_BEAN = "toolInputPolicy";
     public static final String AUDIT_POST_PROCESSOR_BEAN = "toolCallbackAuditPostProcessor";
     static final String REGISTERED_TOOLS_CHECK_BEAN = "registeredToolsCheck";
+    static final String UNSERVED_PRIMITIVES_CHECK_BEAN = "unservedPrimitivesCheck";
     static final String HINTS_POST_PROCESSOR_BEAN = "toolHintsPostProcessor";
 
     private Environment environment;
@@ -75,10 +77,11 @@ public class ForeignToolPolicyCheck implements BeanFactoryPostProcessor, Environ
         collect(beanFactory, ToolInputPolicy.class, INPUT_POLICY_BEAN, foreign);
         collect(beanFactory, ToolCallbackAuditPostProcessor.class, AUDIT_POST_PROCESSOR_BEAN, foreign);
         collect(beanFactory, RegisteredToolsCheck.class, REGISTERED_TOOLS_CHECK_BEAN, foreign);
+        collect(beanFactory, UnservedPrimitivesCheck.class, UNSERVED_PRIMITIVES_CHECK_BEAN, foreign);
         collect(beanFactory, ToolHintsPostProcessor.class, HINTS_POST_PROCESSOR_BEAN, foreign);
         if (!foreign.isEmpty()) {
             throw new IllegalStateException("Bean(s) " + foreign + " replace a platform component of the tool "
-                    + "pipeline (input policy, audit wrapper, registered-tools check, hints post-processor). Outside the "
+                    + "pipeline (input policy, audit wrapper, registered-tools check, unserved-primitives check, hints post-processor). Outside the "
                     + "'dev' profile they would switch off the bounded-schema rule, the argument validation and audit of "
                     + "every tool or the check that every tool went through the wrapper; remove them (extra behaviour belongs in a "
                     + "ToolCallInterceptor).");
