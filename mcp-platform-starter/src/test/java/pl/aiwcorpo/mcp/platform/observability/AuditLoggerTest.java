@@ -70,4 +70,43 @@ class AuditLoggerTest {
         assertThat(line).doesNotContain("virtualServer");
         assertThat(line.chars()).allMatch(c -> c >= 0x20 && c < 0x7f);
     }
+
+    private static CallerContext principal(String pty, String actorSub, String actorClient) {
+        return new CallerContext("6f1c2a9e-4d4b-4c51-9a53-1e0f0c7d2b11", "jkowalski", List.of(), "claude-code", "get_issue",
+                "0192d1b2-7c3a-7d4e-8f10-2a3b4c5d6e7f", 1L, null, null, null, pty, actorSub, actorClient);
+    }
+
+    @Test
+    void aHumanLeavesNoPrincipalTypeSoASiemSeesTheFieldOnlyOnceAnAgentHasCalled() {
+        audit.toolCall(principal(null, null, null), "get_issue", RiskLevel.READ_ONLY, null, "ok", null, 4, 3);
+
+        assertThat(onlyLine()).doesNotContain("principalType", "actorSub", "actorClient");
+    }
+
+    @Test
+    void anAgentCallIsMarkedAndAnAutonomousOneHasNoActor() {
+        audit.toolCall(principal("agent", null, null), "get_issue", RiskLevel.READ_ONLY, null, "ok", null, 4, 3);
+
+        String line = onlyLine();
+        assertThat(line).contains("\"principalType\":\"agent\"").doesNotContain("actorSub", "actorClient");
+        assertThat(ContractSchemas.violations(ContractSchemas.AUDIT_EVENT, line)).as(line).isEmpty();
+    }
+
+    @Test
+    void aDelegatedCallNamesTheAgentBehindTheUser() {
+        audit.toolCall(principal("delegated", "3b0f6c52-8f3e-4f0e-b6a2-5d5a1f0e9c11", "agent-triage"), "get_issue",
+                RiskLevel.READ_ONLY, null, "ok", null, 4, 3);
+
+        String line = onlyLine();
+        assertThat(line).contains("\"principalType\":\"delegated\"", "\"actorSub\":\"3b0f6c52-8f3e-4f0e-b6a2-5d5a1f0e9c11\"",
+                "\"actorClient\":\"agent-triage\"");
+        assertThat(ContractSchemas.violations(ContractSchemas.AUDIT_EVENT, line)).as(line).isEmpty();
+    }
+
+    @Test
+    void thePolicyEventsOfAnAgentCarryTheSameFields() {
+        audit.policyRefused(principal("agent", null, null), "get_issue", RiskLevel.READ_ONLY, "policy_data_stale", "upstream_unavailable", 2);
+
+        assertThat(onlyLine()).contains("\"principalType\":\"agent\"");
+    }
 }

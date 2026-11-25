@@ -51,7 +51,8 @@ import tools.jackson.databind.json.JsonMapper;
 class ContractVectorsOnResourcePolicyTest {
 
     private static final JsonMapper JSON = JsonMapper.builder().build();
-    private static final int RESOURCE_CHECKS = 5;
+    /** The 5 of 7.x and the 2 template-variable vectors of CC-262, which have the shape of a tool call with a resourceRef. */
+    private static final int RESOURCE_CHECKS = 7;
     private static final int RESULT_FILTERS = 5;
 
     record Vector(String name, JsonNode data) {

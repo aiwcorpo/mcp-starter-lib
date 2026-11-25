@@ -3,6 +3,7 @@ package pl.aiwcorpo.mcp.platform.observability;
 import io.modelcontextprotocol.server.McpSyncServer;
 import java.util.List;
 import org.springframework.ai.tool.ToolCallbackProvider;
+import org.springframework.beans.factory.ListableBeanFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -17,6 +18,7 @@ import pl.aiwcorpo.mcp.platform.autoconfigure.McpPlatformProperties;
 import pl.aiwcorpo.mcp.platform.error.McpErrorMapper;
 import pl.aiwcorpo.mcp.platform.guard.RegisteredToolsCheck;
 import pl.aiwcorpo.mcp.platform.guard.ToolHintsPostProcessor;
+import pl.aiwcorpo.mcp.platform.guard.UnservedPrimitivesCheck;
 import pl.aiwcorpo.mcp.platform.guard.ToolRiskRegistry;
 import pl.aiwcorpo.mcp.platform.input.ToolInputPolicy;
 import pl.aiwcorpo.mcp.platform.resource.ResourcePolicy;
@@ -96,6 +98,11 @@ public class PlatformObservabilityAutoConfiguration {
     @Bean
     RegisteredToolsCheck registeredToolsCheck(ObjectProvider<McpSyncServer> servers, ToolRiskRegistry registry) {
         return new RegisteredToolsCheck(servers, registry);
+    }
+
+    @Bean
+    UnservedPrimitivesCheck unservedPrimitivesCheck(ObjectProvider<McpSyncServer> servers, ListableBeanFactory beans) {
+        return new UnservedPrimitivesCheck(servers, beans);
     }
 
     @Bean

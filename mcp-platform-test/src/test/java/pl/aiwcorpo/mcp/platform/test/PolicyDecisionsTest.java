@@ -75,4 +75,25 @@ class PolicyDecisionsTest {
         assertThatThrownBy(() -> policies.assertAllowed(PolicyDecisions.caller("mcp-jira-write"), "update", project("ABC", "")))
                 .isInstanceOf(AssertionError.class).hasMessageContaining("expected allow").hasMessageContaining("deny");
     }
+
+    @Test
+    void anAgentIsDecidedByPolicyOnlyFromAnAgentClientAndRefusedFromAHumanOne() {
+        ResolvedResource abc = issue("ABC-1", project("ABC", "Software"));
+        pl.aiwcorpo.mcp.cedar.entities.Caller fromAgentClient = pl.aiwcorpo.mcp.cedar.entities.Caller
+                .of("3b0f6c52-8f3e-4f0e-b6a2-5d5a1f0e9c11", "service-account-agent-reports", List.of("mcp-jira-read"), "agent-reports")
+                .withPrincipalType("agent");
+        pl.aiwcorpo.mcp.cedar.entities.Caller fromHumanClient = pl.aiwcorpo.mcp.cedar.entities.Caller
+                .of("3b0f6c52-8f3e-4f0e-b6a2-5d5a1f0e9c11", "service-account-agent-reports", List.of("mcp-jira-read"), "claude-code")
+                .withPrincipalType("agent");
+        PolicyDecisions listed = PolicyDecisions.fromResources().allowedAgentClients("agent-reports");
+
+        listed.assertAllowed(fromAgentClient, "read", abc);
+        assertThat(listed.decide(fromHumanClient, "read", abc).errors()).anyMatch(error -> error.contains("not allowed by the policy data"));
+        PolicyDecisions.fromResources().assertDenied(fromAgentClient, "read", abc);
+
+        PolicyDecisions noAgents = PolicyDecisions.fromResources().allowedAgentClients("agent-reports")
+                .override("override-no-agents",
+                        "forbid (principal, action == Jira::Action::\"read\", resource) when { context has principalType && context.principalType == \"agent\" };");
+        assertThat(noAgents.decide(fromAgentClient, "read", abc).determiningPolicies()).containsExactly("override-no-agents");
+    }
 }

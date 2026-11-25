@@ -10,7 +10,7 @@
                              published test keys of mcp-contracts); test scope only
 
   Versioning: SemVer, one version for all modules. This line (mcp-platform 4.x) is independent of the
-  mcp-contracts version (7.x).
+  mcp-contracts version (8.x).
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"

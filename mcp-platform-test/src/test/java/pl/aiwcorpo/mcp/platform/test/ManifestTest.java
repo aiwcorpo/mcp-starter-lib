@@ -79,6 +79,21 @@ class ManifestTest {
     }
 
     @Test
+    void theManifestSaysWhichContractsVersionTheServerWasBuiltAgainst() throws Exception {
+        String onClasspath;
+        try (java.io.InputStream in = ManifestTest.class.getResourceAsStream(
+                "/META-INF/maven/pl.aiwcorpo.mcp/mcp-contracts/pom.properties")) {
+            java.util.Properties properties = new java.util.Properties();
+            properties.load(in);
+            onClasspath = properties.getProperty("version");
+        }
+
+        assertThat(manifest().get("contractsVersion").asString())
+                .as("the gateway sends resource, pty and act only to a manifest that says 8.0.0 or newer")
+                .isEqualTo(ManifestGenerator.CONTRACTS_VERSION).isEqualTo(onClasspath);
+    }
+
+    @Test
     void theManifestPassesTheSchemaAndTheRulesOfTheGateway() throws Exception {
         JsonNode manifest = manifest();
 

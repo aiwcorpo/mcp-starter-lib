@@ -7,7 +7,7 @@ the gateway: it does not sign users in, does not decide who may call a tool and 
 all of that. The library verifies the gateway's internal JWT, receives the credential for the target system, audits every call and
 makes sure that only safe errors leave a tool.
 
-Stack: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), `mcp-contracts` 7.2.0.
+Stack: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), `mcp-contracts` 8.0.0.
 Version: **4.1.0** (changes in the `CHANGELOG.md` entry for 4.1.0; since 3.x in the entry for 4.0.0).
 
 ## Who this is for and how to start
@@ -27,7 +27,7 @@ gateway", settings are "Configuration", and moving from 3.x is the "Migracja ser
 ### Using the artifacts
 
 Maven Central, group `pl.aiwcorpo.mcp`; no repository entry and no credentials needed. Import the BOM and add the starter (the
-BOM also manages `mcp-contracts` 7.2.0, `mcp-cedar-entities`, `mcp-manifest` and Spring AI):
+BOM also manages `mcp-contracts` 8.0.0, `mcp-cedar-entities`, `mcp-manifest` and Spring AI):
 
 ```xml
 <dependencyManagement>
@@ -101,8 +101,9 @@ the contract C14 (`openapi/mcp-server.v1.yaml`).
 60 s, claims matching `schemas/internal-jwt.schema.json` (validated with the schema from the contracts jar; the claims `vs` and
 `vsc` no longer exist, and a token with either is `401 invalid_claims`), a `jti` used for the first time (every purpose; in memory, or Redis
 when `MCP_REDIS_HOST` is set), the purpose `use`, `rid` ==
-`X-Request-Id`, `tool` present exactly for `tools/call` and equal to `params.name`, and the service variant only for `initialize`,
-`server/discover`, `tools/list`, `ping` and `POST /.well-known/mcp-policy-data`. **The purpose:** `use` is
+`X-Request-Id`, `tool` present exactly for `tools/call` and equal to `params.name`, `resource` present exactly for `resources/read` and equal to
+`params.uri` (`resource_missing`, `resource_not_allowed`, `resource_mismatch`; CC-260), and the service variant only for `initialize`,
+`server/discover`, `tools/list`, `resources/list`, `resources/templates/list`, `ping` and `POST /.well-known/mcp-policy-data`. **The purpose:** `use` is
 `call` for the MCP endpoint and `policy-data` for the push, and a token of one purpose is refused for another
 (`401`, reason `wrong_purpose`), checked before the variant: a policy-data token presented to `tools/call` is `wrong_purpose`, not `service_token_not_allowed`.
 There is no exception to `aud` == `server-id` and no purpose `manifest`: a token with `use: manifest` is `401 invalid_claims`.
@@ -110,8 +111,20 @@ There is no exception to `aud` == `server-id` and no purpose `manifest`: a token
 The starter never looks at the `Host` header, and a self-signed certificate is not compared with any `Host` on the server side.
 Keys with an identifier `test-*` and the published test keys
 (recognized by SPKI from `mcp-contracts/security/published-test-keys.json`) are rejected unless `allow-test-keys=true` in the `dev`
-profile. The order of checks and the rejection reasons are those of the contracts' reference receiver, so all 75 vectors of
-`test-vectors/jwt` give the same result and reason.
+profile. The order of checks and the rejection reasons are those of the contracts' reference receiver, so all 95 vectors of
+`test-vectors/jwt` give the same result and reason. `pty` (`agent` or `delegated`, anything else is `invalid_claims`) and `act` (`{sub, azp}`, exactly
+when `pty` is `delegated`) are checked by the schema; a token without `pty` is a human and behaves exactly as before.
+
+**Who may call (CC-266).** The policy data has `allowedClients` and, since 8.0.0, an optional `allowedAgentClients` (absent is empty). A token without `pty` is accepted
+only when its `azp` is in `allowedClients`, a token with `pty` (`agent`, `delegated`) only when its `azp` is in `allowedAgentClients`; neither list accepts the other's clients
+(`PolicyData.allows(client, principalType)`, the vectors `policy-data-gate/agent-*`, `human-*`, `delegated-*`). Until the gateway lists an agent client, every agent call is `access_denied`.
+
+**The server serves tools only.** The starter has no wrapper for resources, prompts or completions yet, and CC-259 forbids a server to declare `completions`
+or `logging`. So `spring.ai.mcp.server.capabilities.resource`, `.prompt` and `.completion` default to `false`; `UnservedPrimitivesCheck` stops the server at
+startup when a `Sync*Specification` bean (or a `List` of them) exists, when the MCP server lists a resource or a prompt, or when it declares `resources`,
+`prompts`, `completions` or `logging` (MCP SDK 2.0.0 adds `logging` itself and has no switch, so the check removes it from the declaration). After the token is
+verified, the filter answers `resources/*`, `prompts/*`, `completion/*` and `logging/*` with JSON-RPC `-32601` (HTTP 200; a notification without an `id` gets 202), logged as `event=mcp_method_refused
+method=<family>` and not audited (no C8 event fits); the request never reaches the MCP transport; a request whose token is invalid is still `401`.
 
 A rejection is `401 {"error":"unauthenticated",...}` with `WWW-Authenticate: Bearer`; the reason is in the log
 (`event=internal_jwt_rejected reason=<code>`) and the audit event, and in the body only on the two well-known paths (`"reason":"wrong_purpose"` and the
@@ -127,8 +140,11 @@ exactly that path: a URI with `;`, `..`, `%`, `\` or `//` always goes through fu
 configured.
 
 **`CallerContext`.** The verified claims of the current request: `subject`, `username`, `groups`, `client`, `tool`, `requestId`,
-`policyRevision`, `mfaAgeSeconds`; `CallerContext.current()` on the request thread. The fields correspond to the input of the Cedar
-entity builder from `mcp-cedar-entities`, from which `ResourcePolicy` builds the caller.
+`policyRevision`, `mfaAgeSeconds`, and since contracts 8.0.0 `principalType` (`pty`: `agent`, `delegated`, `null` for a human), `actorSub` and `actorClient`
+(`act`, only for `delegated`; the constructor refuses any other combination); `CallerContext.current()` on the request thread. The fields correspond to the input of the Cedar
+entity builder from `mcp-cedar-entities`, from which `ResourcePolicy` builds the caller: the Cedar context gets `principalType` (`user` when the token has no
+`pty`) and, for `delegated`, `actor` (CC-263). Audit events carry `principalType` for an agent or a delegated call and `actorSub` and `actorClient` for a
+delegated one; a human is never written (CC-264).
 
 **`CredentialContext` (C3).** The credential for the target system, injected by the gateway:
 
@@ -1124,7 +1140,8 @@ hash of what the client sees and the gateway pins), `risk`, `action` and `resour
 gateway is the document the gateway pulls from the running server; the file of the build (`manifest.output-file`, for example `target/mcp-manifest.json`) is the same
 document, kept as a build artifact so that a reviewer can read what the commit publishes (CC-249 replaced the registration by the pipeline). Before it is served, the manifest passes `server-manifest.schema.json` and the
 `mcp-manifest` rules (a closed and bounded `inputSchema`, `title`, existing `resourceRefs` arguments, the hash), which are the
-gateway's intake checks; a manifest that would not pass them stops the server (in `dev`, a warning). With `output-file` it is
+gateway's intake checks; a manifest that would not pass them stops the server (in `dev`, a warning). It says `"contractsVersion": "8.0.0"`
+(`ManifestGenerator.CONTRACTS_VERSION`): the gateway sends `resource`, `pty` and `act` only to a server whose approved manifest says 8.0.0 or newer (CC-258, CC-260). With `output-file` it is
 also written to a file. Pulling it approves nothing: every tool of a first manifest, `READ_ONLY` ones included, waits for an administrator. A server
 that serves `source: adapter` (an adapter, CC-193) is marked as one by that field.
 
@@ -1320,7 +1337,7 @@ release workflow refuses a run in which any test was skipped. Verified: a local 
 `maven:3.9.12-eclipse-temurin-25` image; not on a real GitLab, Jenkins or GitHub runner. With Docker that has no route to the host,
 set `TESTCONTAINERS_HOST_OVERRIDE`.
 
-The `mcp-contracts` 7.2.0 artifacts come from Maven Central; until they are released they must be in `~/.m2`. `RedisJtiReplayStoreTest` starts
+The `mcp-contracts` 8.0.0 artifacts come from Maven Central; until they are released they must be in `~/.m2`. `RedisJtiReplayStoreTest` starts
 Redis through Testcontainers, so access to a container environment is needed (the Docker socket mounted into the CI container, or
 `DOCKER_HOST`).
 

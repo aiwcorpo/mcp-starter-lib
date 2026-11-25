@@ -19,7 +19,7 @@ import org.slf4j.LoggerFactory;
 import tools.jackson.databind.JsonNode;
 
 /**
- * Verifies the gateway's internal JWT (C2, mcp-contracts 7.0.0) against the request it arrived with.
+ * Verifies the gateway's internal JWT (C2, mcp-contracts 8.0.0) against the request it arrived with.
  *
  * <p>Checks, in the order of the reference receiver in mcp-contracts ({@code test/jwt-vectors.test.mjs}),
  * so that a token reports the same reason as in the contract vectors:
@@ -34,8 +34,11 @@ import tools.jackson.databind.JsonNode;
  *   <li>{@code jti} not seen before (recorded until the end of the second {@code exp} + skew; one-time for every purpose)</li>
  *   <li>{@code use} equal to the purpose of the endpoint ({@code wrong_purpose}), before anything about the variant</li>
  *   <li>service variant only for protocol requests; {@code rid == X-Request-Id}</li>
- *   <li>{@code tool} present exactly for {@code tools/call} and equal to {@code params.name}</li>
+ *   <li>{@code tool} present exactly for {@code tools/call} and equal to {@code params.name}; {@code resource} present exactly for
+ *       {@code resources/read} and equal to {@code params.uri} (CC-260)</li>
  * </ol>
+ * {@code pty} and {@code act} are validated by the schema (CC-260) and handed on in the {@link CallerContext}; a token without {@code pty}
+ * is a human, as before.
  * Any failure is an {@link InternalJwtRejectedException}; there is no fallback to another credential.
  */
 public final class InternalJwtVerifier {
@@ -229,16 +232,31 @@ public final class InternalJwtVerifier {
             throw reject(InternalJwtRejection.REQUEST_ID_MISMATCH);
         }
         String tool = text(claims, "tool");
+        String resource = text(claims, "resource");
+        boolean resolve = binding.kind() == RequestBinding.Kind.TOOL_SCOPED;
+        boolean resourceRead = binding.kind() == RequestBinding.Kind.RESOURCE_READ;
         if (!service) {
+            if (resource != null && !resourceRead && !resolve) {
+                throw reject(InternalJwtRejection.RESOURCE_NOT_ALLOWED);
+            }
+            if (resourceRead && resource == null) {
+                throw reject(InternalJwtRejection.RESOURCE_MISSING);
+            }
+            if (resolve && tool == null && resource == null) {
+                throw reject(InternalJwtRejection.TOOL_MISSING);
+            }
             if (binding.toolRequired() && tool == null) {
                 throw reject(InternalJwtRejection.TOOL_MISSING);
             }
-            if (!binding.toolRequired() && tool != null) {
+            if (!binding.toolRequired() && !resolve && tool != null) {
                 throw reject(InternalJwtRejection.TOOL_NOT_ALLOWED);
             }
         }
         if (binding.kind() == RequestBinding.Kind.TOOL_CALL && !Objects.equals(tool, binding.toolName())) {
             throw reject(InternalJwtRejection.TOOL_MISMATCH);
+        }
+        if (resourceRead && !Objects.equals(resource, binding.resourceUri())) {
+            throw reject(InternalJwtRejection.RESOURCE_MISMATCH);
         }
         if (settings.receiverMode() == ReceiverMode.ADAPTER && !service && binding.kind() == RequestBinding.Kind.TOOL_CALL) {
             if (!classified) {
@@ -291,6 +309,7 @@ public final class InternalJwtVerifier {
         List<String> groups = new ArrayList<>();
         claims.get("grp").forEach(group -> groups.add(group.asString()));
         JsonNode mfa = claims.get("mfa");
+        JsonNode act = claims.get("act");
         return new CallerContext(
                 claims.get("sub").asString(),
                 text(claims, "usr"),
@@ -301,7 +320,10 @@ public final class InternalJwtVerifier {
                 claims.get("prv").asLong(),
                 mfa == null || !mfa.canConvertToLong() ? null : mfa.asLong(),
                 text(claims, "mcp_risk"),
-                text(claims, "mcp_action"));
+                text(claims, "mcp_action"),
+                text(claims, "pty"),
+                act == null ? null : text(act, "sub"),
+                act == null ? null : text(act, "azp"));
     }
 
     private static InternalJwtRejectedException reject(InternalJwtRejection reason) {

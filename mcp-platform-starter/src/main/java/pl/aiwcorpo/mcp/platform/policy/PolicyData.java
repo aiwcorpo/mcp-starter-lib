@@ -25,11 +25,13 @@ import tools.jackson.databind.node.ObjectNode;
  * @param scopeMapping   the {@code scopeMapping} array as JSON text: {@code [{"group": "...", "scopes": ["<Type>/<id>"]}]}
  * @param allowedClients the AI clients ({@code azp}) that may use the platform; checked in code before any policy
  * @param overrides      the emergency {@code forbid} policies that target this server or all servers
+ * @param allowedAgentClients the agent clients ({@code azp} of a token with {@code pty}) that may use the platform (CC-266); empty when the
+ *                       gateway sends no such field, which means no agent is accepted
  * @param problems       what is wrong with the document of a revision that could be ordered but not used; the server then refuses every call with
  *                       it rather than keep deciding with older data (empty for a good document)
  */
 public record PolicyData(long revision, Optional<String> approvedPoliciesHash, String scopeMapping, List<String> allowedClients,
-                         List<Override> overrides, List<String> problems) {
+                         List<Override> overrides, List<String> problems, List<String> allowedAgentClients) {
 
     /** One emergency override: its id and the Cedar text of its single {@code forbid} policy. */
     public record Override(String id, String text) {
@@ -47,6 +49,21 @@ public record PolicyData(long revision, Optional<String> approvedPoliciesHash, S
         allowedClients = List.copyOf(allowedClients);
         overrides = List.copyOf(overrides);
         problems = List.copyOf(problems);
+        allowedAgentClients = List.copyOf(allowedAgentClients);
+    }
+
+    /** Without agent clients: what a gateway that does not send {@code allowedAgentClients} pushes. */
+    public PolicyData(long revision, Optional<String> approvedPoliciesHash, String scopeMapping, List<String> allowedClients,
+                      List<Override> overrides, List<String> problems) {
+        this(revision, approvedPoliciesHash, scopeMapping, allowedClients, overrides, problems, List.of());
+    }
+
+    /**
+     * Whether the AI client of a call may use the platform (CC-266): a token without {@code pty} only from {@code allowedClients}, a token
+     * with {@code pty} ({@code agent} or {@code delegated}) only from {@code allowedAgentClients}. Neither list accepts the other's clients.
+     */
+    public boolean allows(String client, String principalType) {
+        return client != null && (principalType == null ? allowedClients : allowedAgentClients).contains(client);
     }
 
     /** A good document. */
@@ -68,6 +85,11 @@ public record PolicyData(long revision, Optional<String> approvedPoliciesHash, S
             scopes.forEach(list::add);
         });
         return new PolicyData(revision, approvedPoliciesHash, mapping.toString(), allowedClients, overrides);
+    }
+
+    /** As above, with the agent clients of CC-266. */
+    public PolicyData withAllowedAgentClients(List<String> agentClients) {
+        return new PolicyData(revision, approvedPoliciesHash, scopeMapping, allowedClients, overrides, problems, agentClients);
     }
 
     /**
@@ -101,17 +123,8 @@ public record PolicyData(long revision, Optional<String> approvedPoliciesHash, S
         if (!mapping.isArray()) {
             throw new IllegalArgumentException("scopeMapping is not an array");
         }
-        Set<String> clients = new LinkedHashSet<>();
-        JsonNode allowed = root.path("allowedClients");
-        if (!allowed.isArray()) {
-            throw new IllegalArgumentException("allowedClients is not an array");
-        }
-        for (JsonNode client : allowed) {
-            if (!client.isString() || client.asString().isBlank()) {
-                throw new IllegalArgumentException("allowedClients holds something other than a client name");
-            }
-            clients.add(client.asString());
-        }
+        Set<String> clients = clientNames(root, "allowedClients", true);
+        Set<String> agentClients = clientNames(root, "allowedAgentClients", false);
         List<Override> overrides = new ArrayList<>();
         Set<String> seen = new LinkedHashSet<>();
         JsonNode list = root.path("overrides");
@@ -126,6 +139,25 @@ public record PolicyData(long revision, Optional<String> approvedPoliciesHash, S
             }
             overrides.add(new Override(id, text));
         }
-        return new PolicyData(revision, approved, mapping.toString(), List.copyOf(clients), overrides);
+        return new PolicyData(revision, approved, mapping.toString(), List.copyOf(clients), overrides, List.of(), List.copyOf(agentClients));
+    }
+
+    /** A list of client names; an absent optional list is empty (a gateway that does not know CC-266 does not send it). */
+    private static Set<String> clientNames(JsonNode root, String field, boolean required) {
+        Set<String> names = new LinkedHashSet<>();
+        if (!required && !root.has(field)) {
+            return names;
+        }
+        JsonNode list = root.path(field);
+        if (!list.isArray()) {
+            throw new IllegalArgumentException(field + " is not an array");
+        }
+        for (JsonNode client : list) {
+            if (!client.isString() || client.asString().isBlank()) {
+                throw new IllegalArgumentException(field + " holds something other than a client name");
+            }
+            names.add(client.asString());
+        }
+        return names;
     }
 }

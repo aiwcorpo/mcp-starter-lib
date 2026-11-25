@@ -24,6 +24,12 @@ public enum InternalJwtRejection {
     TOOL_MISSING("tool_missing"),
     TOOL_NOT_ALLOWED("tool_not_allowed"),
     TOOL_MISMATCH("tool_mismatch"),
+    /** {@code resources/read} with a token that has no {@code resource} claim (CC-260). */
+    RESOURCE_MISSING("resource_missing"),
+    /** A {@code resource} claim at a request other than {@code resources/read} (CC-260). */
+    RESOURCE_NOT_ALLOWED("resource_not_allowed"),
+    /** The token was issued for another URI than {@code params.uri} of the {@code resources/read} (CC-260). */
+    RESOURCE_MISMATCH("resource_mismatch"),
     /** The sidecar of an adapter got a {@code tools/call} without {@code mcp_risk} and {@code mcp_action} (CC-226): fail-closed. */
     CLASSIFICATION_MISSING("classification_missing"),
     /**

@@ -6,7 +6,34 @@ Linia `mcp-platform` (3.x, 4.x) nie ma związku z wersją `mcp-contracts` (BOM z
 
 ## Unreleased
 
-Additive; servers need no change. The version heading is for the person who releases.
+Receiver of `mcp-contracts` 8.0.0 (CC-258 ... CC-266). A **major** change (5.0.0): record constructors and enums of public types change, a server can now refuse to start, and contracts 8.0.0 is
+itself a major release. The version heading is for the person who releases.
+
+Operators, upgrade order (CC-260): the gateway and the credential broker that understand 8.0.0 first (emission of the new claims off), then the servers built on
+this starter (and the template and the adapter sidecar), then emission. The gateway sends `resource`, `pty`, `act` and `allowedAgentClients` to a server only when its approved manifest
+says `contractsVersion` 8.0.0 or newer, so a server still on the old starter keeps working and gets none of them; to a server that cannot take them the gateway
+sends no call and the audit reason is `contracts_version_unsupported`. Roll the servers one by one, pull the manifest again after each (the new field is not part of any
+`definitionHash`, so no tool goes back to approval). Until the gateway lists an agent client in `allowedAgentClients`, every agent call is refused with `access_denied`.
+
+What changed:
+
+- Contracts 8.0.0 (BOM, starter, test module): 95 jwt vectors, all `policy-data-gate` vectors (the two of the gateway's revision rule are counted, not run), 7 resource-checks vectors.
+- Internal JWT (CC-260): `resource` is accepted at `resources/read` only and must equal `params.uri` (`resource_missing`, `resource_not_allowed`, `resource_mismatch`; never together with `tool`,
+  which the schema refuses); at the broker's resolve it may replace `tool`. `pty` (`agent`, `delegated`) and `act` (`{sub, azp}`, exactly with `delegated`) are validated by the schema.
+  A token without `pty` is a human and behaves as before.
+- Who may call (CC-266): the policy data has an optional `allowedAgentClients` (absent is empty). A token without `pty` needs its `azp` in `allowedClients`, a token with `pty` needs it
+  in `allowedAgentClients`; neither list accepts the other's clients (`PolicyData.allows(client, principalType)`).
+- `CallerContext` gets `principalType`, `actorSub`, `actorClient`; the Cedar context of a call gets `principalType` (`user`, `agent`, `delegated`) and `actor` (CC-263), so a server policy may
+  forbid agents; audit events carry `principalType`, and `actorSub` and `actorClient` for `delegated`, never for a human (CC-264). The platform policy `agent-no-destructive` and
+  `maxRisk` of an agent are enforced by the gateway.
+- The manifest carries `contractsVersion: "8.0.0"` (CC-258, `ManifestGenerator.CONTRACTS_VERSION`).
+- The server serves tools only until the starter wraps resources and prompts (CC-259; until then the gateway sends a server none of these methods). After the token is verified,
+  `resources/*`, `prompts/*`, `completion/*` and `logging/*` get JSON-RPC `-32601` (a notification gets 202) and never reach the MCP transport (before, they passed the gate as `OTHER`).
+  `UnservedPrimitivesCheck` stops the server when a `Sync*Specification` bean or a list of them exists, a resource or prompt is listed, or `resources`, `prompts` or `completions` is declared.
+  `logging`, which MCP SDK 2.0.0 declares itself, is removed from the declaration at startup (by replacing a private field; a test pins the SDK version).
+- `mcp-platform-test`: `PolicyDataEndpoint.allowedAgentClients(...)` (default none, and the field is always pushed) and `PolicyDecisions.allowedAgentClients(...)`; `PolicyDecisions.decide` checks the client against the list that fits the caller's `principalType`; tokens with the new claims come from `Token.extraClaim`.
+
+Also in this release:
 
 - OpenTelemetry tracing, off by default: `MCP_OTLP_ENDPOINT` (the OTLP/HTTP traces URL, with the path) turns it on and sets the exporter endpoint
   (`PlatformDefaultsEnvironmentPostProcessor`; `management.tracing.export.enabled` and `management.opentelemetry.enabled` follow it, and a server's own
@@ -14,6 +41,20 @@ Additive; servers need no change. The version heading is for the person who rele
   exception class only, never tokens, headers, bodies, tool names or arguments, exception messages or stack traces, or the query of a URL (README, "Tracing"). The starter now depends on
   `spring-boot-starter-opentelemetry` without `micrometer-registry-otlp`; baggage, OTLP log export and Redis and scheduled-task spans are off.
   No contract entry: `traceparent` is a standard optional header that the C14 receiver ignores unless tracing is on; see the PR for the proposed note.
+
+### Migracja serwera
+
+1. Rebuild against the BOM: it manages `mcp-contracts` 8.0.0 (`mcp-cedar-entities`, `mcp-manifest`, test vectors). Our own servers (jira, confluence, gitlab, servicedesk, opensearch, template, adapter)
+   use none of the changed types and need only the rebuild.
+2. Public API that changes (a recompile is needed, binaries compiled against 4.x are not safe):
+   - `CallerContext` has three more components (`principalType`, `actorSub`, `actorClient`) and validates them in its constructor; the 8- and 10-argument constructors stay.
+   - `PolicyData` has one more component (`allowedAgentClients`); the 5- and 6-argument constructors stay.
+   - `RequestBinding` has two more components (`resourceUri`, `unsupportedFamily`); the 3-argument constructor stays. Its `Kind` enum gains `RESOURCE_READ`, `RESOURCE_LIST` and `UNSUPPORTED`,
+     and `TOOL_SCOPED` takes exactly one of `tool` and `resource`. `InternalJwtRejection` gains `RESOURCE_MISSING`, `RESOURCE_NOT_ALLOWED` and `RESOURCE_MISMATCH`. An exhaustive `switch` over
+     these enums in server code needs the new cases, and one compiled against 4.x throws `MatchException` on a new constant.
+3. A server that registered a resource, prompt or completion specification (`Sync*Specification`, also in a list), or set `spring.ai.mcp.server.capabilities.resource`, `.prompt` or `.completion`
+   to `true`, no longer starts. Remove it until the starter registers resources and prompts itself.
+4. To use agents, the administrator lists their clients in `allowedAgentClients` at the gateway; a server needs no setting.
 
 ## 4.1.0 - 2026-11-19
 

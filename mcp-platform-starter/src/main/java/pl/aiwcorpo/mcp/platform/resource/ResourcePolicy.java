@@ -153,7 +153,7 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         String tool = context.tool();
         refuseOnCredentialTypeMismatch(caller, tool);
         PolicySnapshot snapshot = snapshot();
-        if (!snapshot.allows(caller.client())) {
+        if (!snapshot.allows(caller.client(), caller.principalType())) {
             deny(caller, tool, null, null, null, "policy_forbid", snapshot, ToolErrorCode.ACCESS_DENIED,
                     "You are not allowed to use this tool.");
         }
@@ -680,6 +680,10 @@ public final class ResourcePolicy implements ResultFilter, SmartInitializingSing
         Caller caller = Caller.of(claims.subject(), claims.username(), claims.groups(), claims.client());
         if (claims.mfaAge().isPresent()) {
             caller = caller.withMfaAge(claims.mfaAge().getAsLong());
+        }
+        caller = caller.withPrincipalType(claims.cedarPrincipalType());
+        if (claims.actorSub() != null) {
+            caller = caller.withActor(claims.actorSub());
         }
         return caller;
     }
