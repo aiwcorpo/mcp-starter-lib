@@ -51,6 +51,8 @@ class ListBeanToolTest {
         lines.start();
         audit.addAppender(lines);
         try {
+            // CALLS is static and other test classes on ListBeanServer call echo_text, so compare with the count before this call.
+            int callsBefore = ListedTools.CALLS.get();
             RawMcp raw = new RawMcp(port);
             String session = raw.openSession(GATEWAY);
             HttpResponse<String> answer = raw.post("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":"
@@ -59,7 +61,7 @@ class ListBeanToolTest {
 
             assertThat(answer.statusCode()).isEqualTo(200);
             assertThat(answer.body()).contains("invalid_argument");
-            assertThat(ListedTools.CALLS.get()).isZero();
+            assertThat(ListedTools.CALLS.get()).isEqualTo(callsBefore);
             assertThat(lines.list).anyMatch(line -> line.getFormattedMessage().contains("tool_call"));
         } finally {
             audit.detachAppender(lines);
