@@ -8,7 +8,7 @@ all of that. The library verifies the gateway's internal JWT, receives the crede
 makes sure that only safe errors leave a tool.
 
 Stack: Java 25, Spring Boot 4.1.0, Spring AI 2.0.0 (MCP SDK 2.0.0), `mcp-contracts` 8.0.0.
-Version: **4.1.0** (changes in the `CHANGELOG.md` entry for 4.1.0; since 3.x in the entry for 4.0.0).
+Version: **5.0.0** (changes in the `CHANGELOG.md` entry for 5.0.0; moving from 4.x is its "Migracja serwera" part).
 
 ## Who this is for and how to start
 
@@ -22,7 +22,7 @@ This file is the reference for what the starter does and how it is configured. T
 template, writing tools, choosing the credential type, registering the manifest, testing, putting a foreign server behind the
 platform, migrations) are in the developer guide of the platform documentation (`mcp-docs`, directory `docs/developer`). Within
 this file: the first tool is "First server", running without the gateway is "Running locally", tests are "Server tests without the
-gateway", settings are "Configuration", and moving from 3.x is the "Migracja serwera" part of the 4.0.0 entry in `CHANGELOG.md`.
+gateway", settings are "Configuration", and moving from 4.x is the "Migracja serwera" part of the 5.0.0 entry in `CHANGELOG.md` (from 3.x: the 4.0.0 entry).
 
 ### Using the artifacts
 
@@ -35,7 +35,7 @@ BOM also manages `mcp-contracts` 8.0.0, `mcp-cedar-entities`, `mcp-manifest` and
     <dependency>
       <groupId>pl.aiwcorpo.mcp</groupId>
       <artifactId>mcp-platform-bom</artifactId>
-      <version>3.0.0</version>
+      <version>5.0.0</version>
       <type>pom</type>
       <scope>import</scope>
     </dependency>
@@ -56,13 +56,13 @@ BOM also manages `mcp-contracts` 8.0.0, `mcp-cedar-entities`, `mcp-manifest` and
 
 | Coordinates | Packaging |
 | --- | --- |
-| `pl.aiwcorpo.mcp:mcp-platform-bom:3.0.0` | pom |
-| `pl.aiwcorpo.mcp:mcp-platform-starter:3.0.0` | jar (with sources and javadoc) |
-| `pl.aiwcorpo.mcp:mcp-platform-test:3.0.0` | jar (with sources and javadoc), test scope only |
-| `pl.aiwcorpo.mcp:mcp-platform:3.0.0` | pom, parent of the BOM |
+| `pl.aiwcorpo.mcp:mcp-platform-bom:5.0.0` | pom |
+| `pl.aiwcorpo.mcp:mcp-platform-starter:5.0.0` | jar (with sources and javadoc) |
+| `pl.aiwcorpo.mcp:mcp-platform-test:5.0.0` | jar (with sources and javadoc), test scope only |
+| `pl.aiwcorpo.mcp:mcp-platform:5.0.0` | pom, parent of the BOM |
 
 Every file on Central carries a GPG signature (`.asc`). A version is immutable once published; a fix is a new number. If you built
-3.0.0 locally before it reached Central, delete `~/.m2/repository/pl/aiwcorpo/mcp/mcp-platform*/3.0.0` and let Maven fetch the
+5.0.0 locally before it reached Central, delete `~/.m2/repository/pl/aiwcorpo/mcp/mcp-platform*/5.0.0` and let Maven fetch the
 published files; the local copies are not byte-identical.
 
 To work on the library itself, `./mvnw install` installs the modules into `~/.m2`.
@@ -1351,7 +1351,7 @@ Per release (a maintainer):
 1. Release `mcp-contracts` first and publish its deployment in the Central Portal: this repository depends on its artifacts
    (`mcp-contracts`, `mcp-cedar-entities`, `mcp-manifest`), which Maven resolves from Central. Until then the
    build works only with them in `~/.m2`.
-2. Version without `-SNAPSHOT` in all poms (`4.1.0`), `CHANGELOG.md` entry, `./mvnw -B verify` green, and
+2. Version without `-SNAPSHOT` in all poms (`5.0.0`), `CHANGELOG.md` entry, `./mvnw -B verify` green, and
    `./mvnw -Prelease -Dgpg.skip verify` (builds the sources and javadoc jars Central requires; javadoc must pass doclint).
 3. Commit, tag `vX.Y.Z`, and push only that one tag (`git push origin vX.Y.Z`, never `git push --tags`: the local
    `v3.0.0-beta-N` tags are not meant to be published). The workflow reacts to `vX.Y.Z` only; pre-release tags do not start it.

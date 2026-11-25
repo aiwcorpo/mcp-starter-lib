@@ -4,10 +4,10 @@ Format: wersje SemVer; kolejność od najnowszej. Przed 3.0.0 wersje `alpha` i `
 `v3.0.0-beta-N`) nie gwarantują zgodności między sobą.
 Linia `mcp-platform` (3.x, 4.x) nie ma związku z wersją `mcp-contracts` (BOM zarządza obiema).
 
-## Unreleased
+## 5.0.0 - 2026-11-25
 
 Receiver of `mcp-contracts` 8.0.0 (CC-258 ... CC-266). A **major** change (5.0.0): record constructors and enums of public types change, a server can now refuse to start, and contracts 8.0.0 is
-itself a major release. The version heading is for the person who releases.
+itself a major release.
 
 Operators, upgrade order (CC-260): the gateway and the credential broker that understand 8.0.0 first (emission of the new claims off), then the servers built on
 this starter (and the template and the adapter sidecar), then emission. The gateway sends `resource`, `pty`, `act` and `allowedAgentClients` to a server only when its approved manifest
