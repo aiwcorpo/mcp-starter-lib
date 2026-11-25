@@ -18,7 +18,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>pl.aiwcorpo.mcp</groupId>
     <artifactId>mcp-platform</artifactId>
-    <version>4.1.0</version>
+    <version>5.0.0</version>
     <packaging>pom</packaging>
     <name>Aiwcorpo MCP Platform :: Aggregator</name>
     <description>Aggregator of the MCP platform library for servers behind the gateway: BOM, Spring Boot starter and test support.</description>
